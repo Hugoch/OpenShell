@@ -326,25 +326,34 @@ fn direct_child_pids() -> io::Result<HashSet<i32>> {
     Ok(children)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid, waitpid};
     use nix::unistd::Pid;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
     use std::sync::mpsc;
     use std::time::Duration;
+    use tokio::process::Command as TokioCommand;
+
+    #[test]
+    fn spawned_child_is_registered_before_returning() {
+        let pid = 1_000_000_u32;
+        let child = ManagedChild::spawn(|| Ok::<_, ()>(pid), |pid| Some(*pid)).unwrap();
+
+        assert!(is_managed(i32::try_from(child.id().unwrap()).unwrap()));
+        drop(child);
+        assert!(!is_managed(i32::try_from(pid).unwrap()));
+    }
 
     #[test]
     fn fast_child_remains_waitable_after_orphan_reap_attempt() {
-        let mut registry = lock();
-        let mut child = Command::new("sh")
-            .args(["-c", "exit 11"])
-            .spawn()
-            .expect("spawn fast child");
-        let child_pid = child.id();
-        let managed_child = registry.register(child_pid).expect("register fast child");
-        drop(registry);
+        let mut child = ManagedChild::spawn(
+            || Command::new("sh").args(["-c", "exit 11"]).spawn(),
+            |child| Some(child.id()),
+        )
+        .expect("spawn and register fast child");
+        let child_pid = child.id().unwrap();
         let pid = Pid::from_raw(i32::try_from(child_pid).unwrap());
 
         // Observe the completed child without consuming its status, exactly
@@ -373,11 +382,11 @@ mod tests {
         );
 
         let wait = child.wait();
-        unregister(managed_child);
         assert!(
             wait.is_ok(),
             "the explicit child waiter must retain the exit status"
         );
+        assert!(!is_managed(pid.as_raw()));
     }
 
     #[test]
@@ -451,5 +460,81 @@ mod tests {
         );
         child.kill().expect("kill child");
         child.wait().expect("wait for child");
+    }
+
+    #[tokio::test]
+    async fn tokio_try_wait_retains_then_releases_management() {
+        let mut child = ManagedChild::spawn(
+            || {
+                let mut command = TokioCommand::new("sh");
+                command.args(["-c", "read -r _"]).stdin(Stdio::piped());
+                command.spawn()
+            },
+            tokio::process::Child::id,
+        )
+        .expect("spawn managed Tokio child");
+        let pid = i32::try_from(child.id().unwrap()).unwrap();
+        let stdin = child.take_stdin().expect("stdin must be piped");
+
+        assert!(child.try_wait().expect("observe Tokio child").is_none());
+        assert!(is_managed(pid), "a running child must remain managed");
+
+        drop(stdin);
+        child.wait().await.expect("wait for Tokio child");
+        assert!(
+            !is_managed(pid),
+            "a waited child must release its managed PID"
+        );
+    }
+}
+
+#[cfg(test)]
+mod cross_platform_tests {
+    use super::ManagedChild;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn managed_child_retains_valid_pid_on_every_platform() {
+        let child = ManagedChild::spawn(|| Ok::<_, ()>(1_000_003_u32), |pid| Some(*pid))
+            .expect("construct managed child");
+
+        assert_eq!(child.id(), Some(1_000_003));
+    }
+
+    #[test]
+    fn standard_child_waits_through_managed_wrapper() {
+        let executable = std::env::current_exe().expect("current test executable");
+        let mut child = ManagedChild::spawn(
+            || {
+                Command::new(executable)
+                    .arg("--help")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            },
+            |child| Some(child.id()),
+        )
+        .expect("spawn test child");
+
+        assert!(child.wait().expect("wait for test child").success());
+    }
+
+    #[tokio::test]
+    async fn tokio_child_waits_through_managed_wrapper() {
+        let executable = std::env::current_exe().expect("current test executable");
+        let mut child = ManagedChild::spawn(
+            || {
+                let mut command = tokio::process::Command::new(executable);
+                command
+                    .arg("--help")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                command.spawn()
+            },
+            tokio::process::Child::id,
+        )
+        .expect("spawn test child");
+
+        assert!(child.wait().await.expect("wait for test child").success());
     }
 }
