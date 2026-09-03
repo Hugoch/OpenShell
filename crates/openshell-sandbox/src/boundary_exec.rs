@@ -384,7 +384,9 @@ impl LocalExecProcess {
         runtime: Arc<crate::boundary_io::BoundaryRuntimeState>,
         terminal: Arc<std::sync::atomic::AtomicBool>,
         signal_lock: Arc<std::sync::Mutex<()>>,
-        #[cfg(target_os = "linux")] managed_child: Option<crate::managed_children::ManagedChild>,
+        #[cfg(target_os = "linux")] managed_child: Option<
+            crate::managed_children::ManagedChildRegistration,
+        >,
     ) -> Self {
         let result = Arc::new(std::sync::Mutex::new(None));
         let exited = Arc::new(tokio::sync::Notify::new());
