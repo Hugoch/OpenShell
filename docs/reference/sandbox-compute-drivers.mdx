@@ -89,11 +89,6 @@ The gateway connects to the operator-provided endpoint; it does not provision
 or supervise the remote driver. The operator must protect the socket so only
 the gateway uid can access it.
 
-Sandbox create supports `--cpu` and `--memory` for per-sandbox compute sizing.
-Docker and Podman apply them as runtime limits. Kubernetes applies them as both
-container requests and limits. The VM driver accepts the fields but currently
-ignores them.
-
 Sandbox create also accepts experimental driver-owned config through
 `--driver-config-json`. The value is a JSON object keyed by driver name. The
 gateway forwards only the block for the active driver, so a Kubernetes gateway
@@ -133,19 +128,48 @@ request. The VM driver accepts `gpu_device_ids`, for example
 accepts at most one entry and allows either `--gpu` or `--gpu 1` when
 `gpu_device_ids` is set.
 
+## Portable Resource Requirements
+
+CPU, memory, and GPU requests use the typed
+`SandboxSpec.resource_requirements` API:
+
+- `cpu.quantity` and `memory.quantity` are optional portable quantities.
+- `gpu` indicates a GPU request and can include an optional count.
+
+Reusable workload templates use this same message at
+`SandboxWorkloadConfig.resources`. The gateway copies those typed requirements
+into the resolved sandbox spec when a sandbox is created from a template.
+
+| Driver | CPU and memory behavior |
+|---|---|
+| Docker | Converts typed quantities to native container CPU and memory limits. |
+| Podman | Converts typed quantities to native container CPU and memory limits. |
+| Kubernetes | Applies typed quantities as limits. A quantity also becomes the request unless a Kubernetes driver-config request is set; driver config can also specify request-only resources. |
+| VM | Rejects typed CPU and memory requirements. Configure gateway-wide `vcpus` and `mem_mib` instead. |
+| MXC | Rejects typed CPU and memory requirements. |
+
+The historical inline `SandboxTemplate.resources` remains available for platform-native resource
+fields that do not have a portable representation. Do not place CPU or memory
+under its `limits` or `requests` sections. The gateway rejects `limits.cpu`,
+`limits.memory`, `requests.cpu`, and `requests.memory` and directs the caller to
+the corresponding typed quantity. Kubernetes driver configuration may set
+explicit CPU and memory requests. These configured requests replace the request
+that Kubernetes would otherwise mirror from the portable quantity. The
+portable quantity remains the limit.
+
 ## Resource Capability Reporting
 
-API clients can read each configured driver's static resource request support
+API clients can read each configured driver's static portable resource support
 from the protected `GetGatewayInfo` response. The capability response describes
-which request forms a driver implements. It does not report live resource
-inventory, availability, or scheduling capacity, so a supported request can
-still fail when the selected runtime cannot provide the resource.
+which portable resource inputs a driver accepts. It does not report live
+resource inventory, availability, or scheduling capacity, so a supported
+request can still fail when the selected runtime cannot provide the resource.
 
-CPU and memory capabilities report whether the driver enforces a resource
-limit. GPU capabilities report whether the driver accepts a default GPU request
-and an explicit GPU count. An omitted `resource_capabilities` message, or an
-omitted CPU, memory, or GPU capability, means the driver did not report that
-capability. A reported `false` value means that request form is unsupported.
+CPU and memory capabilities report whether the driver accepts a portable
+quantity. GPU capabilities report whether the driver accepts a default GPU
+request and an explicit GPU count. An omitted `resource_capabilities` message,
+or an omitted CPU, memory, or GPU capability, means the driver did not report
+that capability. A reported `false` value means that input is unsupported.
 
 For Kubernetes, `pod.runtime_class_name` maps to PodSpec `runtimeClassName`.
 It overrides the gateway's configured default runtime class for that sandbox,
