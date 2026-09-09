@@ -82,18 +82,11 @@ func TestConverterCoversAllProtoFields_SandboxWorkloadConfig(t *testing.T) {
 		"environment": true,
 		"resources":   true,
 	}
+	// The gateway alone decodes this deprecated persistence migration field;
+	// curated SDK callers cannot read or write it.
+	skipped := fieldSet{"legacy_resources": true}
 
-	assertAllFieldsCovered(t, (&pb.SandboxWorkloadConfig{}).ProtoReflect().Descriptor(), handled, nil)
-}
-
-func TestConverterCoversAllProtoFields_SandboxResources(t *testing.T) {
-	handled := fieldSet{
-		"cpu":    true,
-		"memory": true,
-		"gpu":    true,
-	}
-
-	assertAllFieldsCovered(t, (&pb.SandboxResources{}).ProtoReflect().Descriptor(), handled, nil)
+	assertAllFieldsCovered(t, (&pb.SandboxWorkloadConfig{}).ProtoReflect().Descriptor(), handled, skipped)
 }
 
 func TestConverterCoversAllProtoFields_SandboxServiceLevel(t *testing.T) {

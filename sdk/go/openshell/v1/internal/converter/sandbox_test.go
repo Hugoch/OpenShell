@@ -86,6 +86,8 @@ func TestSandboxFromProto(t *testing.T) {
 				Gpu: &pb.GpuResourceRequirements{
 					Count: &gpuCount,
 				},
+				Cpu:    &pb.CpuResourceRequirements{Quantity: proto.String("500m")},
+				Memory: &pb.MemoryResourceRequirements{Quantity: proto.String("2Gi")},
 			},
 			Command: []string{"/opt/agent", "--serve"},
 			Tty:     false,
@@ -135,9 +137,14 @@ func TestSandboxFromProto(t *testing.T) {
 	assert.Equal(t, "debug", s.Spec.LogLevel)
 	assert.Equal(t, map[string]string{"FOO": "bar"}, s.Spec.Environment)
 	assert.Equal(t, []string{"claude", "github"}, s.Spec.Providers)
-	assert.True(t, s.Spec.GPU)
-	require.NotNil(t, s.Spec.GPUCount)
-	assert.Equal(t, uint32(2), *s.Spec.GPUCount)
+	require.NotNil(t, s.Spec.ResourceRequirements)
+	require.NotNil(t, s.Spec.ResourceRequirements.GPU)
+	require.NotNil(t, s.Spec.ResourceRequirements.GPU.Count)
+	assert.Equal(t, uint32(2), *s.Spec.ResourceRequirements.GPU.Count)
+	require.NotNil(t, s.Spec.ResourceRequirements.CPU)
+	assert.Equal(t, "500m", s.Spec.ResourceRequirements.CPU.Quantity)
+	require.NotNil(t, s.Spec.ResourceRequirements.Memory)
+	assert.Equal(t, "2Gi", s.Spec.ResourceRequirements.Memory.Quantity)
 	assert.Equal(t, []string{"/opt/agent", "--serve"}, s.Spec.Command)
 	assert.False(t, s.Spec.TTY)
 
@@ -279,8 +286,7 @@ func TestSandboxFromProto_NilFields(t *testing.T) {
 	assert.Empty(t, s.Name)
 	assert.True(t, s.CreatedAt.IsZero())
 	assert.Nil(t, s.Spec.Template)
-	assert.False(t, s.Spec.GPU)
-	assert.Nil(t, s.Spec.GPUCount)
+	assert.Nil(t, s.Spec.ResourceRequirements)
 	assert.Equal(t, v1.SandboxUnknown, s.Status.Phase)
 }
 
@@ -296,8 +302,9 @@ func TestSandboxFromProto_DefaultGPURequest(t *testing.T) {
 	s := SandboxFromProto(proto)
 
 	require.NotNil(t, s)
-	assert.True(t, s.Spec.GPU)
-	assert.Nil(t, s.Spec.GPUCount)
+	require.NotNil(t, s.Spec.ResourceRequirements)
+	require.NotNil(t, s.Spec.ResourceRequirements.GPU)
+	assert.Nil(t, s.Spec.ResourceRequirements.GPU.Count)
 }
 
 func TestSandboxFromProto_Nil(t *testing.T) {
@@ -376,9 +383,13 @@ func TestSandboxToProto(t *testing.T) {
 				UserNamespaces:   &userNS,
 			},
 			Providers: []string{"prov-a"},
-			GPUCount:  &gpuCount,
-			Command:   []string{"/opt/agent", "--serve"},
-			TTY:       false,
+			ResourceRequirements: &v1.ResourceRequirements{
+				GPU:    &v1.GPUResourceRequirements{Count: &gpuCount},
+				CPU:    &v1.CPUResourceRequirements{Quantity: "1"},
+				Memory: &v1.MemoryResourceRequirements{Quantity: "4Gi"},
+			},
+			Command: []string{"/opt/agent", "--serve"},
+			TTY:     false,
 		},
 	}
 
@@ -405,6 +416,10 @@ func TestSandboxToProto(t *testing.T) {
 	require.NotNil(t, p.Spec.ResourceRequirements)
 	require.NotNil(t, p.Spec.ResourceRequirements.Gpu)
 	assert.Equal(t, uint32(4), p.Spec.ResourceRequirements.Gpu.GetCount())
+	require.NotNil(t, p.Spec.ResourceRequirements.Cpu)
+	assert.Equal(t, "1", p.Spec.ResourceRequirements.Cpu.GetQuantity())
+	require.NotNil(t, p.Spec.ResourceRequirements.Memory)
+	assert.Equal(t, "4Gi", p.Spec.ResourceRequirements.Memory.GetQuantity())
 
 	require.NotNil(t, p.Spec.Template)
 	assert.Equal(t, "img:v1", p.Spec.Template.Image)
@@ -440,7 +455,9 @@ func TestSandboxToProto_NilTemplate(t *testing.T) {
 func TestSandboxToProto_DefaultGPURequest(t *testing.T) {
 	s := &v1.Sandbox{
 		Spec: v1.SandboxSpec{
-			GPU: true,
+			ResourceRequirements: &v1.ResourceRequirements{
+				GPU: &v1.GPUResourceRequirements{},
+			},
 		},
 	}
 
@@ -469,10 +486,10 @@ func TestSandboxWorkloadTemplateRoundTrip(t *testing.T) {
 			Workload: &v1.SandboxWorkloadConfig{
 				Image:       "nvcr.io/nvidia/openshell:latest",
 				Environment: map[string]string{"CUDA_VISIBLE_DEVICES": "all"},
-				Resources: &v1.SandboxResources{
-					CPU:    "2",
-					Memory: "8Gi",
-					GPU:    &v1.SandboxGPURequirements{Count: &gpuCount},
+				Resources: &v1.ResourceRequirements{
+					CPU:    &v1.CPUResourceRequirements{Quantity: "2"},
+					Memory: &v1.MemoryResourceRequirements{Quantity: "8Gi"},
+					GPU:    &v1.GPUResourceRequirements{Count: &gpuCount},
 				},
 			},
 			DriverConfig: map[string]any{
@@ -497,8 +514,10 @@ func TestSandboxWorkloadTemplateRoundTrip(t *testing.T) {
 	assert.Equal(t, "nvcr.io/nvidia/openshell:latest", protoTemplate.Spec.Workload.Image)
 	assert.Equal(t, map[string]string{"CUDA_VISIBLE_DEVICES": "all"}, protoTemplate.Spec.Workload.Environment)
 	require.NotNil(t, protoTemplate.Spec.Workload.Resources)
-	assert.Equal(t, "2", protoTemplate.Spec.Workload.Resources.Cpu)
-	assert.Equal(t, "8Gi", protoTemplate.Spec.Workload.Resources.Memory)
+	require.NotNil(t, protoTemplate.Spec.Workload.Resources.Cpu)
+	assert.Equal(t, "2", protoTemplate.Spec.Workload.Resources.Cpu.GetQuantity())
+	require.NotNil(t, protoTemplate.Spec.Workload.Resources.Memory)
+	assert.Equal(t, "8Gi", protoTemplate.Spec.Workload.Resources.Memory.GetQuantity())
 	require.NotNil(t, protoTemplate.Spec.Workload.Resources.Gpu)
 	require.NotNil(t, protoTemplate.Spec.Workload.Resources.Gpu.Count)
 	assert.Equal(t, uint32(2), *protoTemplate.Spec.Workload.Resources.Gpu.Count)
@@ -540,8 +559,8 @@ func TestSandboxWorkloadTemplateRoundTrip_DefaultGpuRequest(t *testing.T) {
 		Name: "default-gpu",
 		Spec: v1.SandboxWorkloadTemplateSpec{
 			Workload: &v1.SandboxWorkloadConfig{
-				Resources: &v1.SandboxResources{
-					GPU: &v1.SandboxGPURequirements{},
+				Resources: &v1.ResourceRequirements{
+					GPU: &v1.GPUResourceRequirements{},
 				},
 			},
 		},
@@ -589,7 +608,11 @@ func TestSandboxRoundTrip(t *testing.T) {
 				UserNamespaces: &userNS,
 			},
 			Providers: []string{"p1", "p2"},
-			GPUCount:  &gpuCount,
+			ResourceRequirements: &v1.ResourceRequirements{
+				GPU:    &v1.GPUResourceRequirements{Count: &gpuCount},
+				CPU:    &v1.CPUResourceRequirements{Quantity: "2"},
+				Memory: &v1.MemoryResourceRequirements{Quantity: "8Gi"},
+			},
 			Policy: &v1.SandboxPolicy{
 				Version: 3,
 				Filesystem: &v1.FilesystemPolicy{
@@ -638,9 +661,14 @@ func TestSandboxRoundTrip(t *testing.T) {
 	assert.Equal(t, original.Spec.LogLevel, back.Spec.LogLevel)
 	assert.Equal(t, original.Spec.Environment, back.Spec.Environment)
 	assert.Equal(t, original.Spec.Providers, back.Spec.Providers)
-	assert.True(t, back.Spec.GPU)
-	require.NotNil(t, back.Spec.GPUCount)
-	assert.Equal(t, *original.Spec.GPUCount, *back.Spec.GPUCount)
+	require.NotNil(t, back.Spec.ResourceRequirements)
+	require.NotNil(t, back.Spec.ResourceRequirements.GPU)
+	require.NotNil(t, back.Spec.ResourceRequirements.GPU.Count)
+	assert.Equal(t, *original.Spec.ResourceRequirements.GPU.Count, *back.Spec.ResourceRequirements.GPU.Count)
+	require.NotNil(t, back.Spec.ResourceRequirements.CPU)
+	assert.Equal(t, original.Spec.ResourceRequirements.CPU.Quantity, back.Spec.ResourceRequirements.CPU.Quantity)
+	require.NotNil(t, back.Spec.ResourceRequirements.Memory)
+	assert.Equal(t, original.Spec.ResourceRequirements.Memory.Quantity, back.Spec.ResourceRequirements.Memory.Quantity)
 	require.NotNil(t, back.Spec.Template)
 	assert.Equal(t, original.Spec.Template.Image, back.Spec.Template.Image)
 	require.NotNil(t, back.Spec.Template.UserNamespaces)
@@ -711,7 +739,11 @@ func TestSandboxSpecToProto(t *testing.T) {
 			DriverConfig: map[string]any{"runtime": "kata"},
 		},
 		Providers: []string{"prov"},
-		GPUCount:  &gpuCount,
+		ResourceRequirements: &v1.ResourceRequirements{
+			GPU:    &v1.GPUResourceRequirements{Count: &gpuCount},
+			CPU:    &v1.CPUResourceRequirements{Quantity: "500m"},
+			Memory: &v1.MemoryResourceRequirements{Quantity: "1Gi"},
+		},
 		Policy: &v1.SandboxPolicy{
 			Version: 2,
 			Filesystem: &v1.FilesystemPolicy{
@@ -728,6 +760,8 @@ func TestSandboxSpecToProto(t *testing.T) {
 	assert.Equal(t, []string{"prov"}, p.Providers)
 	require.NotNil(t, p.ResourceRequirements)
 	assert.Equal(t, uint32(3), p.ResourceRequirements.Gpu.GetCount())
+	assert.Equal(t, "500m", p.ResourceRequirements.Cpu.GetQuantity())
+	assert.Equal(t, "1Gi", p.ResourceRequirements.Memory.GetQuantity())
 	require.NotNil(t, p.Template)
 	assert.Equal(t, "img:spec", p.Template.Image)
 	require.NotNil(t, p.Template.Resources)

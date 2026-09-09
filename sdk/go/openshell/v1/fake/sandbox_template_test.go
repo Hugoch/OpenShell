@@ -212,10 +212,10 @@ func TestSandboxTemplate_CreateSandboxFromTemplateResolvesWorkloadAndGovernance(
 			Workload: &types.SandboxWorkloadConfig{
 				Image:       "registry.example.com/agent:latest",
 				Environment: map[string]string{"FEATURE_FLAG": "on"},
-				Resources: &types.SandboxResources{
-					CPU:    "2",
-					Memory: "4Gi",
-					GPU:    &types.SandboxGPURequirements{Count: &gpuCount},
+				Resources: &types.ResourceRequirements{
+					CPU:    &types.CPUResourceRequirements{Quantity: "2"},
+					Memory: &types.MemoryResourceRequirements{Quantity: "4Gi"},
+					GPU:    &types.GPUResourceRequirements{Count: &gpuCount},
 				},
 			},
 			DriverConfig: map[string]any{
@@ -242,11 +242,16 @@ func TestSandboxTemplate_CreateSandboxFromTemplateResolvesWorkloadAndGovernance(
 	assert.Equal(t, map[string]string{"FEATURE_FLAG": "on"}, created.Spec.Environment)
 	require.NotNil(t, created.Spec.Template)
 	assert.Equal(t, "registry.example.com/agent:latest", created.Spec.Template.Image)
-	assert.Equal(t, map[string]any{"limits": map[string]any{"cpu": "2", "memory": "4Gi"}}, created.Spec.Template.Resources)
+	assert.Nil(t, created.Spec.Template.Resources)
 	assert.Equal(t, "kata-containers", created.Spec.Template.DriverConfig["kubernetes"].(map[string]any)["runtime_class_name"])
-	assert.True(t, created.Spec.GPU)
-	require.NotNil(t, created.Spec.GPUCount)
-	assert.Equal(t, uint32(1), *created.Spec.GPUCount)
+	require.NotNil(t, created.Spec.ResourceRequirements)
+	require.NotNil(t, created.Spec.ResourceRequirements.CPU)
+	assert.Equal(t, "2", created.Spec.ResourceRequirements.CPU.Quantity)
+	require.NotNil(t, created.Spec.ResourceRequirements.Memory)
+	assert.Equal(t, "4Gi", created.Spec.ResourceRequirements.Memory.Quantity)
+	require.NotNil(t, created.Spec.ResourceRequirements.GPU)
+	require.NotNil(t, created.Spec.ResourceRequirements.GPU.Count)
+	assert.Equal(t, uint32(1), *created.Spec.ResourceRequirements.GPU.Count)
 	assert.Equal(t, []string{"github"}, created.Spec.Providers)
 	require.NotNil(t, created.Spec.Policy)
 	assert.Equal(t, uint32(1), created.Spec.Policy.Version)
@@ -276,11 +281,10 @@ func TestSandboxTemplate_CreateSandboxFromTemplateRejectsWorkloadOverrides(t *te
 		"template": {
 			Template: &types.SandboxTemplate{Image: "registry.example.com/override:latest"},
 		},
-		"gpu_count": {
-			GPUCount: &gpuCount,
-		},
-		"gpu": {
-			GPU: true,
+		"resources": {
+			ResourceRequirements: &types.ResourceRequirements{
+				GPU: &types.GPUResourceRequirements{Count: &gpuCount},
+			},
 		},
 	}
 
@@ -306,8 +310,8 @@ func TestSandboxTemplate_DefaultGpuRequestRoundTripsTemplate(t *testing.T) {
 		Name: "default-gpu",
 		Spec: types.SandboxWorkloadTemplateSpec{
 			Workload: &types.SandboxWorkloadConfig{
-				Resources: &types.SandboxResources{
-					GPU: &types.SandboxGPURequirements{},
+				Resources: &types.ResourceRequirements{
+					GPU: &types.GPUResourceRequirements{},
 				},
 			},
 		},
@@ -333,8 +337,8 @@ func TestSandboxTemplate_CreateSandboxFromTemplatePreservesDefaultGPURequest(t *
 		Spec: types.SandboxWorkloadTemplateSpec{
 			Workload: &types.SandboxWorkloadConfig{
 				Image: "registry.example.com/agent:latest",
-				Resources: &types.SandboxResources{
-					GPU: &types.SandboxGPURequirements{},
+				Resources: &types.ResourceRequirements{
+					GPU: &types.GPUResourceRequirements{},
 				},
 			},
 		},
@@ -350,8 +354,9 @@ func TestSandboxTemplate_CreateSandboxFromTemplatePreservesDefaultGPURequest(t *
 	)
 
 	require.NoError(t, err)
-	assert.True(t, created.Spec.GPU)
-	assert.Nil(t, created.Spec.GPUCount)
+	require.NotNil(t, created.Spec.ResourceRequirements)
+	require.NotNil(t, created.Spec.ResourceRequirements.GPU)
+	assert.Nil(t, created.Spec.ResourceRequirements.GPU.Count)
 }
 
 func TestSandboxTemplate_DeepCopy(t *testing.T) {
@@ -364,6 +369,10 @@ func TestSandboxTemplate_DeepCopy(t *testing.T) {
 			Workload: &types.SandboxWorkloadConfig{
 				Image:       "python:3.12",
 				Environment: map[string]string{"KEY": "value"},
+				Resources: &types.ResourceRequirements{
+					CPU:    &types.CPUResourceRequirements{Quantity: "500m"},
+					Memory: &types.MemoryResourceRequirements{Quantity: "512Mi"},
+				},
 			},
 			DriverConfig: map[string]any{"kubernetes": map[string]any{"runtime_class_name": "kata"}},
 		},
@@ -374,13 +383,19 @@ func TestSandboxTemplate_DeepCopy(t *testing.T) {
 
 	template.Spec.Workload.Image = "mutated"
 	template.Spec.Workload.Environment["KEY"] = "mutated"
+	template.Spec.Workload.Resources.CPU.Quantity = "8"
+	template.Spec.Workload.Resources.Memory.Quantity = "16Gi"
 	template.Spec.DriverConfig["kubernetes"].(map[string]any)["runtime_class_name"] = "mutated"
 	created.Spec.Workload.Image = "mutated-return"
+	created.Spec.Workload.Resources.CPU.Quantity = "4"
+	created.Spec.Workload.Resources.Memory.Quantity = "8Gi"
 
 	got, err := tc.Get(ctx, "default", "gpu-kata")
 	require.NoError(t, err)
 	assert.Equal(t, "python:3.12", got.Spec.Workload.Image)
 	assert.Equal(t, "value", got.Spec.Workload.Environment["KEY"])
+	assert.Equal(t, "500m", got.Spec.Workload.Resources.CPU.Quantity)
+	assert.Equal(t, "512Mi", got.Spec.Workload.Resources.Memory.Quantity)
 	assert.Equal(t, "kata", got.Spec.DriverConfig["kubernetes"].(map[string]any)["runtime_class_name"])
 }
 
@@ -436,8 +451,8 @@ func TestSandboxTemplate_CreateRejectsInvalidTemplate(t *testing.T) {
 			Spec: types.SandboxWorkloadTemplateSpec{
 				Workload: &types.SandboxWorkloadConfig{
 					Image: "registry.example.com/agent:latest",
-					Resources: &types.SandboxResources{
-						GPU: &types.SandboxGPURequirements{Count: &zeroGPUCount},
+					Resources: &types.ResourceRequirements{
+						GPU: &types.GPUResourceRequirements{Count: &zeroGPUCount},
 					},
 				},
 			},
