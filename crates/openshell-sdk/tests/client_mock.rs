@@ -147,11 +147,16 @@ fn workload_template_proto(name: &str, workspace: &str) -> proto::SandboxWorkloa
             workload: Some(proto::SandboxWorkloadConfig {
                 image: format!("ghcr.io/test/{name}:latest"),
                 environment: HashMap::new(),
-                resources: Some(proto::SandboxResources {
-                    cpu: "1".to_string(),
-                    memory: "512Mi".to_string(),
-                    ..proto::SandboxResources::default()
+                resources: Some(proto::ResourceRequirements {
+                    cpu: Some(proto::CpuResourceRequirements {
+                        quantity: Some("1".to_string()),
+                    }),
+                    memory: Some(proto::MemoryResourceRequirements {
+                        quantity: Some("512Mi".to_string()),
+                    }),
+                    ..Default::default()
                 }),
+                ..Default::default()
             }),
             driver_config: None,
             desired_service_level: None,
