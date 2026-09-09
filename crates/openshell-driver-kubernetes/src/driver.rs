@@ -58,8 +58,8 @@ use openshell_core::proto::compute::v1::{
     DriverSandboxSpec as SandboxSpec, DriverSandboxStatus as SandboxStatus,
     DriverSandboxTemplate as SandboxTemplate, GetCapabilitiesResponse, GpuResourceCapabilities,
     GpuResourceRequirements, MemoryResourceCapabilities, ResourceCapabilities,
-    WatchSandboxesDeletedEvent, WatchSandboxesEvent, WatchSandboxesPlatformEvent,
-    WatchSandboxesSandboxEvent, watch_sandboxes_event,
+    ResourceRequirements, WatchSandboxesDeletedEvent, WatchSandboxesEvent,
+    WatchSandboxesPlatformEvent, WatchSandboxesSandboxEvent, watch_sandboxes_event,
 };
 use openshell_core::proto_struct::{struct_to_json_object, value_to_json};
 use openshell_isolation_interface::contract::ResolvedWorkloadIdentity;
@@ -755,10 +755,10 @@ impl KubernetesComputeDriver {
             driver_reports_runtime_readiness: false,
             resource_capabilities: Some(ResourceCapabilities {
                 cpu: Some(CpuResourceCapabilities {
-                    limit_supported: true,
+                    quantity_supported: true,
                 }),
                 memory: Some(MemoryResourceCapabilities {
-                    limit_supported: true,
+                    quantity_supported: true,
                 }),
                 gpu: Some(GpuResourceCapabilities {
                     default_selection_supported: true,
@@ -5787,7 +5787,7 @@ fn sandbox_to_k8s_spec(
                 "podTemplate".to_string(),
                 sandbox_template_to_k8s_with_validated_config(
                     template,
-                    driver_gpu_requirements(spec.resource_requirements.as_ref()),
+                    spec.resource_requirements.as_ref(),
                     &pod_env,
                     &driver_config,
                     inject_workspace,
@@ -5820,7 +5820,7 @@ fn sandbox_to_k8s_spec(
             "podTemplate".to_string(),
             sandbox_template_to_k8s_with_validated_config(
                 &SandboxTemplate::default(),
-                driver_gpu_requirements(spec.and_then(|s| s.resource_requirements.as_ref())),
+                spec.and_then(|s| s.resource_requirements.as_ref()),
                 &pod_env,
                 &driver_config,
                 inject_workspace,
@@ -5842,12 +5842,16 @@ fn sandbox_template_to_k8s(
     inject_workspace: bool,
     params: &SandboxPodParams<'_>,
 ) -> serde_json::Value {
-    let gpu_requirements = gpu.then_some(GpuResourceRequirements { count: None });
+    let resource_requirements = gpu.then_some(ResourceRequirements {
+        gpu: Some(GpuResourceRequirements { count: None }),
+        cpu: None,
+        memory: None,
+    });
     let driver_config = KubernetesSandboxDriverConfig::from_template(template)
         .expect("test Kubernetes driver_config should be valid");
     sandbox_template_to_k8s_with_validated_config(
         template,
-        gpu_requirements.as_ref(),
+        resource_requirements.as_ref(),
         spec_environment,
         &driver_config,
         inject_workspace,
@@ -5863,11 +5867,36 @@ fn sandbox_template_to_k8s_with_gpu_requirements(
     inject_workspace: bool,
     params: &SandboxPodParams<'_>,
 ) -> serde_json::Value {
+    let resource_requirements = gpu_requirements.map(|gpu| ResourceRequirements {
+        gpu: Some(*gpu),
+        cpu: None,
+        memory: None,
+    });
     let driver_config = KubernetesSandboxDriverConfig::from_template(template)
         .expect("test Kubernetes driver_config should be valid");
     sandbox_template_to_k8s_with_validated_config(
         template,
-        gpu_requirements,
+        resource_requirements.as_ref(),
+        spec_environment,
+        &driver_config,
+        inject_workspace,
+        params,
+    )
+}
+
+#[cfg(test)]
+fn sandbox_template_to_k8s_with_resource_requirements(
+    template: &SandboxTemplate,
+    resource_requirements: Option<&ResourceRequirements>,
+    spec_environment: &std::collections::HashMap<String, String>,
+    inject_workspace: bool,
+    params: &SandboxPodParams<'_>,
+) -> serde_json::Value {
+    let driver_config = KubernetesSandboxDriverConfig::from_template(template)
+        .expect("test Kubernetes driver_config should be valid");
+    sandbox_template_to_k8s_with_validated_config(
+        template,
+        resource_requirements,
         spec_environment,
         &driver_config,
         inject_workspace,
@@ -5877,12 +5906,13 @@ fn sandbox_template_to_k8s_with_gpu_requirements(
 
 fn sandbox_template_to_k8s_with_validated_config(
     template: &SandboxTemplate,
-    gpu_requirements: Option<&GpuResourceRequirements>,
+    resource_requirements: Option<&ResourceRequirements>,
     spec_environment: &std::collections::HashMap<String, String>,
     driver_config: &KubernetesSandboxDriverConfig,
     inject_workspace: bool,
     params: &SandboxPodParams<'_>,
 ) -> serde_json::Value {
+    let gpu_requirements = driver_gpu_requirements(resource_requirements);
     let mut metadata = serde_json::Map::new();
     let pod_labels = template
         .labels
@@ -6016,7 +6046,11 @@ fn sandbox_template_to_k8s_with_validated_config(
         serde_json::Value::Array(volume_mounts),
     );
 
-    if let Some(resources) = container_resources(template, gpu_requirements) {
+    if let Some(resources) = container_resources(
+        template,
+        resource_requirements,
+        &driver_config.containers.agent.resources,
+    ) {
         container.insert("resources".to_string(), resources);
     }
     apply_agent_driver_resources(&mut container, &driver_config.containers.agent.resources);
@@ -6146,16 +6180,19 @@ fn image_pull_secret_refs(secrets: &[String]) -> Vec<serde_json::Value> {
 
 fn container_resources(
     template: &SandboxTemplate,
-    gpu_requirements: Option<&GpuResourceRequirements>,
+    resource_requirements: Option<&ResourceRequirements>,
+    driver_resources: &KubernetesContainerResourceConfig,
 ) -> Option<serde_json::Value> {
+    let gpu_requirements = driver_gpu_requirements(resource_requirements);
+
     // Start from the raw resources passthrough in platform_config (preserves
     // custom resource types like GPU limits that users set via the public API
-    // Struct), then overlay the typed DriverResourceRequirements on top.
+    // Struct), then overlay the typed resource requirements on top.
     let mut resources =
         platform_config_struct(template, "resources_raw").unwrap_or_else(|| serde_json::json!({}));
 
-    // Overlay typed CPU/memory from DriverResourceRequirements.
-    if let Some(ref req) = template.resources {
+    // Overlay typed CPU/memory from ResourceRequirements.
+    if let Some(requirements) = resource_requirements {
         let obj = resources.as_object_mut().unwrap();
         let mut apply = |section: &str, key: &str, value: &str| {
             if !value.is_empty() {
@@ -6163,21 +6200,22 @@ fn container_resources(
                 sec[key] = serde_json::json!(value);
             }
         };
-        apply("limits", "cpu", &req.cpu_limit);
-        apply("limits", "memory", &req.memory_limit);
-
-        let cpu_request = if req.cpu_request.is_empty() {
-            &req.cpu_limit
-        } else {
-            &req.cpu_request
-        };
-        let memory_request = if req.memory_request.is_empty() {
-            &req.memory_limit
-        } else {
-            &req.memory_request
-        };
-        apply("requests", "cpu", cpu_request);
-        apply("requests", "memory", memory_request);
+        if let Some(cpu) = requirements.cpu.as_ref() {
+            if let Some(quantity) = cpu.quantity.as_deref() {
+                apply("limits", "cpu", quantity);
+                if !driver_resources.requests.contains_key("cpu") {
+                    apply("requests", "cpu", quantity);
+                }
+            }
+        }
+        if let Some(memory) = requirements.memory.as_ref() {
+            if let Some(quantity) = memory.quantity.as_deref() {
+                apply("limits", "memory", quantity);
+                if !driver_resources.requests.contains_key("memory") {
+                    apply("requests", "memory", quantity);
+                }
+            }
+        }
     }
 
     if let Some(gpu) = gpu_requirements {
@@ -6940,7 +6978,10 @@ mod tests {
         PROGRESS_ACTIVE_DETAIL_KEY, PROGRESS_ACTIVE_STEP_KEY, PROGRESS_COMPLETE_LABEL_KEY,
         PROGRESS_COMPLETE_STEP_KEY,
     };
-    use openshell_core::proto::compute::v1::{GpuResourceRequirements, ResourceRequirements};
+    use openshell_core::proto::compute::v1::{
+        CpuResourceRequirements, GpuResourceRequirements, MemoryResourceRequirements,
+        ResourceRequirements,
+    };
     use prost_types::{Struct, Value, value::Kind};
     use std::collections::{BTreeSet, VecDeque};
 
@@ -8583,6 +8624,8 @@ mod tests {
             spec: Some(SandboxSpec {
                 resource_requirements: Some(ResourceRequirements {
                     gpu: Some(GpuResourceRequirements { count: Some(0) }),
+                    cpu: None,
+                    memory: None,
                 }),
                 ..SandboxSpec::default()
             }),
@@ -9067,22 +9110,25 @@ mod tests {
     }
 
     #[test]
-    fn gpu_sandbox_preserves_existing_resource_limits() {
-        use openshell_core::proto::compute::v1::DriverResourceRequirements;
-        let template = SandboxTemplate {
-            resources: Some(DriverResourceRequirements {
-                cpu_limit: "2".to_string(),
-                ..Default::default()
+    fn gpu_sandbox_preserves_typed_cpu_resource_quantity() {
+        let template = SandboxTemplate::default();
+        let resource_requirements = ResourceRequirements {
+            gpu: Some(GpuResourceRequirements { count: None }),
+            cpu: Some(CpuResourceRequirements {
+                quantity: Some("2".to_string()),
             }),
-            ..SandboxTemplate::default()
+            memory: None,
         };
 
         let pod_template = {
             let params = SandboxPodParams::default();
-            sandbox_template_to_k8s(
+            let driver_config = KubernetesSandboxDriverConfig::from_template(&template)
+                .expect("test Kubernetes driver_config should be valid");
+            sandbox_template_to_k8s_with_validated_config(
                 &template,
-                true,
+                Some(&resource_requirements),
                 &std::collections::HashMap::new(),
+                &driver_config,
                 true,
                 &params,
             )
@@ -9094,22 +9140,23 @@ mod tests {
     }
 
     #[test]
-    fn cpu_and_memory_limits_are_mirrored_to_requests() {
-        use openshell_core::proto::compute::v1::DriverResourceRequirements;
-        let template = SandboxTemplate {
-            resources: Some(DriverResourceRequirements {
-                cpu_limit: "500m".to_string(),
-                memory_limit: "2Gi".to_string(),
-                ..Default::default()
+    fn cpu_and_memory_quantities_are_mirrored_to_requests() {
+        let template = SandboxTemplate::default();
+        let resource_requirements = ResourceRequirements {
+            gpu: None,
+            cpu: Some(CpuResourceRequirements {
+                quantity: Some("500m".to_string()),
             }),
-            ..SandboxTemplate::default()
+            memory: Some(MemoryResourceRequirements {
+                quantity: Some("2Gi".to_string()),
+            }),
         };
 
         let pod_template = {
             let params = SandboxPodParams::default();
-            sandbox_template_to_k8s(
+            sandbox_template_to_k8s_with_resource_requirements(
                 &template,
-                false,
+                Some(&resource_requirements),
                 &std::collections::HashMap::new(),
                 true,
                 &params,
@@ -9121,6 +9168,152 @@ mod tests {
         assert_eq!(resources["limits"]["memory"], serde_json::json!("2Gi"));
         assert_eq!(resources["requests"]["cpu"], serde_json::json!("500m"));
         assert_eq!(resources["requests"]["memory"], serde_json::json!("2Gi"));
+    }
+
+    #[test]
+    fn driver_config_requests_are_independent_of_portable_quantities() {
+        let template = SandboxTemplate {
+            driver_config: Some(json_struct(serde_json::json!({
+                "containers": {
+                    "agent": {
+                        "resources": {
+                            "requests": { "cpu": "250m", "memory": "512Mi" }
+                        }
+                    }
+                }
+            }))),
+            ..SandboxTemplate::default()
+        };
+        let resource_requirements = ResourceRequirements {
+            gpu: None,
+            cpu: Some(CpuResourceRequirements {
+                quantity: Some("1".to_string()),
+            }),
+            memory: Some(MemoryResourceRequirements {
+                quantity: Some("2Gi".to_string()),
+            }),
+        };
+
+        let pod_template = sandbox_template_to_k8s_with_resource_requirements(
+            &template,
+            Some(&resource_requirements),
+            &std::collections::HashMap::new(),
+            true,
+            &SandboxPodParams::default(),
+        );
+
+        let resources = &pod_template["spec"]["containers"][0]["resources"];
+        assert_eq!(resources["limits"]["cpu"], serde_json::json!("1"));
+        assert_eq!(resources["limits"]["memory"], serde_json::json!("2Gi"));
+        assert_eq!(resources["requests"]["cpu"], serde_json::json!("250m"));
+        assert_eq!(resources["requests"]["memory"], serde_json::json!("512Mi"));
+    }
+
+    #[test]
+    fn driver_config_requests_can_be_set_without_portable_quantities() {
+        let template = SandboxTemplate {
+            driver_config: Some(json_struct(serde_json::json!({
+                "containers": {
+                    "agent": {
+                        "resources": {
+                            "requests": { "cpu": "250m", "memory": "512Mi" }
+                        }
+                    }
+                }
+            }))),
+            ..SandboxTemplate::default()
+        };
+
+        let pod_template = sandbox_template_to_k8s_with_resource_requirements(
+            &template,
+            None,
+            &std::collections::HashMap::new(),
+            true,
+            &SandboxPodParams::default(),
+        );
+
+        let resources = &pod_template["spec"]["containers"][0]["resources"];
+        assert!(resources.get("limits").is_none());
+        assert_eq!(resources["requests"]["cpu"], serde_json::json!("250m"));
+        assert_eq!(resources["requests"]["memory"], serde_json::json!("512Mi"));
+    }
+
+    #[test]
+    fn driver_config_requests_take_precedence_over_limit_fallback() {
+        let template = SandboxTemplate {
+            driver_config: Some(json_struct(serde_json::json!({
+                "containers": {
+                    "agent": {
+                        "resources": {
+                            "requests": { "cpu": "250m", "memory": "512Mi" }
+                        }
+                    }
+                }
+            }))),
+            ..SandboxTemplate::default()
+        };
+        let resource_requirements = ResourceRequirements {
+            gpu: None,
+            cpu: Some(CpuResourceRequirements {
+                quantity: Some("1".to_string()),
+            }),
+            memory: Some(MemoryResourceRequirements {
+                quantity: Some("2Gi".to_string()),
+            }),
+        };
+
+        let pod_template = sandbox_template_to_k8s_with_resource_requirements(
+            &template,
+            Some(&resource_requirements),
+            &std::collections::HashMap::new(),
+            true,
+            &SandboxPodParams::default(),
+        );
+
+        let resources = &pod_template["spec"]["containers"][0]["resources"];
+        assert_eq!(resources["limits"]["cpu"], serde_json::json!("1"));
+        assert_eq!(resources["limits"]["memory"], serde_json::json!("2Gi"));
+        assert_eq!(resources["requests"]["cpu"], serde_json::json!("250m"));
+        assert_eq!(resources["requests"]["memory"], serde_json::json!("512Mi"));
+    }
+
+    #[test]
+    fn driver_config_requests_take_precedence_over_quantity_fallback() {
+        let template = SandboxTemplate {
+            driver_config: Some(json_struct(serde_json::json!({
+                "containers": {
+                    "agent": {
+                        "resources": {
+                            "requests": { "cpu": "250m", "memory": "512Mi" }
+                        }
+                    }
+                }
+            }))),
+            ..SandboxTemplate::default()
+        };
+        let resource_requirements = ResourceRequirements {
+            gpu: None,
+            cpu: Some(CpuResourceRequirements {
+                quantity: Some("1".to_string()),
+            }),
+            memory: Some(MemoryResourceRequirements {
+                quantity: Some("2Gi".to_string()),
+            }),
+        };
+
+        let pod_template = sandbox_template_to_k8s_with_resource_requirements(
+            &template,
+            Some(&resource_requirements),
+            &std::collections::HashMap::new(),
+            true,
+            &SandboxPodParams::default(),
+        );
+
+        let resources = &pod_template["spec"]["containers"][0]["resources"];
+        assert_eq!(resources["limits"]["cpu"], serde_json::json!("1"));
+        assert_eq!(resources["limits"]["memory"], serde_json::json!("2Gi"));
+        assert_eq!(resources["requests"]["cpu"], serde_json::json!("250m"));
+        assert_eq!(resources["requests"]["memory"], serde_json::json!("512Mi"));
     }
 
     // -----------------------------------------------------------------------
@@ -10300,8 +10493,10 @@ mod tests {
             .unwrap()
             .resource_capabilities
             .unwrap();
-        assert!(resources.cpu.unwrap().limit_supported);
-        assert!(resources.memory.unwrap().limit_supported);
+        let cpu = resources.cpu.unwrap();
+        assert!(cpu.quantity_supported);
+        let memory = resources.memory.unwrap();
+        assert!(memory.quantity_supported);
         let gpu = resources.gpu.unwrap();
         assert!(gpu.default_selection_supported);
         assert!(gpu.count_selection_supported);

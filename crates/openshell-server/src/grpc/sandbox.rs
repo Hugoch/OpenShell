@@ -22,15 +22,16 @@ use futures::future;
 use openshell_core::net::set_tcp_nodelay_best_effort;
 use openshell_core::proto::datamodel::v1::ObjectMeta;
 use openshell_core::proto::{
-    AttachSandboxProviderRequest, AttachSandboxProviderResponse, CreateSandboxRequest,
-    CreateSandboxTemplateRequest, CreateSshSessionRequest, CreateSshSessionResponse,
-    DeleteSandboxRequest, DeleteSandboxResponse, DeleteSandboxTemplateRequest,
-    DeleteSandboxTemplateResponse, DetachSandboxProviderRequest, DetachSandboxProviderResponse,
-    ExecSandboxEvent, ExecSandboxExit, ExecSandboxInput, ExecSandboxRequest, ExecSandboxStderr,
-    ExecSandboxStdout, GetSandboxRequest, GetSandboxTemplateRequest, ListSandboxProvidersRequest,
+    AttachSandboxProviderRequest, AttachSandboxProviderResponse, CpuResourceRequirements,
+    CreateSandboxRequest, CreateSandboxTemplateRequest, CreateSshSessionRequest,
+    CreateSshSessionResponse, DeleteSandboxRequest, DeleteSandboxResponse,
+    DeleteSandboxTemplateRequest, DeleteSandboxTemplateResponse, DetachSandboxProviderRequest,
+    DetachSandboxProviderResponse, ExecSandboxEvent, ExecSandboxExit, ExecSandboxInput,
+    ExecSandboxRequest, ExecSandboxStderr, ExecSandboxStdout, GetSandboxRequest,
+    GetSandboxTemplateRequest, LegacySandboxResources, ListSandboxProvidersRequest,
     ListSandboxProvidersResponse, ListSandboxTemplatesRequest, ListSandboxTemplatesResponse,
-    ListSandboxesRequest, ListSandboxesResponse, Provider, ProviderMutationKind,
-    ResourceRequirements, RevokeSshSessionRequest, RevokeSshSessionResponse, SandboxResources,
+    ListSandboxesRequest, ListSandboxesResponse, MemoryResourceRequirements, Provider,
+    ProviderMutationKind, ResourceRequirements, RevokeSshSessionRequest, RevokeSshSessionResponse,
     SandboxResponse, SandboxSpec, SandboxStreamEvent, SandboxTemplateResponse,
     SandboxWorkloadTemplate, SandboxWorkloadTemplateProvenance, SshRelayTarget,
     StartSandboxRequest, StopSandboxRequest, TcpForwardFrame, TcpForwardInit, TcpRelayTarget,
@@ -45,7 +46,7 @@ use openshell_core::telemetry::{
 };
 use openshell_core::{GetResourceVersion, ObjectId, ObjectName, ObjectWorkspace};
 use prost::Message;
-use prost_types::{Struct, Value, value::Kind};
+use prost_types::value::Kind;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::pin::Pin;
@@ -645,7 +646,9 @@ fn validate_template_create_governance_spec(spec: &SandboxSpec) -> Result<(), St
 fn sandbox_spec_from_stored_workload_template(
     template: &SandboxWorkloadTemplate,
 ) -> Result<SandboxSpec, Status> {
-    sandbox_spec_from_workload_template(template, tonic::Code::Internal)
+    let mut template = template.clone();
+    migrate_legacy_workload_template_resources(&mut template)?;
+    sandbox_spec_from_workload_template(&template, tonic::Code::Internal)
 }
 
 fn sandbox_spec_from_user_workload_template(
@@ -666,56 +669,47 @@ fn sandbox_spec_from_workload_template(
         .workload
         .as_ref()
         .ok_or_else(|| Status::new(missing_field_code, "sandbox template workload is required"))?;
-    let resources = workload.resources.as_ref();
     Ok(SandboxSpec {
         environment: workload.environment.clone(),
         template: Some(SandboxTemplate {
             image: workload.image.clone(),
-            resources: resources.and_then(template_resource_struct),
             driver_config: spec.driver_config.clone(),
             ..SandboxTemplate::default()
         }),
-        resource_requirements: resources.and_then(template_gpu_requirements),
+        resource_requirements: workload.resources.clone(),
         ..SandboxSpec::default()
     })
 }
 
-fn template_gpu_requirements(resources: &SandboxResources) -> Option<ResourceRequirements> {
-    Some(ResourceRequirements {
-        gpu: Some(resources.gpu?),
-    })
-}
-
-fn template_resource_struct(resources: &SandboxResources) -> Option<Struct> {
-    let mut limits = std::collections::BTreeMap::new();
-    if !resources.cpu.is_empty() {
-        limits.insert(
-            "cpu".to_string(),
-            Value {
-                kind: Some(Kind::StringValue(resources.cpu.clone())),
-            },
-        );
+#[allow(deprecated)]
+fn migrate_legacy_workload_template_resources(
+    template: &mut SandboxWorkloadTemplate,
+) -> Result<(), Status> {
+    let Some(workload) = template
+        .spec
+        .as_mut()
+        .and_then(|spec| spec.workload.as_mut())
+    else {
+        return Ok(());
+    };
+    let Some(LegacySandboxResources { cpu, memory, gpu }) = workload.legacy_resources.take() else {
+        return Ok(());
+    };
+    if workload.resources.is_some() {
+        return Err(Status::internal(
+            "stored sandbox template contains both legacy and current resources",
+        ));
     }
-    if !resources.memory.is_empty() {
-        limits.insert(
-            "memory".to_string(),
-            Value {
-                kind: Some(Kind::StringValue(resources.memory.clone())),
-            },
-        );
-    }
-    if limits.is_empty() {
-        None
-    } else {
-        let mut fields = std::collections::BTreeMap::new();
-        fields.insert(
-            "limits".to_string(),
-            Value {
-                kind: Some(Kind::StructValue(Struct { fields: limits })),
-            },
-        );
-        Some(Struct { fields })
-    }
+    workload.resources = Some(ResourceRequirements {
+        cpu: (!cpu.is_empty()).then_some(CpuResourceRequirements {
+            quantity: Some(cpu),
+        }),
+        memory: (!memory.is_empty()).then_some(MemoryResourceRequirements {
+            quantity: Some(memory),
+        }),
+        gpu,
+    });
+    Ok(())
 }
 
 pub(super) async fn handle_get_sandbox(
@@ -919,12 +913,13 @@ pub(super) async fn handle_get_sandbox_template(
     let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
         .await?
         .name;
-    let template = state
+    let mut template = state
         .store
         .get_message_by_name::<SandboxWorkloadTemplate>(&workspace, &req.name)
         .await
         .map_err(|e| Status::internal(format!("fetch sandbox template failed: {e}")))?
         .ok_or_else(|| Status::not_found("sandbox template not found"))?;
+    migrate_legacy_workload_template_resources(&mut template)?;
     Ok(Response::new(SandboxTemplateResponse {
         template: Some(template),
     }))
@@ -975,11 +970,14 @@ pub(super) async fn handle_list_sandbox_templates(
             label_selector: selector,
         },
     };
-    let page = state
+    let mut page = state
         .store
         .list_message_page::<SandboxWorkloadTemplate>(query, after.as_ref(), pagination.page_size())
         .await
         .map_err(|e| Status::internal(format!("list sandbox templates failed: {e}")))?;
+    for template in &mut page.messages {
+        migrate_legacy_workload_template_resources(template)?;
+    }
     let next_page_token = pagination.next_object_token(page.next_cursor.as_ref());
     Ok(Response::new(ListSandboxTemplatesResponse {
         templates: page.messages,
@@ -1021,11 +1019,22 @@ pub(super) async fn handle_delete_sandbox_template(
     }))
 }
 
+#[allow(deprecated)]
 fn validate_sandbox_workload_template(template: &SandboxWorkloadTemplate) -> Result<(), Status> {
     super::validation::validate_object_metadata(template.metadata.as_ref(), "sandbox_template")?;
     let name = template.object_name().to_string();
     validate_dns1123_label(&name, "template.metadata.name")?;
     validate_sandbox_workload_template_service_level(template)?;
+    if template
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.workload.as_ref())
+        .is_some_and(|workload| workload.legacy_resources.is_some())
+    {
+        return Err(Status::invalid_argument(
+            "template.spec.workload.legacy_resources is read-only migration data",
+        ));
+    }
     let spec = sandbox_spec_from_user_workload_template(template)?;
     validate_sandbox_spec(&name, &spec)?;
     Ok(())
@@ -3320,8 +3329,74 @@ mod tests {
     use crate::grpc::test_support::{
         authed_request, test_server_state, test_server_state_with_driver,
     };
-    use openshell_core::proto::GpuResourceRequirements;
     use openshell_core::proto::datamodel::v1::ObjectMeta;
+    use openshell_core::proto::{GpuResourceRequirements, ResourceRequirements};
+
+    // Encoded with the pre-migration schema where SandboxWorkloadConfig field 3
+    // was SandboxResources { cpu: "500m", memory: "512Mi", gpu: { count: 2 } }.
+    const LEGACY_WORKLOAD_TEMPLATE_FIXTURE: &[u8] = &[
+        0x12, 0x1a, 0x0a, 0x18, 0x0a, 0x03, 0x69, 0x6d, 0x67, 0x1a, 0x11, 0x0a, 0x04, 0x35, 0x30,
+        0x30, 0x6d, 0x12, 0x05, 0x35, 0x31, 0x32, 0x4d, 0x69, 0x1a, 0x02, 0x08, 0x02,
+    ];
+
+    fn legacy_workload_template_fixture() -> SandboxWorkloadTemplate {
+        SandboxWorkloadTemplate::decode(LEGACY_WORKLOAD_TEMPLATE_FIXTURE)
+            .expect("legacy workload template fixture should decode")
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn legacy_workload_template_fixture_migrates_portable_resources() {
+        let mut template = legacy_workload_template_fixture();
+        migrate_legacy_workload_template_resources(&mut template)
+            .expect("legacy resources should migrate");
+
+        let workload = template.spec.unwrap().workload.unwrap();
+        assert!(workload.legacy_resources.is_none());
+        let resources = workload.resources.expect("migrated resources");
+        assert_eq!(
+            resources.cpu.and_then(|cpu| cpu.quantity),
+            Some("500m".to_string())
+        );
+        assert_eq!(
+            resources.memory.and_then(|memory| memory.quantity),
+            Some("512Mi".to_string())
+        );
+        assert_eq!(resources.gpu.and_then(|gpu| gpu.count), Some(2));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn new_template_write_rejects_legacy_resources() {
+        let template = SandboxWorkloadTemplate {
+            metadata: Some(ObjectMeta {
+                id: "legacy-write-id".to_string(),
+                name: "legacy-write".to_string(),
+                created_time: openshell_core::time::timestamp_from_millis(1_000).ok(),
+                resource_version: 1,
+                workspace: "default".to_string(),
+                ..Default::default()
+            }),
+            spec: Some(openshell_core::proto::SandboxWorkloadTemplateSpec {
+                workload: Some(openshell_core::proto::SandboxWorkloadConfig {
+                    legacy_resources: Some(LegacySandboxResources {
+                        cpu: "500m".to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        };
+
+        let error = validate_sandbox_workload_template(&template)
+            .expect_err("new legacy resource writes must be rejected");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(
+            error.message().contains("read-only migration data"),
+            "{error:?}"
+        );
+    }
 
     // ---- shell_escape ----
 
@@ -3375,6 +3450,8 @@ mod tests {
                 policy: Some(openshell_core::proto::SandboxPolicy::default()),
                 resource_requirements: Some(ResourceRequirements {
                     gpu: Some(GpuResourceRequirements { count: Some(1) }),
+                    cpu: None,
+                    memory: None,
                 }),
                 ..SandboxSpec::default()
             }),
@@ -3778,22 +3855,20 @@ mod tests {
                 workload: Some(openshell_core::proto::SandboxWorkloadConfig {
                     image: "registry.example.com/agent:latest".to_string(),
                     environment: HashMap::from([("FEATURE_FLAG".to_string(), "on".to_string())]),
-                    resources: Some(SandboxResources {
-                        cpu: "2".to_string(),
-                        memory: "4Gi".to_string(),
+                    resources: Some(ResourceRequirements {
+                        cpu: Some(CpuResourceRequirements {
+                            quantity: Some("2".to_string()),
+                        }),
+                        memory: Some(MemoryResourceRequirements {
+                            quantity: Some("4Gi".to_string()),
+                        }),
                         gpu: Some(GpuResourceRequirements { count: Some(1) }),
                     }),
+                    ..Default::default()
                 }),
                 driver_config: None,
                 desired_service_level: None,
             }),
-        }
-    }
-
-    fn proto_string_value(value: &Value) -> Option<&str> {
-        match value.kind.as_ref() {
-            Some(Kind::StringValue(value)) => Some(value.as_str()),
-            _ => None,
         }
     }
 
@@ -5200,6 +5275,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stored_legacy_template_migrates_for_get_list_and_sandbox_create() {
+        let state = test_server_state().await;
+        let mut stored = legacy_workload_template_fixture();
+        stored.metadata = Some(ObjectMeta {
+            id: "legacy-template-id".to_string(),
+            name: "legacy-template".to_string(),
+            workspace: "default".to_string(),
+            ..Default::default()
+        });
+        state.store.put_message(&stored).await.unwrap();
+
+        let fetched = handle_get_sandbox_template(
+            &state,
+            authed_request(GetSandboxTemplateRequest {
+                name: "legacy-template".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+            }),
+        )
+        .await
+        .expect("legacy template get should succeed")
+        .into_inner()
+        .template
+        .expect("fetched template");
+        let fetched_resources = fetched.spec.unwrap().workload.unwrap().resources.unwrap();
+        assert_eq!(
+            fetched_resources
+                .cpu
+                .and_then(|cpu| cpu.quantity)
+                .as_deref(),
+            Some("500m")
+        );
+
+        let listed = handle_list_sandbox_templates(
+            &state,
+            authed_request(ListSandboxTemplatesRequest {
+                page_size: 100,
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("legacy template list should succeed")
+        .into_inner()
+        .templates;
+        let listed_resources = listed[0]
+            .spec
+            .as_ref()
+            .unwrap()
+            .workload
+            .as_ref()
+            .unwrap()
+            .resources
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            listed_resources
+                .memory
+                .as_ref()
+                .and_then(|memory| memory.quantity.as_deref()),
+            Some("512Mi")
+        );
+
+        let created = handle_create_sandbox(
+            &state,
+            authed_request(CreateSandboxRequest {
+                name: "legacy-sandbox".to_string(),
+                spec: Some(SandboxSpec::default()),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workload_template_name: "legacy-template".to_string(),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("sandbox create from legacy template should succeed")
+        .into_inner()
+        .sandbox
+        .expect("created sandbox");
+        let created_resources = created.spec.unwrap().resource_requirements.unwrap();
+        assert_eq!(
+            created_resources
+                .cpu
+                .and_then(|cpu| cpu.quantity)
+                .as_deref(),
+            Some("500m")
+        );
+        assert_eq!(created_resources.gpu.and_then(|gpu| gpu.count), Some(2));
+    }
+
+    #[tokio::test]
     async fn sandbox_template_list_filters_by_label_selector() {
         let state = test_server_state().await;
 
@@ -5763,27 +5927,25 @@ mod tests {
 
         let template = spec.template.expect("resolved inline template");
         assert_eq!(template.image, "registry.example.com/agent:latest");
-        let limits = template
-            .resources
-            .as_ref()
-            .and_then(|resources| resources.fields.get("limits"))
-            .and_then(|limits| limits.kind.as_ref())
-            .and_then(|kind| match kind {
-                Kind::StructValue(value) => Some(&value.fields),
-                _ => None,
-            })
-            .expect("resource limits");
-        assert_eq!(limits.get("cpu").and_then(proto_string_value), Some("2"));
+        assert!(template.resources.is_none());
+        let requirements = spec
+            .resource_requirements
+            .expect("portable resource requirements");
         assert_eq!(
-            limits.get("memory").and_then(proto_string_value),
+            requirements
+                .cpu
+                .as_ref()
+                .and_then(|cpu| cpu.quantity.as_deref()),
+            Some("2")
+        );
+        assert_eq!(
+            requirements
+                .memory
+                .as_ref()
+                .and_then(|memory| memory.quantity.as_deref()),
             Some("4Gi")
         );
-        assert_eq!(
-            spec.resource_requirements
-                .and_then(|requirements| requirements.gpu)
-                .and_then(|gpu| gpu.count),
-            Some(1)
-        );
+        assert_eq!(requirements.gpu.and_then(|gpu| gpu.count), Some(1));
     }
 
     #[tokio::test]

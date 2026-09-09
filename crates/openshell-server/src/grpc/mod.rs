@@ -840,13 +840,13 @@ fn public_resource_capabilities(
 ) -> ResourceCapabilities {
     ResourceCapabilities {
         cpu: resources.cpu.as_ref().map(|cpu| CpuResourceCapabilities {
-            limit_supported: cpu.limit_supported,
+            quantity_supported: cpu.quantity_supported,
         }),
         memory: resources
             .memory
             .as_ref()
             .map(|memory| MemoryResourceCapabilities {
-                limit_supported: memory.limit_supported,
+                quantity_supported: memory.quantity_supported,
             }),
         gpu: resources.gpu.as_ref().map(|gpu| GpuResourceCapabilities {
             default_selection_supported: gpu.default_selection_supported,
@@ -1033,10 +1033,10 @@ mod tests {
     fn public_resource_capabilities_preserves_reported_fields() {
         let driver_capabilities = DriverResourceCapabilities {
             cpu: Some(DriverCpuResourceCapabilities {
-                limit_supported: true,
+                quantity_supported: true,
             }),
             memory: Some(DriverMemoryResourceCapabilities {
-                limit_supported: false,
+                quantity_supported: false,
             }),
             gpu: Some(DriverGpuResourceCapabilities {
                 default_selection_supported: true,
@@ -1046,12 +1046,13 @@ mod tests {
 
         let capabilities = public_resource_capabilities(driver_capabilities);
 
-        assert!(capabilities.cpu.expect("CPU capabilities").limit_supported);
+        let cpu = capabilities.cpu.expect("CPU capabilities");
+        assert!(cpu.quantity_supported);
         assert!(
             !capabilities
                 .memory
                 .expect("memory capabilities")
-                .limit_supported
+                .quantity_supported
         );
         let gpu = capabilities.gpu.expect("GPU capabilities");
         assert!(gpu.default_selection_supported);
