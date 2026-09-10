@@ -492,9 +492,12 @@ async fn handle_create_sandbox_inner(
     )
     .await?;
 
+    let mut runtime_inputs =
+        super::policy::resolve_sandbox_create_runtime_inputs(state.as_ref(), &sandbox).await?;
+
     state
         .compute
-        .validate_sandbox_create(&sandbox)
+        .validate_sandbox_create_with_runtime_inputs(&sandbox, &runtime_inputs)
         .await
         .map_err(|status| {
             warn!(error = %status, "Rejecting sandbox create request");
@@ -530,14 +533,15 @@ async fn handle_create_sandbox_inner(
                 .map_err(|error| Status::internal(format!("encode launch authentication: {error}")))
         })
         .transpose()?;
+    runtime_inputs.launch_authentication = launch_authentication;
 
     let sandbox = state
         .compute
-        .create_sandbox_authenticated(
+        .create_sandbox_with_runtime_inputs(
             sandbox,
             sandbox_token,
-            launch_authentication,
             await_main_process_attachment,
+            runtime_inputs,
         )
         .await?;
 
