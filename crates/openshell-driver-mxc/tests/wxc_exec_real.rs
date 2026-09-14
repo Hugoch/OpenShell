@@ -68,7 +68,7 @@ fn wxc_path() -> Option<PathBuf> {
 /// Create a real, user-owned Windows directory for MXC filesystem grants.
 ///
 /// MXC config values are literal paths: it does not expand `%TEMP%`. A unique
-/// directory also keeps AppContainer+DACL fallback mutations scoped to test
+/// directory also keeps `AppContainer`+DACL fallback mutations scoped to test
 /// data the current user owns.
 fn temp_fixture() -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("create MXC temp fixture");
@@ -404,7 +404,8 @@ fn dryrun_rejects_unknown_containment() {
 }
 
 /// The most important dry-run test: build a typed Windows policy, run
-/// `split_policy` (`proxy_redirect` 127.0.0.1:18080, containment
+/// `split_policy` (MXC 0.8 loopback-only proxy access at 127.0.0.1:18080,
+/// containment
 /// "processcontainer"), and verify the resulting config with `--dry-run`.
 ///
 /// This proves that the mapper's emitted JSON is accepted by the real binary —
@@ -453,6 +454,13 @@ fn dryrun_accepts_split_policy_output() {
     }
 
     let mxc_config = result.mxc_config;
+    assert_eq!(mxc_config["version"], "0.8.0-alpha");
+    assert_eq!(mxc_config["network"]["egress"]["default"], "deny");
+    assert_eq!(
+        mxc_config["network"]["egress"]["allow"][0]["to"][0]["cidr"],
+        "127.0.0.1/32"
+    );
+    assert!(mxc_config.get("runtimeConfig").is_none());
 
     let (code, stdout, stderr) = dry_run(&wxc, &mxc_config);
     assert_eq!(

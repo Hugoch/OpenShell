@@ -512,7 +512,7 @@ function Invoke-Lint([string] $RustTarget) {
 function Invoke-Build([string] $RustTarget) {
     Invoke-VsCargo `
         -RustTarget $RustTarget `
-        -CargoArgs "cargo build --release --target $RustTarget --bin openshell-gateway --bin openshell $Z3WorkspaceFeatures" `
+        -CargoArgs "cargo build --release --target $RustTarget --bin openshell-gateway --bin openshell --bin openshell-supervisor-relay $Z3WorkspaceFeatures" `
         -LogName "build-$RustTarget-release.log"
 }
 
@@ -542,7 +542,7 @@ function Invoke-UnsupportedContractTests([string] $RustTarget) {
     foreach ($test in $tests) {
         Invoke-VsCargo `
             -RustTarget $RustTarget `
-            -CargoArgs "cargo test -p openshell-gateway --target $RustTarget $test $Z3GatewayFeatures" `
+            -CargoArgs "cargo test -p openshell-gateway --target $RustTarget $test $Z3WorkspaceFeatures" `
             -LogName "test-$RustTarget-unsupported-$test.log"
     }
 
@@ -581,7 +581,7 @@ function Get-Sha256([string] $Path) {
 function Show-Artifacts([string[]] $RustTargets) {
     $rows = @()
     foreach ($rustTarget in $RustTargets) {
-        foreach ($binary in @("openshell-gateway.exe", "openshell.exe")) {
+        foreach ($binary in @("openshell-gateway.exe", "openshell.exe", "openshell-supervisor-relay.exe")) {
             $path = Join-Path $TargetDir "$rustTarget\release\$binary"
             if (-not (Test-Path $path)) {
                 continue

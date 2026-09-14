@@ -494,6 +494,7 @@ pub async fn run_networking(
                 .as_ref()
                 .map(|runtime| runtime.store.clone()),
             None,
+            None,
         )
         .await?;
         Some(proxy_handle)

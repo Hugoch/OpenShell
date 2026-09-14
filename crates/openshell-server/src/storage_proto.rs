@@ -620,6 +620,7 @@ mod tests {
             PolicyRevisionPayload::decode(legacy_bytes(V0_0_116_POLICY_PAYLOAD).as_slice())
                 .expect("legacy policy payload must decode");
         assert!(policy_payload.policy.is_some());
+        assert!(policy_payload.policy.as_ref().unwrap().ui.is_none());
         assert_eq!(policy_payload.hash, "sha256");
         assert_eq!(policy_payload.load_error, "none");
         assert_eq!(policy_payload.loaded_at_ms, 300);

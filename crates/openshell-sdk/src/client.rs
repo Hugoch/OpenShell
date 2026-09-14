@@ -357,6 +357,7 @@ impl OpenShellClient {
                     allow_missing: opts.allow_missing,
                     name: name.to_string(),
                     workspace_scope: Some(proto::workspace_selector("default")),
+                    ..Default::default()
                 };
                 async move { grpc.delete_sandbox(request).await }
             })
@@ -947,6 +948,7 @@ impl WorkspaceScopedClient {
                     allow_missing: opts.allow_missing,
                     name: name.to_string(),
                     workspace_scope: Some(proto::workspace_selector(&self.workspace)),
+                    ..Default::default()
                 };
                 async move { grpc.delete_sandbox(request).await }
             })
