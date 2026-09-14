@@ -38,7 +38,7 @@ jobs:
     runs-on: linux-amd64-cpu8
     timeout-minutes: 30
     container:
-      image: ghcr.io/nvidia/openshell/ci:37072ee81cd7b294c714bfa5ecc829b6927b3d70
+      image: ghcr.io/nvidia/openshell/ci:5b9daab9351b1e053f9a5e0ce4c899f5d3f674b0
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -94,7 +94,7 @@ jobs:
       issues: write
       packages: read
     container:
-      image: ghcr.io/nvidia/openshell/ci:37072ee81cd7b294c714bfa5ecc829b6927b3d70
+      image: ghcr.io/nvidia/openshell/ci:5b9daab9351b1e053f9a5e0ce4c899f5d3f674b0
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
