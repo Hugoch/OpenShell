@@ -119,11 +119,14 @@ mod tests {
     const STORAGE_V1_SCHEMA_SHA256: &str =
         "79c72615d957fc0653c672f61998bf7d8d21b757bc05d07b3fff92bd70fc8f52";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "eec8e3e8c45cb7e17944777887b3c6e1d0ae897263b6994082acd19e839fc3bf";
+        "acaef55c2cf4853e363c31abcdedc523242867f46b99ccd0132f178579286b2f";
     const DURABLE_SCHEMA_SHA256: &str =
-        "69fdc72cc033f37704e8aa4b089dc799990b52cb9cdd5c13decef67fb662177d";
+        "c439724f77f71b794a68a76cec4040dde9eb22cbdb6e4f1517028683399c87ef";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
-        "9d5c40ec9820139c2fe0c9a9ce2098289c0b5c63c3e3ad6d16de558d504cdecc";
+        "ea546b1a1ee0ddf50ee74f2541dcf68541054c70a5ce29c93d3fd29e6af98820";
+    // A persisted Sandbox without endpoint status retains its lifecycle fields;
+    // the absent repeated field decodes empty and needs no database rewrite.
+    const SANDBOX_WITHOUT_ENDPOINT_STATUS: &str = "0a1e0a0a73616e64626f782d6964120773616e64626f783a0764656661756c741a2b0a0773616e64626f782a0d0a05526561647912045472756530023807420d73757065727669736f722d6964";
     // Synthetic payloads generated with the public declarations at v0.0.116,
     // before their relocation into openshell.storage.v1. Values are deliberately
     // non-secret and the ordinary protobuf bytes contain no package names.
@@ -447,14 +450,14 @@ mod tests {
             }
         }
         methods.sort();
-        assert_eq!(compiled_method_count, 100, "classify every compiled RPC");
-        assert_eq!(methods.len(), 74, "inventory every public gateway RPC");
+        assert_eq!(compiled_method_count, 101, "classify every compiled RPC");
+        assert_eq!(methods.len(), 75, "inventory every public gateway RPC");
         assert_eq!(
             methods
                 .iter()
                 .filter(|method| method.starts_with("openshell.v1.OpenShell/"))
                 .count(),
-            74
+            75
         );
         assert!(methods.iter().all(|method| !method.contains(".storage.")));
 
@@ -487,13 +490,13 @@ mod tests {
 
         assert_eq!(
             (public_closure.messages.len(), public_closure.enums.len()),
-            (279, 13)
+            (283, 14)
         );
         assert_eq!(
             (durable_closure.messages.len(), durable_closure.enums.len()),
-            (82, 9)
+            (83, 10)
         );
-        assert_eq!((overlap_messages.len(), overlap_enums.len()), (72, 9));
+        assert_eq!((overlap_messages.len(), overlap_enums.len()), (73, 10));
 
         assert_eq!(
             public_inventory_hash, PUBLIC_RPC_SCHEMA_SHA256,
@@ -511,6 +514,28 @@ mod tests {
 
     fn legacy_bytes(encoded: &str) -> Vec<u8> {
         hex::decode(encoded).expect("checked-in legacy fixture must be valid hex")
+    }
+
+    #[test]
+    fn sandbox_payload_without_endpoint_status_decodes() {
+        use openshell_core::proto::{Sandbox, SandboxPhase};
+
+        let sandbox = Sandbox::decode(legacy_bytes(SANDBOX_WITHOUT_ENDPOINT_STATUS).as_slice())
+            .expect("stored sandbox without endpoint status must decode");
+        let metadata = sandbox.metadata.expect("sandbox metadata");
+        assert_eq!(metadata.id, "sandbox-id");
+        assert_eq!(metadata.name, "sandbox");
+        assert_eq!(metadata.workspace, "default");
+        let status = sandbox.status.expect("sandbox status");
+        assert_eq!(status.sandbox_name, "sandbox");
+        assert_eq!(status.phase(), SandboxPhase::Ready);
+        assert_eq!(status.current_policy_version, 7);
+        assert_eq!(status.main_process_instance_id, "supervisor-id");
+        assert_eq!(status.exit_code, None);
+        assert_eq!(status.conditions.len(), 1);
+        assert_eq!(status.conditions[0].r#type, "Ready");
+        assert_eq!(status.conditions[0].status, "True");
+        assert!(status.endpoint_statuses.is_empty());
     }
 
     #[test]
