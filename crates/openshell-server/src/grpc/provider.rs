@@ -71,6 +71,13 @@ pub(super) struct ProviderEnvironment {
     pub dynamic_credentials: HashMap<String, ProviderProfileCredential>,
     pub static_credential_bindings: HashMap<String, StaticCredentialBinding>,
     pub static_credential_keys: HashSet<String>,
+    /// Static credential keys withheld because they were already expired at
+    /// resolution time. Excluded from `environment`/`static_credential_keys`
+    /// like any other withheld key, but tracked separately so create-time
+    /// callers (see `validate_create_time_provider_credential_lifetimes`) can
+    /// fail closed instead of silently creating a sandbox without the
+    /// configured credential.
+    pub expired_static_keys: HashSet<String>,
 }
 
 /// Immutable provider records used to build one provider-environment response.
@@ -1128,6 +1135,7 @@ pub(super) async fn resolve_provider_environment_from_records_with_policy_bindin
     let mut expires = HashMap::new();
     let mut static_credential_bindings = HashMap::new();
     let mut static_credential_keys = HashSet::new();
+    let mut expired_static_keys = HashSet::new();
     let now_ms = crate::persistence::current_time_ms();
     validate_provider_environment_records_unique_at(store, catalog, records, now_ms).await?;
     let registry = openshell_providers::ProviderRegistry::new();
@@ -1248,6 +1256,7 @@ pub(super) async fn resolve_provider_environment_from_records_with_policy_bindin
                             expires_at_ms,
                             "skipping expired provider credential"
                         );
+                        expired_static_keys.insert(key.clone());
                         continue;
                     }
                     expires.entry(key.clone()).or_insert(expires_at_ms);
@@ -1361,6 +1370,7 @@ pub(super) async fn resolve_provider_environment_from_records_with_policy_bindin
         dynamic_credentials: resolve_dynamic_credentials_from_records(catalog, records),
         static_credential_bindings,
         static_credential_keys,
+        expired_static_keys,
     })
 }
 
