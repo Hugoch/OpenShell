@@ -267,6 +267,7 @@ pub async fn run_sandbox(
             dynamic_credentials,
             static_credential_bindings,
             non_secret_environment_keys,
+            stable_placeholder_environment_keys,
         ) = if let (Some(id), Some(endpoint)) = (&sandbox_id, &openshell_endpoint) {
             match openshell_core::grpc_client::fetch_provider_environment(endpoint, id).await {
                 Ok(result) => {
@@ -288,6 +289,7 @@ pub async fn run_sandbox(
                         result.dynamic_credentials,
                         result.static_credential_bindings,
                         result.non_secret_environment_keys,
+                        result.stable_placeholder_environment_keys,
                     )
                 }
                 Err(e) => {
@@ -308,6 +310,7 @@ pub async fn run_sandbox(
                         std::collections::HashMap::new(),
                         std::collections::HashMap::new(),
                         Vec::new(),
+                        Vec::new(),
                     )
                 }
             }
@@ -319,21 +322,24 @@ pub async fn run_sandbox(
                 std::collections::HashMap::new(),
                 std::collections::HashMap::new(),
                 Vec::new(),
+                Vec::new(),
             )
         };
 
         let dynamic_credentials_fallback = dynamic_credentials.clone();
-        let provider_credentials = match ProviderCredentialState::from_bound_environment(
-            provider_env_revision,
-            provider_env,
-            provider_credential_expires_at_ms,
-            dynamic_credentials,
-            static_credential_bindings,
-            non_secret_environment_keys,
-        ) {
-            Ok(credentials) => credentials,
-            Err(error) => {
-                ocsf_emit!(
+        let provider_credentials =
+            match ProviderCredentialState::from_bound_environment_with_stable_placeholders(
+                provider_env_revision,
+                provider_env,
+                provider_credential_expires_at_ms,
+                dynamic_credentials,
+                static_credential_bindings,
+                non_secret_environment_keys,
+                stable_placeholder_environment_keys,
+            ) {
+                Ok(credentials) => credentials,
+                Err(error) => {
+                    ocsf_emit!(
                         ConfigStateChangeBuilder::new(ocsf_ctx())
                             .severity(SeverityId::High)
                             .status(StatusId::Failure)
@@ -343,14 +349,14 @@ pub async fn run_sandbox(
                             ))
                             .build()
                     );
-                ProviderCredentialState::from_environment(
-                    provider_env_revision,
-                    std::collections::HashMap::new(),
-                    std::collections::HashMap::new(),
-                    dynamic_credentials_fallback,
-                )
-            }
-        };
+                    ProviderCredentialState::from_environment(
+                        provider_env_revision,
+                        std::collections::HashMap::new(),
+                        std::collections::HashMap::new(),
+                        dynamic_credentials_fallback,
+                    )
+                }
+            };
         let provider_env = provider_credentials.child_env_with_gcp_resolved();
         (provider_credentials, provider_env)
     };
@@ -4003,22 +4009,26 @@ async fn run_policy_poll_loop_with_client<C: PolicyGatewayClient>(
         }
 
         if provider_env_changed {
-            match openshell_core::grpc_client::fetch_provider_environment(
+            match openshell_core::grpc_client::fetch_provider_environment_with_stable_placeholders(
                 &ctx.endpoint,
                 &ctx.sandbox_id,
+                ctx.provider_credentials.requires_stable_placeholders(),
             )
             .await
             {
                 Ok(env_result) => {
                     let provider_env_revision = env_result.provider_env_revision;
-                    let install_result = ctx.provider_credentials.install_bound_environment(
-                        provider_env_revision,
-                        env_result.environment,
-                        env_result.credential_expires_at_ms,
-                        env_result.dynamic_credentials,
-                        env_result.static_credential_bindings,
-                        env_result.non_secret_environment_keys,
-                    );
+                    let install_result = ctx
+                        .provider_credentials
+                        .install_bound_environment_with_stable_placeholders(
+                            provider_env_revision,
+                            env_result.environment,
+                            env_result.credential_expires_at_ms,
+                            env_result.dynamic_credentials,
+                            env_result.static_credential_bindings,
+                            env_result.non_secret_environment_keys,
+                            env_result.stable_placeholder_environment_keys,
+                        );
                     if let Err(error) = install_result {
                         ocsf_emit!(
                             ConfigStateChangeBuilder::new(ocsf_ctx())
