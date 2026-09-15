@@ -499,7 +499,11 @@ async fn wait_for_activation(
 }
 
 async fn probe(sandbox: &SandboxGuard, phase: &str) -> Result<Value, String> {
-    let command = format!("rm -f {RESULT}; printf '%s' '{phase}' > {CONTROL}");
+    // The client consumes the control file as soon as it appears. Publish a
+    // complete phase atomically so polling cannot observe an empty write.
+    let command = format!(
+        "rm -f {RESULT} && printf '%s' '{phase}' > {CONTROL}.tmp && mv {CONTROL}.tmp {CONTROL}"
+    );
     timeout(COMMAND_TIMEOUT, sandbox.exec(&["sh", "-c", &command]))
         .await
         .map_err(|_| "client trigger timed out")?
