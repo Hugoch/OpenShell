@@ -39,8 +39,9 @@ pub struct MappedConfig {
     /// Loopback address MXC redirects sandbox egress to. `None` when governed
     /// egress is disabled.
     pub proxy_addr: Option<SocketAddr>,
-    /// Top-level MXC UI policy for process containers. Isolation sessions keep
-    /// this absent because current MXC rejects the section on presence.
+    /// Top-level MXC UI policy for process containers. This remains absent when
+    /// the source policy omits `ui`; isolation sessions also keep it absent
+    /// because current MXC rejects the section on presence.
     pub ui: Option<MxcUi>,
 }
 
@@ -215,7 +216,15 @@ impl PolicyMapper for EmbeddedPolicyMapper {
             .iter()
             .map(|p| normalize_path(p))
             .collect();
-        let ui = extract_ui(&config)?;
+        // The standalone mapper preserves its historical restrictive UI
+        // object, but the live driver must preserve source-field presence:
+        // omitting OpenShell `ui` must not change the runtime's existing UI
+        // behavior. Explicit `ui: {}` still maps to the restrictive object.
+        let ui = if policy.ui.is_some() {
+            extract_ui(&config)?
+        } else {
+            None
+        };
 
         Ok(MappedConfig {
             readwrite_paths: readwrite,
@@ -353,6 +362,14 @@ mod tests {
     }
 
     #[test]
+    fn embedded_omits_ui_for_processcontainer_when_policy_is_absent() {
+        let result = EmbeddedPolicyMapper
+            .map(Some(&SandboxPolicy::default()), &processcontainer_ctx())
+            .expect("processContainer policy without UI maps");
+        assert_eq!(result.ui, None);
+    }
+
+    #[test]
     fn embedded_rejects_ui_grants_suppressed_by_disable() {
         use openshell_core::proto::{UiClipboardAccess, UiPolicy};
 
@@ -436,6 +453,7 @@ mod tests {
         let ctx = MapCtx {
             sandbox_id: "sb-egress-middleware".into(),
             egress: Some("127.0.0.1:18080".parse().unwrap()),
+            containment: "processcontainer".into(),
         };
 
         let error = mapper.map(Some(&policy), &ctx).unwrap_err();

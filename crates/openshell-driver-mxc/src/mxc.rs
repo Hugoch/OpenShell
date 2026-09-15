@@ -172,7 +172,7 @@ fn provision_config_json(
     config
 }
 
-fn oneshot_config_json(
+pub fn oneshot_config_json(
     container_id: &str,
     filesystem: &MxcFilesystem,
     pc: &MxcProcessContainer,

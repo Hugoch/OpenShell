@@ -35,7 +35,10 @@ use openshell_core::proto::compute::v1::{DriverSandbox, DriverSandboxSpec, Drive
 use openshell_core::proto::{
     FilesystemPolicy, NetworkBinary, NetworkEndpoint, NetworkPolicyRule, SandboxPolicy,
 };
-use openshell_driver_mxc::{MxcComputeBackend, MxcComputeConfig};
+use openshell_driver_mxc::test_support::{
+    MxcClipboardAccess, MxcFilesystem, MxcProcess, MxcProcessContainer, MxcUi, oneshot_config_json,
+};
+use openshell_driver_mxc::{MXC_SCHEMA_VERSION, MxcComputeBackend, MxcComputeConfig};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -148,7 +151,7 @@ fn dryrun_accepts_minimal_processcontainer_config() {
 
     let (_tempdir, temp_path) = temp_fixture();
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "containerId": "test-minimal",
         "containment": "processcontainer",
         "process": {
@@ -178,32 +181,45 @@ fn dryrun_accepts_processcontainer_ui_policy_matrix() {
         return;
     };
 
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let temp_path = tempdir.path().to_string_lossy().into_owned();
-    for clipboard in ["none", "read", "write", "all"] {
-        let config = serde_json::json!({
-            "version": "0.7.0-alpha",
-            "containerId": format!("test-ui-{clipboard}"),
-            "containment": "processcontainer",
-            "process": {
-                "commandLine": "cmd /c exit 0",
-                "cwd": temp_path.clone(),
-                "timeout": 0,
-            },
-            "filesystem": {
-                "readwritePaths": [temp_path.clone()],
-            },
-            "ui": {
-                "disable": false,
-                "clipboard": clipboard,
-                "injection": true,
-            },
-        });
+    let (_tempdir, temp_path) = temp_fixture();
+    for (clipboard_name, clipboard) in [
+        ("none", MxcClipboardAccess::None),
+        ("read", MxcClipboardAccess::Read),
+        ("write", MxcClipboardAccess::Write),
+        ("all", MxcClipboardAccess::All),
+    ] {
+        let filesystem = MxcFilesystem {
+            readwrite_paths: vec![temp_path.clone()],
+            ..Default::default()
+        };
+        let process_container = MxcProcessContainer::default();
+        let process = MxcProcess {
+            command_line: "cmd /c exit 0".into(),
+            cwd: temp_path.clone(),
+            env: Vec::new(),
+            timeout: 0,
+        };
+        let ui = MxcUi {
+            disable: false,
+            clipboard,
+            injection: true,
+        };
+        let config = oneshot_config_json(
+            &format!("test-ui-{clipboard_name}"),
+            &filesystem,
+            &process_container,
+            &process,
+            None,
+            Some(&ui),
+        );
+
+        assert_eq!(config["version"], MXC_SCHEMA_VERSION);
+        assert_eq!(config["ui"]["clipboard"], clipboard_name);
 
         let (code, stdout, stderr) = dry_run(&wxc, &config);
         assert_eq!(
             code, 0,
-            "processcontainer UI policy clipboard={clipboard} rejected by --dry-run\nstdout={stdout}\nstderr={stderr}"
+            "processcontainer UI policy clipboard={clipboard_name} rejected by --dry-run\nstdout={stdout}\nstderr={stderr}"
         );
     }
 }
@@ -276,7 +292,7 @@ fn dryrun_accepts_network_block_without_proxy() {
 
     let (_tempdir, temp_path) = temp_fixture();
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "containerId": "test-net-block",
         "containment": "processcontainer",
         "process": {
@@ -312,7 +328,7 @@ fn dryrun_accepts_localhost_proxy_shape() {
 
     let (_tempdir, temp_path) = temp_fixture();
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "containerId": "test-proxy-localhost",
         "containment": "processcontainer",
         "process": {
@@ -349,7 +365,7 @@ fn dryrun_rejects_host_port_proxy_shape() {
 
     let (_tempdir, temp_path) = temp_fixture();
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "containerId": "test-proxy-hostport",
         "containment": "processcontainer",
         "process": {
@@ -386,7 +402,7 @@ fn dryrun_rejects_unknown_containment() {
 
     let (_tempdir, temp_path) = temp_fixture();
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "containerId": "test-bad-containment",
         "containment": "nonsense",
         "process": {
@@ -490,7 +506,7 @@ fn probe_processcontainer(wxc: &PathBuf) -> Result<(), String> {
 
     let (_tempdir, temp_path) = temp_fixture();
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "containerId": "probe-pc",
         "containment": "processcontainer",
         "process": {
@@ -564,7 +580,7 @@ fn probe_processcontainer_proxy(wxc: &PathBuf) -> Result<(), String> {
         .map_err(|error| format!("failed to read proxy probe port: {error}"))?
         .port();
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "containerId": "probe-pc-proxy",
         "containment": "processcontainer",
         "process": {
@@ -620,7 +636,7 @@ fn probe_isolation_session(wxc: &PathBuf) -> Result<String, String> {
     }
 
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "phase": "provision",
         "containment": "isolation_session",
         "filesystem": {
@@ -703,7 +719,7 @@ impl<'a> DeprovisionGuard<'a> {
 
     fn run_deprovision(wxc: &PathBuf, sandbox_id: &str) {
         let config = serde_json::json!({
-            "version": "0.6.0-alpha",
+            "version": MXC_SCHEMA_VERSION,
             "phase": "deprovision",
             "sandboxId": sandbox_id,
             "experimental": {
@@ -755,7 +771,7 @@ fn pc_oneshot_in_policy_write_succeeds() {
     let tmpdir_str = tmpdir.path().to_string_lossy().into_owned();
 
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "containerId": "pc-in-policy-write",
         "containment": "processcontainer",
         "process": {
@@ -974,7 +990,7 @@ fn pc_oneshot_out_of_policy_write_denied() {
     let granted_str = granted_dir.path().to_string_lossy().into_owned();
 
     let config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "containerId": "pc-out-of-policy-write",
         "containment": "processcontainer",
         "process": {
@@ -1046,7 +1062,7 @@ fn iso_lifecycle_round_trip() {
 
     // start
     let start_config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "phase": "start",
         "sandboxId": sandbox_id,
         "experimental": {
@@ -1075,7 +1091,7 @@ fn iso_lifecycle_round_trip() {
     // (HRESULT 0x80070057). 0 is the documented no-timeout value and matches
     // what the driver's exec path sends by default (MxcProcess.timeout = 0).
     let exec_config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "phase": "exec",
         "sandboxId": sandbox_id,
         "process": {
@@ -1102,7 +1118,7 @@ fn iso_lifecycle_round_trip() {
 
     // stop
     let stop_config = serde_json::json!({
-        "version": "0.6.0-alpha",
+        "version": MXC_SCHEMA_VERSION,
         "phase": "stop",
         "sandboxId": sandbox_id,
         "experimental": {

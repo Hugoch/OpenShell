@@ -1522,9 +1522,10 @@ mod lifecycle_tests {
             recorded.get("network").is_none(),
             "coarse path must not emit an MXC network block"
         );
-        assert_eq!(recorded["ui"]["disable"], true);
-        assert_eq!(recorded["ui"]["clipboard"], "none");
-        assert_eq!(recorded["ui"]["injection"], false);
+        assert!(
+            recorded.get("ui").is_none(),
+            "an omitted OpenShell UI policy must remain absent from MXC config"
+        );
 
         let host_path = std::path::Path::new(tmp.path()).join("hello.txt");
         let mut found = false;
@@ -1674,6 +1675,29 @@ mod lifecycle_tests {
         assert_eq!(recorded["ui"]["disable"], false);
         assert_eq!(recorded["ui"]["clipboard"], "all");
         assert_eq!(recorded["ui"]["injection"], true);
+    }
+
+    #[tokio::test]
+    async fn processcontainer_live_config_carries_explicit_empty_ui_policy() {
+        let backend = MxcComputeBackend::new_mocked(MxcComputeConfig::default());
+        let policy = SandboxPolicy {
+            ui: Some(UiPolicy::default()),
+            ..Default::default()
+        };
+        let sandbox = with_policy(driver_sandbox("sb-pc-ui-empty"), policy);
+        backend
+            .create_sandbox(&sandbox)
+            .await
+            .expect("create accepted");
+        let _ = wait_for(&backend, "sb-pc-ui-empty", |_| {
+            crate::mxc::mock_recorded_config("sb-pc-ui-empty").is_some()
+        })
+        .await;
+        let recorded = crate::mxc::mock_recorded_config("sb-pc-ui-empty")
+            .expect("mock recorded processContainer config");
+        assert_eq!(recorded["ui"]["disable"], true);
+        assert_eq!(recorded["ui"]["clipboard"], "none");
+        assert_eq!(recorded["ui"]["injection"], false);
     }
 
     #[tokio::test]
