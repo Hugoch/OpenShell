@@ -35,7 +35,7 @@ use openshell_ocsf::{
     SeverityId, StatusId, ocsf_emit,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_stream::StreamExt;
 use tracing::{debug, warn};
 
@@ -74,6 +74,7 @@ pub struct PreparedSupervisorSession {
     tx: mpsc::Sender<SupervisorMessage>,
     inbound: tonic::Streaming<GatewayMessage>,
     heartbeat_secs: u32,
+    session_id: String,
     protocol_revision: u32,
     bootstrap: Option<ConfigBootstrap>,
 }
@@ -370,6 +371,16 @@ fn map_session_stream_message<T>(
     }
 }
 
+/// Runtime identity and status channel shared with a supervisor session task.
+pub struct SessionRuntimeContext {
+    /// Identifies the local supervisor process across gateway reconnects.
+    pub instance_id: String,
+    /// Publishes the currently accepted gateway session to sibling reporters.
+    pub session_id_updates: Option<watch::Sender<Option<String>>>,
+    /// Applies streamed configuration updates to the running supervisor.
+    pub config_apply_tx: Option<mpsc::Sender<ConfigApplyRequest>>,
+}
+
 /// Spawn the supervisor session task.
 ///
 /// The task runs for the lifetime of the sandbox process, reconnecting with
@@ -382,8 +393,7 @@ pub fn spawn(
     netns_fd: Option<i32>,
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
-    instance_id: String,
-    config_apply_tx: Option<mpsc::Sender<ConfigApplyRequest>>,
+    runtime: SessionRuntimeContext,
 ) -> tokio::task::JoinHandle<()> {
     let config = SessionConfig {
         endpoint,
@@ -392,8 +402,9 @@ pub fn spawn(
         netns_fd,
         expected_ssh_peer_pid,
         terminating,
-        instance_id,
-        config_apply_tx,
+        instance_id: runtime.instance_id,
+        session_id_updates: runtime.session_id_updates,
+        config_apply_tx: runtime.config_apply_tx,
     };
     tokio::spawn(run_session_loop(config, None))
 }
@@ -428,6 +439,7 @@ pub fn spawn_prepared(
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
     config_apply_tx: mpsc::Sender<ConfigApplyRequest>,
+    session_id_updates: Option<watch::Sender<Option<String>>>,
 ) -> tokio::task::JoinHandle<()> {
     let config = SessionConfig {
         endpoint: prepared.endpoint.clone(),
@@ -438,6 +450,7 @@ pub fn spawn_prepared(
         terminating,
         instance_id: prepared.instance_id.clone(),
         config_apply_tx: Some(config_apply_tx),
+        session_id_updates,
     };
     tokio::spawn(run_session_loop(config, Some((prepared, bootstrap_result))))
 }
@@ -451,6 +464,9 @@ struct SessionConfig {
     terminating: Arc<AtomicBool>,
     instance_id: String,
     config_apply_tx: Option<mpsc::Sender<ConfigApplyRequest>>,
+    /// Publishes the currently accepted session to sibling control-plane
+    /// reporters. `None` means no session is authorized to send observations.
+    session_id_updates: Option<watch::Sender<Option<String>>>,
 }
 
 async fn run_session_loop(
@@ -468,6 +484,9 @@ async fn run_session_loop(
         } else {
             run_single_session(&config).await
         };
+        if let Some(updates) = &config.session_id_updates {
+            updates.send_replace(None);
+        }
         match result {
             Ok(()) => {
                 let event = session_closed_event(
@@ -572,6 +591,7 @@ async fn open_session(
         tx,
         inbound,
         heartbeat_secs,
+        session_id: accepted.session_id,
         protocol_revision,
         bootstrap: (protocol_revision == SUPERVISOR_PROTOCOL_REVISION)
             .then_some(accepted.bootstrap)
@@ -584,6 +604,9 @@ async fn run_prepared_session(
     mut prepared: PreparedSupervisorSession,
     startup_result: Option<ConfigBootstrapResult>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(updates) = &config.session_id_updates {
+        updates.send_replace(Some(prepared.session_id.clone()));
+    }
     let heartbeat_secs = prepared.heartbeat_secs;
     let channel = prepared.channel;
     let tx = prepared.tx;
