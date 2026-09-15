@@ -659,6 +659,8 @@ The gateway withholds opted-in credentials from supervisors that do not advertis
 
 Use the environment value issued by the supervisor. Do not construct a resolver string or a canonical environment-name alias. Once the supervisor installs a value update, the next request from a process holding its original placeholder resolves the current value. Saving the provider update alone does not establish supervisor activation. Expiry or an activated detach prevents the placeholder from resolving a credential.
 
+The supervisor resolves the placeholder outside the workload. The sandbox receives the prepared environment through its authenticated boundary; the credential value remains with the supervisor.
+
 The opaque placeholder is tied to the sandbox, provider instance, credential key, and effective endpoint binding. Updating only the credential value preserves the placeholder. Replacing the provider or changing its endpoint binding produces a new placeholder, so a running process cannot use its old placeholder for the replacement credential. Use the default `false` when value-only continuity is unnecessary. Profiles cannot combine `stable_placeholder: true` with gateway-managed refresh, credentials produced as another credential's refresh outputs, or `token_grant` because those credentials have a different lifecycle owner.
 
 ## Configure Credential Refresh

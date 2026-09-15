@@ -23,11 +23,12 @@ use openshell_core::proto::{
     GpuResourceRequirements, HealthRequest, HealthResponse, ListProvidersRequest,
     ListProvidersResponse, ListSandboxProvidersRequest, ListSandboxProvidersResponse,
     ListSandboxTemplatesRequest, ListSandboxTemplatesResponse, ListSandboxesRequest,
-    ListSandboxesResponse, PlatformEvent, Provider, ProviderResponse, RevokeSshSessionRequest,
-    RevokeSshSessionResponse, Sandbox, SandboxCondition, SandboxLogLine, SandboxPhase,
-    SandboxResponse, SandboxStatus, SandboxStreamEvent, SandboxTemplateResponse,
-    SandboxWorkloadTemplate, ServiceStatus, SettingValue, SupervisorMessage, UpdateProviderRequest,
-    WatchSandboxRequest, sandbox_stream_event,
+    ListSandboxesResponse, PlatformEvent, Provider, ProviderResponse, ReportEndpointStatusRequest,
+    ReportEndpointStatusResponse, RevokeSshSessionRequest, RevokeSshSessionResponse, Sandbox,
+    SandboxCondition, SandboxLogLine, SandboxPhase, SandboxResponse, SandboxStatus,
+    SandboxStreamEvent, SandboxTemplateResponse, SandboxWorkloadTemplate, ServiceStatus,
+    SettingValue, SupervisorMessage, UpdateProviderRequest, WatchSandboxRequest,
+    sandbox_stream_event,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -830,6 +831,13 @@ impl OpenShell for TestOpenShell {
         &self,
         _request: tonic::Request<openshell_core::proto::ReportPolicyStatusRequest>,
     ) -> Result<Response<openshell_core::proto::ReportPolicyStatusResponse>, Status> {
+        Err(Status::unimplemented("not implemented in test"))
+    }
+
+    async fn report_endpoint_status(
+        &self,
+        _request: tonic::Request<ReportEndpointStatusRequest>,
+    ) -> Result<Response<ReportEndpointStatusResponse>, Status> {
         Err(Status::unimplemented("not implemented in test"))
     }
 
@@ -1690,6 +1698,46 @@ async fn detached_command_does_not_declare_main_process_attachment() {
 
     let requests = create_requests(&server).await;
     assert!(!requests[0].await_main_process_attachment);
+}
+
+#[tokio::test]
+async fn detached_ephemeral_command_delegates_cleanup_to_gateway() {
+    let server = run_server().await;
+    let fake_ssh_dir = tempfile::tempdir().unwrap();
+    let xdg_dir = tempfile::tempdir().unwrap();
+    let _env = test_env(&fake_ssh_dir, &xdg_dir);
+    let tls = test_tls(&server);
+    install_fake_ssh(&fake_ssh_dir);
+
+    run::sandbox_create(
+        &server.endpoint,
+        "openshell",
+        run::SandboxCreateConfig {
+            name: Some("detached-ephemeral-main"),
+            keep: false,
+            command: &["worker".into()],
+            detach: true,
+            ..test_config()
+        },
+        "default",
+        &tls,
+    )
+    .await
+    .expect("detached ephemeral sandbox create should succeed");
+
+    let requests = create_requests(&server).await;
+    assert!(!requests[0].await_main_process_attachment);
+    assert_eq!(
+        requests[0]
+            .annotations
+            .get("openshell.nvidia.com/retention")
+            .map(String::as_str),
+        Some("ephemeral")
+    );
+    assert!(
+        deleted_names(&server).await.is_empty(),
+        "the gateway owns cleanup after a detached canonical process exits"
+    );
 }
 
 #[tokio::test]

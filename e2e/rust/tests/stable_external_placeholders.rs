@@ -6,7 +6,7 @@
 //! External credential rotation through a real sandbox HTTPS request path.
 //!
 //! The workload keeps one supervisor-issued reference in one Python process.
-//! Only the host backend and privileged provider CLI receive synthetic keys;
+//! Only the isolated backend and privileged provider CLI receive synthetic keys;
 //! workload files, responses, and diagnostics contain status information only.
 
 use std::collections::HashSet;
@@ -15,8 +15,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use openshell_e2e::harness::binary::openshell_cmd;
-use openshell_e2e::harness::container::ContainerEngine;
-use openshell_e2e::harness::port::find_free_port;
+use openshell_e2e::harness::container::{ContainerEngine, e2e_network_name};
+use openshell_e2e::harness::gateway::ManagedGateway;
 use openshell_e2e::harness::sandbox::SandboxGuard;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -25,20 +25,22 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::{Instant, sleep, timeout};
 
 const TOKEN_ENV: &str = "STABLE_EXTERNAL_E2E_TOKEN";
-const HOST: &str = "host.openshell.internal";
-const OTHER_HOST: &str = "host.docker.internal";
+const BACKEND_PORT: u16 = 8443;
+const OTHER_BACKEND_PORT: u16 = 8444;
 const READY: &str = "stable-placeholder-client-ready";
 const CONTROL: &str = "/sandbox/stable-placeholder-probe";
 const RESULT: &str = "/sandbox/stable-placeholder-result";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const IMAGE_BUILD_TIMEOUT: Duration = Duration::from_secs(300);
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(90);
+const GATEWAY_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 // Keys arrive on a private stdin pipe after process creation. Neither the
 // command line nor any file contains them, and HTTP/server errors are silent.
 const BACKEND: &str = r"
 import http.server, json, ssl, sys, threading
 
+sys.excepthook = lambda *_: None
 config = json.loads(sys.stdin.readline())
 keys = config.pop('keys')
 lock = threading.Lock()
@@ -141,9 +143,11 @@ def probe(phase):
             response['ok'] = body.get('authorized') is True
             response['status'] = reply.status
             response['backend_phase'] = body.get('phase', -1)
-    except Exception:
-        # HTTP/TLS exceptions can embed headers; retain no exception text.
-        pass
+    except Exception as error:
+        # HTTP/TLS exception text can embed headers. Type names expose the
+        # failure layer without retaining messages, headers, or credentials.
+        response['error_kind'] = type(error).__name__
+        response['reason_kind'] = type(getattr(error, 'reason', None)).__name__
     return response
 
 print('stable-placeholder-client-ready', flush=True)
@@ -202,70 +206,292 @@ impl FixtureImage {
     }
 }
 
+// This fixture owns the only test in its binary. The wrapper's gateway is
+// private to this run, so replacing its supervisor image cannot affect another
+// test while the public fixture CA is installed in the supervisor trust store.
+struct GatewayTrustConfig {
+    path: PathBuf,
+    original: String,
+    image_range: std::ops::Range<usize>,
+    supervisor_image: String,
+    health_port: u16,
+    restore_required: bool,
+}
+
+impl GatewayTrustConfig {
+    fn load() -> Result<Self, String> {
+        if std::env::var_os("OPENSHELL_GATEWAY_ENDPOINT").is_some()
+            || std::env::var_os("OPENSHELL_E2E_GATEWAY_BIN").is_none()
+            || std::env::var("OPENSHELL_E2E_DRIVER").as_deref() != Ok("docker")
+            || std::env::var("OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER")
+                .is_ok_and(|value| value != "0")
+        {
+            return Err("stable placeholder fixture requires a wrapper-owned gateway with the bundled Docker driver".to_string());
+        }
+        let args_file = std::env::var_os("OPENSHELL_E2E_GATEWAY_ARGS_FILE")
+            .ok_or("managed gateway argument metadata is missing")?;
+        let raw =
+            std::fs::read(args_file).map_err(|_| "could not read managed gateway arguments")?;
+        let args = raw
+            .split(|byte| *byte == 0)
+            .filter(|arg| !arg.is_empty())
+            .map(std::str::from_utf8)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "managed gateway arguments were not UTF-8")?;
+        let argument = |name| {
+            let mut values = args.windows(2).filter(|pair| pair[0] == name);
+            let value = values.next().ok_or("managed gateway argument is missing")?[1];
+            if values.next().is_some() {
+                return Err("managed gateway argument is duplicated");
+            }
+            Ok(value)
+        };
+        let path = PathBuf::from(argument("--config")?);
+        let health_port = argument("--health-port")?
+            .parse::<u16>()
+            .map_err(|_| "managed gateway health port is invalid")?;
+        let original = std::fs::read_to_string(&path)
+            .map_err(|_| "could not read managed gateway configuration")?;
+        let (image_range, supervisor_image) = docker_supervisor_image(&original)?;
+        Ok(Self {
+            path,
+            original,
+            image_range,
+            supervisor_image,
+            health_port,
+            restore_required: false,
+        })
+    }
+
+    async fn apply(&mut self, image: &str) -> Result<(), String> {
+        let mut updated = self.original.clone();
+        updated.replace_range(self.image_range.clone(), image);
+        // Set the guard before the write: a failed write or restart must still
+        // flow through explicit restoration of the exact original bytes.
+        self.restore_required = true;
+        std::fs::write(&self.path, updated)
+            .map_err(|_| "could not install fixture supervisor configuration")?;
+        restart_fixture_gateway(self.health_port).await
+    }
+
+    async fn restore(&mut self) -> Result<(), String> {
+        if !self.restore_required {
+            return Ok(());
+        }
+        std::fs::write(&self.path, &self.original)
+            .map_err(|_| "could not restore original gateway configuration")?;
+        restart_fixture_gateway(self.health_port)
+            .await
+            .map_err(|_| "original gateway configuration was restored but restart failed")?;
+        self.restore_required = false;
+        Ok(())
+    }
+}
+
+impl Drop for GatewayTrustConfig {
+    fn drop(&mut self) {
+        if self.restore_required {
+            // Cancellation/panic fallback restores disk state only. Normal
+            // Result paths explicitly restart and verify health; Drop never
+            // launches a subprocess or hides a failed restart as success.
+            let _ = std::fs::write(&self.path, &self.original);
+        }
+    }
+}
+
+fn docker_supervisor_image(config: &str) -> Result<(std::ops::Range<usize>, String), String> {
+    let mut in_docker = false;
+    let mut offset = 0;
+    let mut found = None;
+    for line in config.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_docker = trimmed == "[openshell.drivers.docker]";
+        } else if in_docker && let Some((key, value)) = trimmed.split_once('=') {
+            if key.trim() == "socket_path" {
+                return Err(
+                    "fixture cannot replace an external Docker driver configuration".to_string(),
+                );
+            }
+            if key.trim() == "supervisor_image" {
+                // Accept only the wrapper's single-line quoted OCI reference.
+                // Reject escapes/comments instead of treating general TOML as
+                // text and accidentally changing a different configuration key.
+                let image = value
+                    .trim()
+                    .strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+                    .filter(|image| {
+                        !image.is_empty()
+                            && image.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || b"/:@._-".contains(&byte)
+                            })
+                    })
+                    .ok_or("managed supervisor image is not a simple quoted OCI reference")?;
+                let start = offset
+                    + line
+                        .find('"')
+                        .ok_or("managed supervisor image is not quoted")?
+                    + 1;
+                if found
+                    .replace((start..start + image.len(), image.to_string()))
+                    .is_some()
+                {
+                    return Err("managed Docker supervisor image is duplicated".to_string());
+                }
+            }
+        }
+        offset += line.len();
+    }
+    found.ok_or_else(|| "managed Docker supervisor image is missing".to_string())
+}
+
+async fn restart_fixture_gateway(health_port: u16) -> Result<(), String> {
+    let gateway = ManagedGateway::from_env()
+        .map_err(|_| "could not load managed gateway restart metadata")?
+        .ok_or("managed gateway restart metadata disappeared")?;
+    // ManagedGateway bounds graceful shutdown before force-kill. Keep it local:
+    // its Drop can start a stopped gateway, but never owns configuration restore.
+    gateway
+        .stop()
+        .map_err(|_| "could not stop fixture gateway")?;
+    gateway
+        .start()
+        .map_err(|_| "could not restart fixture gateway")?;
+    let url = format!("http://127.0.0.1:{health_port}/healthz");
+    let deadline = Instant::now() + GATEWAY_READY_TIMEOUT;
+    loop {
+        if checked_command(
+            Command::new("curl").args(["--silent", "--fail", "--max-time", "2", &url]),
+            "check fixture gateway health",
+        )
+        .await
+        .is_ok()
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("fixture gateway did not become healthy".to_string());
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+}
+
 struct Backend {
-    child: Child,
-    input: ChildStdin,
-    output: Lines<BufReader<ChildStdout>>,
+    engine: ContainerEngine,
+    name: String,
+    network: String,
+    namespace: String,
+    hosts: [String; 2],
+    child: Option<Child>,
+    input: Option<ChildStdin>,
+    output: Option<Lines<BufReader<ChildStdout>>>,
+    launch_attempted: bool,
 }
 
 impl Backend {
-    async fn start(config: &Value) -> Result<Self, String> {
-        let mut child = Command::new("uv")
+    fn new(name: String, hosts: [String; 2]) -> Result<Self, String> {
+        Ok(Self {
+            engine: ContainerEngine::from_env()?,
+            name,
+            network: e2e_network_name().ok_or("fixture requires the managed Docker network")?,
+            namespace: std::env::var("OPENSHELL_E2E_SANDBOX_NAMESPACE")
+                .map_err(|_| "fixture requires the managed Docker namespace")?,
+            hosts,
+            child: None,
+            input: None,
+            output: None,
+            launch_attempted: false,
+        })
+    }
+
+    async fn start(
+        &mut self,
+        base: &str,
+        tls_directory: &Path,
+        config: &Value,
+    ) -> Result<(), String> {
+        let tls_directory = tls_directory
+            .to_str()
+            .filter(|path| !path.contains([',', '\n', '\r']))
+            .ok_or("fixture TLS mount path is invalid")?;
+        let mount = format!("type=bind,src={tls_directory},dst=/fixture-tls,readonly");
+        let namespace_label = format!("openshell.ai/sandbox-namespace={}", self.namespace);
+        let mut command = Command::from(self.engine.command());
+        command
             .args([
                 "run",
-                "--no-project",
-                "--no-sync",
-                "--python",
+                "--rm",
+                "--interactive",
+                "--pull=never",
+                "--name",
+                &self.name,
+                "--network",
+                &self.network,
+                "--network-alias",
+                &self.hosts[0],
+                "--network-alias",
+                &self.hosts[1],
+                "--label",
+                "openshell.ai/managed-by=openshell",
+                "--label",
+                &namespace_label,
+                "--label",
+                "openshell.ai/isolation-role=fixture",
+                "--read-only",
+                "--cap-drop=ALL",
+                "--security-opt=no-new-privileges:true",
+                "--mount",
+                &mount,
+                "--entrypoint",
                 "/usr/bin/python3",
-                "python",
+                base,
                 "-u",
                 "-c",
                 BACKEND,
             ])
-            .env("UV_PYTHON_DOWNLOADS", "never")
-            .env(
-                "UV_CACHE_DIR",
-                std::env::var_os("UV_CACHE_DIR").map_or_else(
-                    || std::env::temp_dir().join("openshell-e2e-uv-cache"),
-                    PathBuf::from,
-                ),
-            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        // Record the unique container name before creation. Every Result exit
+        // removes it, including a failed readiness exchange after Docker starts.
+        // Wrapper-scoped labels also let wrapper teardown reap an interrupted run.
+        self.launch_attempted = true;
+        let child = command
             .spawn()
             .map_err(|_| "could not start synthetic HTTPS backend".to_string())?;
-        let input = child
-            .stdin
-            .take()
-            .ok_or("backend stdin was not available")?;
+        self.child = Some(child);
+        let child = self.child.as_mut().ok_or("backend child was absent")?;
+        self.input = Some(
+            child
+                .stdin
+                .take()
+                .ok_or("backend stdin was not available")?,
+        );
         let output = child
             .stdout
             .take()
             .ok_or("backend stdout was not available")?;
-        let mut backend = Self {
-            child,
-            input,
-            output: BufReader::new(output).lines(),
-        };
-        if backend.exchange(config).await?["ready"] != true {
+        self.output = Some(BufReader::new(output).lines());
+        if self.exchange(config).await?["ready"] != true {
             return Err("synthetic HTTPS backend did not become ready".to_string());
         }
-        Ok(backend)
+        Ok(())
     }
 
     async fn exchange(&mut self, request: &Value) -> Result<Value, String> {
         let mut bytes =
             serde_json::to_vec(request).map_err(|_| "backend request encoding failed")?;
         bytes.push(b'\n');
+        let input = self.input.as_mut().ok_or("backend stdin was absent")?;
+        let output = self.output.as_mut().ok_or("backend stdout was absent")?;
         timeout(COMMAND_TIMEOUT, async {
-            self.input
+            input
                 .write_all(&bytes)
                 .await
                 .map_err(|_| "backend control write failed")?;
-            let line = self
-                .output
+            let line = output
                 .next_line()
                 .await
                 .map_err(|_| "backend control read failed")?
@@ -281,9 +507,41 @@ impl Backend {
         self.exchange(&json!({"command": "snapshot"})).await
     }
 
-    async fn stop(&mut self) {
-        // Explicitly reap the finite fixture; kill_on_drop also covers early errors.
-        let _ = timeout(COMMAND_TIMEOUT, self.child.kill()).await;
+    async fn stop(&mut self) -> Result<(), String> {
+        // Closing stdin lets Python shut down normally. Removing the named
+        // container also covers a stalled startup or disconnected Docker client;
+        // killing the attached client alone cannot prove the container stopped.
+        drop(self.input.take());
+        let mut reap_result = Ok(());
+        if let Some(child) = self.child.as_mut() {
+            reap_result = timeout(COMMAND_TIMEOUT, child.kill())
+                .await
+                .map_err(|_| "backend client teardown timed out".to_string())
+                .and_then(|result| {
+                    result.map_err(|_| "backend client teardown failed".to_string())
+                });
+        }
+        if !self.launch_attempted {
+            return reap_result;
+        }
+        let mut remove = Command::from(self.engine.command());
+        remove.args(["rm", "--force", &self.name]);
+        let removed = checked_command(&mut remove, "remove synthetic backend container").await;
+        // --rm may have already removed a normally exited backend. Only a
+        // successful exact-name listing can establish absence after rm fails.
+        if removed.is_err() {
+            let mut list = Command::from(self.engine.command());
+            let filter = format!("name=^/{}$", self.name);
+            list.args(["ps", "--all", "--quiet", "--filter", &filter]);
+            if !checked_command(&mut list, "verify synthetic backend removal")
+                .await?
+                .trim()
+                .is_empty()
+            {
+                return Err("synthetic backend container remained after teardown".to_string());
+            }
+        }
+        reap_result
     }
 }
 
@@ -321,7 +579,11 @@ async fn cli(label: &str, args: &[&str], credential: Option<&str>) -> Result<Str
     checked_command(&mut command, label).await
 }
 
-async fn generate_certificates(directory: &Path) -> Result<(PathBuf, PathBuf), String> {
+async fn generate_certificates(
+    directory: &Path,
+    host: &str,
+    other_host: &str,
+) -> Result<(PathBuf, PathBuf), String> {
     let ca_key = directory.join("ca.key.fixture");
     let ca = directory.join("ca.crt");
     let key = directory.join("backend.key.fixture");
@@ -331,7 +593,7 @@ async fn generate_certificates(directory: &Path) -> Result<(PathBuf, PathBuf), S
     std::fs::write(
         &extensions,
         format!(
-            "basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:{HOST},DNS:{OTHER_HOST}\nextendedKeyUsage=serverAuth\n"
+            "basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:{host},DNS:{other_host}\nextendedKeyUsage=serverAuth\n"
         ),
     )
     .map_err(|_| "could not write public TLS certificate extensions")?;
@@ -363,7 +625,7 @@ async fn generate_certificates(directory: &Path) -> Result<(PathBuf, PathBuf), S
                 "rsa:2048",
                 "-nodes",
                 "-subj",
-                "/CN=host.openshell.internal",
+                &format!("/CN={host}"),
                 "-keyout",
             ])
             .arg(&key)
@@ -412,30 +674,43 @@ async fn base_binaries(base: &str) -> Result<Value, String> {
     Ok(binaries)
 }
 
-fn write_profile(path: &Path, name: &str, port: u16, python: &str) -> Result<(), String> {
+fn write_profile(
+    path: &Path,
+    name: &str,
+    host: &str,
+    port: u16,
+    python: &str,
+) -> Result<(), String> {
     let document = json!({
         "id": name, "display_name": "Stable external placeholder E2E", "category": "other",
         "credentials": [{"name": "synthetic", "env_vars": [TOKEN_ENV], "required": true,
             "auth_style": "bearer", "header_name": "authorization", "stable_placeholder": true}],
-        "endpoints": [{"host": HOST, "port": port, "path": "/v1/**", "protocol": "rest",
+        "endpoints": [{"host": host, "port": port, "path": "/v1/**", "protocol": "rest",
             "access": "full", "enforcement": "enforce",
-            "allowed_ips": ["10.0.0.0/8", "172.0.0.0/12", "192.168.0.0/16", "fc00::/7"]}],
+            "allowed_ips": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]}],
         "binaries": [python],
     });
     std::fs::write(path, document.to_string())
         .map_err(|_| "could not write synthetic profile".to_string())
 }
 
-fn write_policy(path: &Path, port: u16, other_port: u16, python: &str) -> Result<(), String> {
+fn write_policy(
+    path: &Path,
+    host: &str,
+    other_host: &str,
+    port: u16,
+    other_port: u16,
+    python: &str,
+) -> Result<(), String> {
     // Permit the negative endpoint probes at the network layer so the
     // credential binding itself must prevent them from reaching the backend.
     // The exact binary allowlist independently denies curl at the valid endpoint.
-    let endpoints = [(HOST, port), (HOST, other_port), (OTHER_HOST, port)]
+    let endpoints = [(host, port), (host, other_port), (other_host, port)]
         .into_iter()
         .map(|(host, port)| {
             json!({"host": host, "port": port, "path": "/**", "protocol": "rest",
             "access": "full", "enforcement": "enforce",
-            "allowed_ips": ["10.0.0.0/8", "172.0.0.0/12", "192.168.0.0/16", "fc00::/7"]})
+            "allowed_ips": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]})
         })
         .collect::<Vec<_>>();
     let document = json!({
@@ -532,6 +807,7 @@ async fn probe(sandbox: &SandboxGuard, phase: &str) -> Result<Value, String> {
 async fn probe_disallowed_binary(
     sandbox: &SandboxGuard,
     curl: &str,
+    host: &str,
     port: u16,
 ) -> Result<(), String> {
     // Binary authorization includes allowed ancestors. Launch curl as a
@@ -548,7 +824,7 @@ else
     printf 'denied'
 fi
 "#;
-    let url = format!("https://{HOST}:{port}/v1/chat/completions");
+    let url = format!("https://{host}:{port}/v1/chat/completions");
     let output = timeout(
         COMMAND_TIMEOUT,
         sandbox.exec(&["sh", "-c", script, "binary-probe", curl, &url]),
@@ -572,10 +848,12 @@ fn check(
         // Report only typed status fields; never include HTTP error text or
         // a serialized response that might later grow a credential field.
         return Err(format!(
-            "client probe failed: pid_matches={}, expected_ok={success}, actual_ok={:?}, status={:?}",
+            "client probe failed: pid_matches={}, expected_ok={success}, actual_ok={:?}, status={:?}, error_kind={:?}, reason_kind={:?}",
             response["pid"].as_u64() == Some(pid),
             response["ok"].as_bool(),
             response["status"].as_u64(),
+            response["error_kind"].as_str(),
+            response["reason_kind"].as_str(),
         ));
     }
     if let Some(phase) = backend_phase
@@ -590,10 +868,47 @@ fn check(
 // Keep the lifecycle in one test so no phase can replace the retained client.
 #[allow(clippy::too_many_lines)]
 async fn persistent_external_placeholder_rotation_and_revocation() -> Result<(), String> {
-    let directory = TempDir::new().map_err(|_| "could not allocate fixture directory")?;
+    let mut gateway_config = GatewayTrustConfig::load()?;
+    let name = format!(
+        "e2e-stable-{}-{:016x}",
+        std::process::id(),
+        rand::random::<u64>()
+    );
+    // Ordinary bridge DNS aliases exercise the policy DNS path without relying
+    // on a host-gateway address outside the supervisor's container network.
+    let host = format!("{name}.test");
+    let other_host = format!("{name}-other.test");
+    let mut backend = Backend::new(
+        format!("{name}-backend"),
+        [host.clone(), other_host.clone()],
+    )?;
+    // The wrapper's directory is shared with the host Docker daemon in CI;
+    // a job-container-local temporary path cannot back the TLS bind mount.
+    let fixture_parent = gateway_config
+        .path
+        .parent()
+        .ok_or("managed gateway configuration has no parent directory")?;
+    let directory =
+        TempDir::new_in(fixture_parent).map_err(|_| "could not allocate fixture directory")?;
     let context = directory.path().join("image");
     std::fs::create_dir(&context).map_err(|_| "could not allocate public image context")?;
-    let (certificate, private_key) = generate_certificates(directory.path()).await?;
+    let (certificate, private_key) =
+        generate_certificates(directory.path(), &host, &other_host).await?;
+    let backend_tls = directory.path().join("backend-tls");
+    std::fs::create_dir(&backend_tls).map_err(|_| "could not allocate backend TLS directory")?;
+    std::fs::copy(&certificate, backend_tls.join("backend.crt"))
+        .map_err(|_| "could not stage backend certificate")?;
+    let backend_tls_key = backend_tls.join("backend.key.fixture");
+    std::fs::copy(&private_key, &backend_tls_key).map_err(|_| "could not stage backend TLS key")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        // The backend inherits the image's unprivileged user. Only its mounted
+        // leaf key is readable there; the parent TempDir stays private and the
+        // CA signing key never enters a container or either image build context.
+        std::fs::set_permissions(&backend_tls_key, std::fs::Permissions::from_mode(0o444))
+            .map_err(|_| "could not set backend TLS key permissions")?;
+    }
     std::fs::copy(
         directory.path().join("ca.crt"),
         context.join("fixture-ca.crt"),
@@ -612,36 +927,37 @@ async fn persistent_external_placeholder_rotation_and_revocation() -> Result<(),
         .ok_or("Python executable was absent")?;
     let dockerfile = context.join("Dockerfile");
     std::fs::write(&dockerfile, format!(
-        "FROM {base}\nUSER root\nCOPY fixture-ca.crt /tmp/stable-fixture-ca.crt\nRUN cat /tmp/stable-fixture-ca.crt >> /etc/ssl/certs/ca-certificates.crt && rm /tmp/stable-fixture-ca.crt\nCOPY client.py /opt/stable-placeholder-client.py\nUSER sandbox\n"
+        "FROM {base}\nUSER root\nCOPY client.py /opt/stable-placeholder-client.py\nUSER sandbox\n"
     )).map_err(|_| "could not write fixture Dockerfile")?;
+    let supervisor_dockerfile = context.join("Dockerfile.supervisor");
+    // Outbound TLS belongs to the separate supervisor. Its combined public
+    // trust bundle is delivered to the workload through the sandbox protocol.
+    // Preserve the base image's user setting: Docker's archive upload applies
+    // an explicit image user to the supervisor's private bootstrap files.
+    std::fs::write(&supervisor_dockerfile, format!(
+        "FROM {}\nCOPY fixture-ca.crt /tmp/stable-fixture-ca.crt\nRUN cat /tmp/stable-fixture-ca.crt >> /etc/ssl/certs/ca-certificates.crt && rm /tmp/stable-fixture-ca.crt\n",
+        gateway_config.supervisor_image
+    )).map_err(|_| "could not write fixture supervisor Dockerfile")?;
     let image = FixtureImage::new()?;
-    let port = find_free_port();
-    let mut other_port = find_free_port();
-    while other_port == port {
-        other_port = find_free_port();
-    }
+    let supervisor_image = FixtureImage::new()?;
+    // Each backend has its own network namespace, so fixed internal ports need
+    // no host reservation or publication and remain independent across runs.
+    let port = BACKEND_PORT;
+    let other_port = OTHER_BACKEND_PORT;
     let keys = [
         format!("e2e-{:032x}", rand::random::<u128>()),
         format!("e2e-{:032x}", rand::random::<u128>()),
     ];
-    let mut backend = Backend::start(&json!({"keys": keys, "ports": [port, other_port],
-        "certificate": certificate, "private_key": private_key}))
-    .await?;
-    let name = format!(
-        "e2e-stable-{}-{:016x}",
-        std::process::id(),
-        rand::random::<u64>()
-    );
     let profile = directory.path().join("profile.json");
     let policy = directory.path().join("policy.json");
-    write_profile(&profile, &name, port, python)?;
-    write_policy(&policy, port, other_port, python)?;
+    write_profile(&profile, &name, &host, port, python)?;
+    write_policy(&policy, &host, &other_host, port, other_port, python)?;
     let profile_path = profile.to_str().ok_or("profile path was not UTF-8")?;
     let policy_path = policy.to_str().ok_or("policy path was not UTF-8")?;
     let curl = binaries["curl"]
         .as_str()
         .ok_or("curl executable was absent")?;
-    let configuration = json!({"host": HOST, "other_host": OTHER_HOST, "port": port,
+    let configuration = json!({"host": host, "other_host": other_host, "port": port,
         "other_port": other_port})
     .to_string();
     let mut sandbox = None;
@@ -649,6 +965,13 @@ async fn persistent_external_placeholder_rotation_and_revocation() -> Result<(),
         // Begin image mutation only inside this result scope so enrollment or
         // build failures still flow through the explicit bounded teardown.
         image.build(&dockerfile, &context).await?;
+        supervisor_image
+            .build(&supervisor_dockerfile, &context)
+            .await?;
+        gateway_config.apply(supervisor_image.tag()).await?;
+        backend.start(&base, &backend_tls, &json!({"keys": keys, "ports": [port, other_port],
+            "certificate": "/fixture-tls/backend.crt", "private_key": "/fixture-tls/backend.key.fixture"}))
+            .await?;
         cli(
             "import synthetic provider profile",
             &["provider", "profile", "import", "--file", profile_path],
@@ -731,7 +1054,7 @@ async fn persistent_external_placeholder_rotation_and_revocation() -> Result<(),
                 return Err(format!("denied phase {phase} reached the backend"));
             }
         }
-        probe_disallowed_binary(running, curl, port).await?;
+        probe_disallowed_binary(running, curl, &host, port).await?;
         if backend.counts().await? != before {
             return Err("disallowed binary reached the backend".to_string());
         }
@@ -808,7 +1131,30 @@ async fn persistent_external_placeholder_rotation_and_revocation() -> Result<(),
         None,
     )
     .await;
-    backend.stop().await;
+    let backend_cleanup = backend.stop().await;
+    // Restore the original runtime before removing its replacement. Retain the
+    // derived supervisor image if restoration fails, and report that failure
+    // even when a lifecycle assertion already failed.
+    let gateway_restore = gateway_config.restore().await;
+    let supervisor_cleanup = if gateway_restore.is_ok() {
+        supervisor_image.remove().await
+    } else {
+        Ok(())
+    };
     let image_cleanup = image.remove().await;
-    result.and(image_cleanup)
+    let failures = [
+        result,
+        backend_cleanup,
+        gateway_restore,
+        supervisor_cleanup,
+        image_cleanup,
+    ]
+    .into_iter()
+    .filter_map(Result::err)
+    .collect::<Vec<_>>();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }

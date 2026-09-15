@@ -7,6 +7,7 @@ mod auth_rpc;
 pub mod policy;
 pub mod provider;
 mod sandbox;
+pub use sandbox::mint_persisted_authentication;
 mod service;
 mod validation;
 pub mod workspace;
@@ -48,16 +49,16 @@ use openshell_core::proto::{
     ListWorkspacesResponse, MemoryResourceCapabilities, ProviderProfileResponse, ProviderResponse,
     PushSandboxLogsRequest, PushSandboxLogsResponse, RefreshSandboxTokenRequest,
     RefreshSandboxTokenResponse, RejectDraftChunkRequest, RejectDraftChunkResponse, RelayFrame,
-    RemoveWorkspaceMemberRequest, RemoveWorkspaceMemberResponse, ReportMainProcessExitRequest,
-    ReportMainProcessExitResponse, ReportPolicyStatusRequest, ReportPolicyStatusResponse,
-    ResourceCapabilities, RevokeSshSessionRequest, RevokeSshSessionResponse,
-    RotateProviderCredentialRequest, RotateProviderCredentialResponse, SandboxResponse,
-    SandboxTemplateResponse, ServiceEndpointResponse, ServiceStatus, StartSandboxRequest,
-    StopSandboxRequest, SubmitPolicyAnalysisRequest, SubmitPolicyAnalysisResponse,
-    SupervisorMessage, TcpForwardFrame, UndoDraftChunkRequest, UndoDraftChunkResponse,
-    UpdateConfigRequest, UpdateConfigResponse, UpdateProviderProfilesRequest,
-    UpdateProviderProfilesResponse, UpdateProviderRequest, WatchSandboxRequest,
-    open_shell_server::OpenShell,
+    RemoveWorkspaceMemberRequest, RemoveWorkspaceMemberResponse, ReportEndpointStatusRequest,
+    ReportEndpointStatusResponse, ReportMainProcessExitRequest, ReportMainProcessExitResponse,
+    ReportPolicyStatusRequest, ReportPolicyStatusResponse, ResourceCapabilities,
+    RevokeSshSessionRequest, RevokeSshSessionResponse, RotateProviderCredentialRequest,
+    RotateProviderCredentialResponse, SandboxResponse, SandboxTemplateResponse,
+    ServiceEndpointResponse, ServiceStatus, StartSandboxRequest, StopSandboxRequest,
+    SubmitPolicyAnalysisRequest, SubmitPolicyAnalysisResponse, SupervisorMessage, TcpForwardFrame,
+    UndoDraftChunkRequest, UndoDraftChunkResponse, UpdateConfigRequest, UpdateConfigResponse,
+    UpdateProviderProfilesRequest, UpdateProviderProfilesResponse, UpdateProviderRequest,
+    WatchSandboxRequest, open_shell_server::OpenShell,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -82,11 +83,14 @@ pub fn persistence_error_to_status(
     match err {
         PersistenceError::Conflict {
             current_resource_version,
-        } => Status::aborted(format!(
-            "{} failed due to concurrent modification (current resource_version: {})",
-            operation,
-            current_resource_version.map_or_else(|| "unknown".to_string(), |v| v.to_string())
-        )),
+        } => openshell_core::rpc_error::resource_version_conflict(
+            format!(
+                "{} failed due to concurrent modification (current resource_version: {})",
+                operation,
+                current_resource_version.map_or_else(|| "unknown".to_string(), |v| v.to_string())
+            ),
+            current_resource_version,
+        ),
         other => Status::internal(format!("{operation} failed: {other}")),
     }
 }
@@ -590,6 +594,13 @@ impl OpenShell for OpenShellService {
         request: Request<ReportPolicyStatusRequest>,
     ) -> Result<Response<ReportPolicyStatusResponse>, Status> {
         policy::handle_report_policy_status(&self.state, request).await
+    }
+
+    async fn report_endpoint_status(
+        &self,
+        request: Request<ReportEndpointStatusRequest>,
+    ) -> Result<Response<ReportEndpointStatusResponse>, Status> {
+        policy::handle_report_endpoint_status(&self.state, request).await
     }
 
     // --- Sandbox logs ---
