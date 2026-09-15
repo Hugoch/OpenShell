@@ -19,6 +19,9 @@ use serde_yml::Value;
 use z3::ast::{Ast, Bool, Int, Regexp, String as Z3String};
 use z3::{Context, Params, SatResult, Solver};
 
+mod execution;
+mod ip;
+
 const READ_ONLY_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
 const READ_WRITE_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH"];
 const LAYER_L4: &str = "l4";
@@ -49,9 +52,9 @@ pub struct ContainmentPolicy {
     #[serde(default)]
     network_policies: BTreeMap<String, NetworkRule>,
     #[serde(default)]
-    landlock: Option<Value>,
+    landlock: Option<execution::LandlockPolicy>,
     #[serde(default)]
-    process: Option<Value>,
+    process: Option<execution::ProcessPolicy>,
     #[serde(default)]
     network_middlewares: BTreeMap<String, Value>,
     // Managed-maximum metadata changes workflow, not authority. Retain it in
@@ -403,6 +406,8 @@ pub enum CheckDomain {
     Filesystem,
     NetworkL4,
     NetworkRest,
+    Process,
+    Landlock,
 }
 
 impl CheckDomain {
@@ -412,6 +417,8 @@ impl CheckDomain {
             Self::Filesystem => "filesystem",
             Self::NetworkL4 => "network_l4",
             Self::NetworkRest => "network_rest",
+            Self::Process => "process",
+            Self::Landlock => "landlock",
         }
     }
 }
@@ -428,10 +435,12 @@ static DOMAINS: &[CheckDomain] = &[
     CheckDomain::Filesystem,
     CheckDomain::NetworkL4,
     CheckDomain::NetworkRest,
+    CheckDomain::Process,
+    CheckDomain::Landlock,
 ];
 fn check_scope() -> &'static CheckScope {
     static SCOPE: CheckScope = CheckScope {
-        model_version: "maximum-boundary-v1",
+        model_version: "maximum-boundary-v2",
         policy_version: 1,
         domains: DOMAINS,
     };
@@ -473,6 +482,15 @@ impl Protocol {
 /// Concrete action showing why containment failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Counterexample {
+    Process {
+        field: &'static str,
+        maximum: String,
+        candidate: String,
+    },
+    Landlock {
+        maximum: String,
+        candidate: String,
+    },
     Filesystem {
         access: FilesystemAccess,
         path: String,
@@ -482,6 +500,8 @@ pub enum Counterexample {
         ancestor_binary: Option<String>,
         binary_identity_required: bool,
         host: String,
+        destination_ip: IpAddr,
+        trusted_gateway: bool,
         port: u16,
         protocol: Protocol,
         method: Option<String>,
@@ -562,6 +582,8 @@ struct SymbolicAction {
     layer: Z3String,
     method: Z3String,
     path: Z3String,
+    ip: ip::SymbolicIp,
+    trusted_gateway: Bool,
 }
 
 enum NetworkSolve {
@@ -598,17 +620,17 @@ fn check_within_maximum_inner(
     options: CheckOptions,
     cancelled: Option<&AtomicBool>,
 ) -> CheckResult {
-    if let Some(reason) = unsupported_reason("maximum", maximum) {
-        return unsupported(reason.0, reason.1);
-    }
-    if let Some(reason) = unsupported_reason("candidate", candidate) {
-        return unsupported(reason.0, reason.1);
-    }
     if let Some(reason) = resource_limit_reason(maximum, candidate) {
         return CheckResult::Inconclusive(ReasonEvidence {
             code: ReasonCode::ResourceLimit,
             reason,
         });
+    }
+    if let Some(reason) = unsupported_reason("maximum", maximum) {
+        return unsupported(reason.0, reason.1);
+    }
+    if let Some(reason) = unsupported_reason("candidate", candidate) {
+        return unsupported(reason.0, reason.1);
     }
     if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return cancelled_result();
@@ -622,6 +644,9 @@ fn check_within_maximum_inner(
     if let Some(reason) = unresolved_workdir_reason(maximum, candidate) {
         return unsupported(ReasonCode::UnresolvedWorkdir, reason);
     }
+    if let Some(result) = execution::check(maximum, candidate) {
+        return result;
+    }
     if maximum == candidate {
         return CheckResult::Within(WithinEvidence);
     }
@@ -631,6 +656,13 @@ fn check_within_maximum_inner(
     }
     let started = Instant::now();
     for binary_identity_required in [false, true] {
+        if binary_identity_required && has_ambiguous_candidate_binary_path(maximum, candidate) {
+            return unsupported(
+                ReasonCode::UnresolvedBinaryPath,
+                "network containment depends on image-specific binary symlink resolution"
+                    .to_owned(),
+            );
+        }
         match solve_network_mode(
             maximum,
             candidate,
@@ -644,13 +676,6 @@ fn check_within_maximum_inner(
                 return CheckResult::Exceeds(ExceedsEvidence(counterexample));
             }
             NetworkSolve::Incomplete(result) => return result,
-        }
-        if binary_identity_required && has_ambiguous_candidate_binary_path(maximum, candidate) {
-            return unsupported(
-                ReasonCode::UnresolvedBinaryPath,
-                "network containment depends on image-specific binary symlink resolution"
-                    .to_owned(),
-            );
         }
     }
     if unresolved_exact_deny_symlink(maximum, candidate) {
@@ -674,6 +699,9 @@ fn solve_network_mode(
     if network_is_structurally_contained(maximum, candidate, binary_identity_required) {
         return NetworkSolve::Within;
     }
+    if let Some(witness) = concrete_network_witness(maximum, candidate, binary_identity_required) {
+        return NetworkSolve::Exceeds(witness);
+    }
     let solver = Solver::new();
     let action = symbolic_action(if binary_identity_required {
         "strict_maximum_policy_action"
@@ -681,10 +709,13 @@ fn solve_network_mode(
         "relaxed_maximum_policy_action"
     });
     assert_action_domain(&solver, &action, binary_identity_required);
-    solver.assert(Bool::and(&[
-        policy_allows(candidate, &action, binary_identity_required),
-        !policy_allows(maximum, &action, binary_identity_required),
-    ]));
+    solver.assert(
+        Bool::and(&[
+            policy_allows(candidate, &action, binary_identity_required),
+            !policy_allows(maximum, &action, binary_identity_required),
+        ])
+        .simplify(),
+    );
 
     let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
         return NetworkSolve::Incomplete(solver_timeout_result());
@@ -734,6 +765,72 @@ fn solve_network_mode(
                 NetworkSolve::Exceeds,
             ),
     }
+}
+
+/// A few concrete requests make common counterexamples cheap and readable.
+/// Each is replayed against the full predicate. Failure to find one never
+/// establishes containment: the unrestricted symbolic query still follows.
+fn concrete_network_witness(
+    maximum: &ContainmentPolicy,
+    candidate: &ContainmentPolicy,
+    binary_identity_required: bool,
+) -> Option<Counterexample> {
+    for (rule, endpoint) in candidate
+        .network_policies
+        .values()
+        .flat_map(|rule| rule.endpoints.iter().map(move |endpoint| (rule, endpoint)))
+        .take(8)
+    {
+        let host = endpoint
+            .host
+            .to_ascii_lowercase()
+            .replace("**", "a")
+            .replace('*', "a");
+        let binary = binary_identity_required.then(|| {
+            rule.binaries.first().map_or_else(
+                || "/usr/bin/worker".to_owned(),
+                |binary| binary.path.replace("**", "a").replace('*', "a"),
+            )
+        });
+        let method = endpoint
+            .rules
+            .first()
+            .map_or("GET", |rule| rule.allow.method.as_str())
+            .to_ascii_uppercase();
+        let path = endpoint
+            .rules
+            .first()
+            .map_or(endpoint.path.as_str(), |rule| rule.allow.path.as_str());
+        let path = if path.is_empty() {
+            "/".to_owned()
+        } else {
+            path.replace("**", "a").replace('*', "a")
+        };
+        if !is_canonical_dns_host(&host)
+            || !is_canonical_rest_path(&path)
+            || !is_http_method(&method)
+        {
+            continue;
+        }
+        for destination_ip in ip::sample_addresses(endpoint) {
+            let witness = Counterexample::Network {
+                binary: binary.clone(),
+                ancestor_binary: binary.clone(),
+                binary_identity_required,
+                host: host.clone(),
+                destination_ip,
+                trusted_gateway: false,
+                port: endpoint.effective_ports()[0],
+                protocol: endpoint.protocol_kind(),
+                method: (endpoint.protocol_kind() == Protocol::Rest).then(|| method.clone()),
+                path: (endpoint.protocol_kind() == Protocol::Rest).then(|| path.clone()),
+            };
+            if counterexample_satisfies_predicate(maximum, candidate, &witness) {
+                return Some(witness);
+            }
+        }
+    }
+    None
 }
 
 fn solver_timeout_result() -> CheckResult {
@@ -825,6 +922,7 @@ fn rest_endpoint_structurally_contains(maximum: &Endpoint, candidate: &Endpoint)
         || candidate.protocol_kind() != Protocol::Rest
         || !maximum.host.eq_ignore_ascii_case(&candidate.host)
         || maximum.path != candidate.path
+        || maximum.allowed_ips != candidate.allowed_ips
         || !candidate
             .effective_ports()
             .iter()
@@ -882,10 +980,13 @@ fn symbolic_action(name: &str) -> SymbolicAction {
         layer: Z3String::new_const(format!("{name}_layer")),
         method: Z3String::new_const(format!("{name}_method")),
         path: Z3String::new_const(format!("{name}_path")),
+        ip: ip::SymbolicIp::new(name),
+        trusted_gateway: Bool::new_const(format!("{name}_trusted_gateway")),
     }
 }
 
 fn assert_action_domain(solver: &Solver, action: &SymbolicAction, binary_identity_required: bool) {
+    action.ip.assert_domain(solver);
     if binary_identity_required {
         solver.assert(action.binary.regex_matches(&glob_regex("/**", "/")));
         solver.assert(action.binary.length().le(4_096));
@@ -935,7 +1036,11 @@ fn policy_allows(
             .values()
             .map(|rule| rule_denies(rule, action, binary_identity_required)),
     );
-    Bool::and(&[allowed, !denied])
+    Bool::and(&[
+        allowed,
+        !denied,
+        ip::policy_allows(policy, action, binary_identity_required),
+    ])
 }
 
 fn rule_allows(
@@ -1126,6 +1231,8 @@ fn counterexample_from_model(
         ancestor_binary,
         binary_identity_required,
         host,
+        destination_ip: action.ip.decode(model)?,
+        trusted_gateway: model.eval(&action.trusted_gateway, true)?.as_bool()?,
         port: u16::try_from(port).ok()?,
         protocol,
         method,
@@ -1160,6 +1267,8 @@ fn counterexample_satisfies_predicate(
         ancestor_binary,
         binary_identity_required,
         host,
+        destination_ip,
+        trusted_gateway,
         port,
         protocol,
         method,
@@ -1176,6 +1285,8 @@ fn counterexample_satisfies_predicate(
         layer: Z3String::from_str(protocol.as_str()).unwrap(),
         method: Z3String::from_str(method.as_deref().unwrap_or("GET")).unwrap(),
         path: Z3String::from_str(path.as_deref().unwrap_or("/")).unwrap(),
+        ip: ip::SymbolicIp::concrete(*destination_ip),
+        trusted_gateway: Bool::from_bool(*trusted_gateway),
     };
     Bool::and(&[
         policy_allows(candidate, &concrete, *binary_identity_required),
@@ -1544,11 +1655,11 @@ fn unsupported_reason(label: &str, policy: &ContainmentPolicy) -> Option<(Reason
     {
         return unsupported("uses unsupported managed-metadata fields".to_owned());
     }
-    if policy.landlock.is_some()
-        || policy.process.is_some()
-        || !policy.network_middlewares.is_empty()
-    {
-        return unsupported("uses process, Landlock, or network middleware controls".to_owned());
+    if let Some(reason) = execution::unsupported_reason(policy) {
+        return unsupported(reason);
+    }
+    if !policy.network_middlewares.is_empty() {
+        return unsupported("uses network middleware controls".to_owned());
     }
     if !policy.filesystem_policy.extra.is_empty() {
         return unsupported(format!(
@@ -1605,7 +1716,6 @@ fn unsupported_reason(label: &str, policy: &ContainmentPolicy) -> Option<(Reason
                 ));
             }
             if !endpoint.extra.is_empty()
-                || !endpoint.allowed_ips.is_empty()
                 || !matches!(endpoint.tls.as_str(), "" | "terminate" | "passthrough")
                 || endpoint.allow_encoded_slash
                 || endpoint.websocket_credential_rewrite
@@ -1625,6 +1735,9 @@ fn unsupported_reason(label: &str, policy: &ContainmentPolicy) -> Option<(Reason
                 return unsupported(format!(
                     "{context} uses authority outside the initial model"
                 ));
+            }
+            if let Some(reason) = ip::unsupported_endpoint(endpoint) {
+                return unsupported(format!("{context} {reason}"));
             }
             let protocol = endpoint.protocol.to_ascii_lowercase();
             if !matches!(protocol.as_str(), "" | "tcp" | "rest") {
@@ -1691,6 +1804,14 @@ fn unsupported_reason(label: &str, policy: &ContainmentPolicy) -> Option<(Reason
         .collect::<Vec<_>>();
     if endpoints.iter().enumerate().any(|(index, endpoint)| {
         endpoints[index + 1..].iter().any(|other| {
+            endpoint.allowed_ips != other.allowed_ips
+                && endpoint_authority_may_overlap(endpoint, other)
+        })
+    }) {
+        return unsupported("has overlapping endpoints with different allowed_ips; runtime first-endpoint selection is not modeled".to_owned());
+    }
+    if endpoints.iter().enumerate().any(|(index, endpoint)| {
+        endpoints[index + 1..].iter().any(|other| {
             endpoint.protocol_kind() != other.protocol_kind()
                 && endpoint_authority_may_overlap(endpoint, other)
         })
@@ -1721,6 +1842,7 @@ fn resource_limit_reason(
     const MAX_ENDPOINTS: usize = 4_096;
     const MAX_BINARIES: usize = 4_096;
     const MAX_L7_RULES: usize = 16_384;
+    const MAX_IP_RANGES: usize = 4_096;
     const MAX_PATTERN_BYTES: usize = 4 * 1024;
     const MAX_TOTAL_PATTERN_BYTES: usize = 1024 * 1024;
 
@@ -1745,6 +1867,12 @@ fn resource_limit_reason(
         .flat_map(|rule| &rule.endpoints)
         .map(|endpoint| endpoint.rules.len() + endpoint.deny_rules.len())
         .sum::<usize>();
+    let ip_count = policies
+        .iter()
+        .flat_map(|policy| policy.network_policies.values())
+        .flat_map(|rule| &rule.endpoints)
+        .map(|endpoint| endpoint.allowed_ips.len())
+        .sum::<usize>();
     let mut total_pattern_bytes = 0_usize;
     let mut longest_pattern = 0_usize;
     for policy in policies {
@@ -1767,6 +1895,9 @@ fn resource_limit_reason(
             for endpoint in &rule.endpoints {
                 account(&endpoint.host);
                 account(&endpoint.path);
+                for range in &endpoint.allowed_ips {
+                    account(range);
+                }
                 for rule in &endpoint.rules {
                     account(&rule.allow.path);
                     account(&rule.allow.method);
@@ -1783,11 +1914,12 @@ fn resource_limit_reason(
         || endpoint_count > MAX_ENDPOINTS
         || binary_count > MAX_BINARIES
         || l7_count > MAX_L7_RULES
+        || ip_count > MAX_IP_RANGES
         || longest_pattern > MAX_PATTERN_BYTES
         || total_pattern_bytes > MAX_TOTAL_PATTERN_BYTES)
         .then(|| {
             format!(
-                "containment model exceeds resource limits (rules={rule_count}, endpoints={endpoint_count}, binaries={binary_count}, l7_rules={l7_count}, pattern_bytes={total_pattern_bytes}, longest_pattern={longest_pattern})"
+                "containment model exceeds resource limits (rules={rule_count}, endpoints={endpoint_count}, binaries={binary_count}, l7_rules={l7_count}, ip_ranges={ip_count}, pattern_bytes={total_pattern_bytes}, longest_pattern={longest_pattern})"
             )
         })
 }
@@ -1990,6 +2122,20 @@ mod tests {
         }
     }
 
+    // Keep address permissions identical when testing hostname/binary logic:
+    // an exact declaration without allowed_ips permits private addresses,
+    // whereas a wildcard declaration without allowed_ips does not.
+    fn fixed_test_ips(mut policy: ContainmentPolicy) -> ContainmentPolicy {
+        for endpoint in policy
+            .network_policies
+            .values_mut()
+            .flat_map(|rule| &mut rule.endpoints)
+        {
+            endpoint.allowed_ips = vec!["8.8.8.0/24".to_owned()];
+        }
+        policy
+    }
+
     #[test]
     fn filesystem_containment_and_counterexample() {
         let maximum =
@@ -2108,6 +2254,8 @@ mod tests {
         let candidate = parse(
             "version: 1\nnetwork_policies:\n  candidate:\n    endpoints: [{ host: api_internal.example.com, port: 443 }]\n    binaries: []\n",
         );
+        let maximum = fixed_test_ips(maximum);
+        let candidate = fixed_test_ips(candidate);
         assert!(matches!(
             check_within_maximum(&maximum, &candidate, options()),
             CheckResult::Within(_)
@@ -2481,6 +2629,8 @@ mod tests {
         let candidate = parse(
             "version: 1\nnetwork_policies:\n  shared:\n    endpoints: [{ host: '*.example.com', port: 443 }]\n    binaries: [{ path: '/usr/bin/*' }]\n  exact:\n    endpoints: [{ host: api.example.com, port: 443 }]\n    binaries: [{ path: /usr/bin/curl }]\n",
         );
+        let maximum = fixed_test_ips(maximum);
+        let candidate = fixed_test_ips(candidate);
         assert!(matches!(
             check_within_maximum(&maximum, &candidate, options()),
             CheckResult::Unsupported(ref evidence)
@@ -2641,6 +2791,8 @@ mod tests {
         let recursive = parse(
             "version: 1\nnetwork_policies:\n  n:\n    endpoints: [{ host: '**.example.com', port: 443 }]\n    binaries: [{ path: /usr/bin/curl }]\n",
         );
+        let recursive = fixed_test_ips(recursive);
+        let nested = fixed_test_ips(nested);
         assert!(matches!(
             check_within_maximum(&recursive, &nested, options()),
             CheckResult::Within(_)

@@ -87,6 +87,15 @@ struct InputsJson {
 #[derive(Debug, Serialize)]
 #[serde(tag = "domain", rename_all = "snake_case")]
 enum CounterexampleJson<'a> {
+    Process {
+        field: &'a str,
+        maximum: &'a str,
+        candidate: &'a str,
+    },
+    Landlock {
+        maximum: &'a str,
+        candidate: &'a str,
+    },
     Filesystem {
         access: &'a str,
         path: &'a str,
@@ -96,6 +105,8 @@ enum CounterexampleJson<'a> {
         ancestor_binary: Option<&'a str>,
         binary_identity_required: bool,
         host: &'a str,
+        destination_ip: String,
+        trusted_gateway: bool,
         port: u16,
         protocol: &'a str,
         method: Option<&'a str>,
@@ -367,6 +378,18 @@ fn scope_json(scope: &CheckScope) -> ScopeJson<'_> {
 
 fn counterexample_json(counterexample: &Counterexample) -> CounterexampleJson<'_> {
     match counterexample {
+        Counterexample::Process {
+            field,
+            maximum,
+            candidate,
+        } => CounterexampleJson::Process {
+            field,
+            maximum,
+            candidate,
+        },
+        Counterexample::Landlock { maximum, candidate } => {
+            CounterexampleJson::Landlock { maximum, candidate }
+        }
         Counterexample::Filesystem { access, path } => CounterexampleJson::Filesystem {
             access: access.as_str(),
             path,
@@ -376,6 +399,8 @@ fn counterexample_json(counterexample: &Counterexample) -> CounterexampleJson<'_
             ancestor_binary,
             binary_identity_required,
             host,
+            destination_ip,
+            trusted_gateway,
             port,
             protocol,
             method,
@@ -385,6 +410,8 @@ fn counterexample_json(counterexample: &Counterexample) -> CounterexampleJson<'_
             ancestor_binary: ancestor_binary.as_deref(),
             binary_identity_required: *binary_identity_required,
             host,
+            destination_ip: destination_ip.to_string(),
+            trusted_gateway: *trusted_gateway,
             port: *port,
             protocol: protocol.as_str(),
             method: method.as_deref(),
@@ -421,6 +448,8 @@ fn render_text(mut writer: impl Write, envelope: &Envelope<'_>) -> Result<(), St
     }
     if let Some(counterexample) = &envelope.counterexample {
         match counterexample {
+            CounterexampleJson::Process { field, maximum, candidate } => writeln!(writer, "counterexample: process {} maximum={} candidate={}", escape_terminal(field), escape_terminal(maximum), escape_terminal(candidate)),
+            CounterexampleJson::Landlock { maximum, candidate } => writeln!(writer, "counterexample: landlock maximum={} candidate={}", escape_terminal(maximum), escape_terminal(candidate)),
             CounterexampleJson::Filesystem { access, path } => writeln!(
                 writer,
                 "counterexample: filesystem {access} {}",
@@ -431,18 +460,22 @@ fn render_text(mut writer: impl Write, envelope: &Envelope<'_>) -> Result<(), St
                 ancestor_binary,
                 binary_identity_required,
                 host,
+                destination_ip,
+                trusted_gateway,
                 port,
                 protocol,
                 method,
                 path,
             } => writeln!(
                 writer,
-                "counterexample: network binary={} ancestor_binary={} binary_identity_required={} host={}:{} protocol={} method={} path={}",
+                "counterexample: network binary={} ancestor_binary={} binary_identity_required={} host={}:{} destination_ip={} trusted_gateway={} protocol={} method={} path={}",
                 binary.map_or("-".to_owned(), escape_terminal),
                 ancestor_binary.map_or("-".to_owned(), escape_terminal),
                 binary_identity_required,
                 escape_terminal(host),
                 port,
+                destination_ip,
+                trusted_gateway,
                 escape_terminal(protocol),
                 method.map_or("-".to_owned(), escape_terminal),
                 path.map_or("-".to_owned(), escape_terminal),
