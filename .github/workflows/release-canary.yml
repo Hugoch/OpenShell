@@ -46,6 +46,22 @@ jobs:
           openshell sandbox exec --name "$sandbox" --no-tty -- true
           openshell sandbox delete "$sandbox"
 
+      - name: Collect Homebrew and VM diagnostics
+        if: failure()
+        run: |
+          set +e
+          brew services info openshell
+          for log in \
+            "$(brew --prefix)/var/log/openshell/openshell-gateway.out.log" \
+            "$(brew --prefix)/var/log/openshell/openshell-gateway.err.log"; do
+            if [ -f "$log" ]; then
+              echo "--- $log ---"
+              tail -n 300 "$log"
+            fi
+          done
+          find "${HOME}/.local/state/openshell" -type f \
+            \( -name '*.log' -o -name '*.err.log' \) -print -exec tail -n 300 {} \;
+
   ubuntu:
     name: Ubuntu Docker
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
