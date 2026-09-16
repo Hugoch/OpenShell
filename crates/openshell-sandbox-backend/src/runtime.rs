@@ -102,7 +102,7 @@ impl IsolationBackend for OpenShellRuntimeBackend {
         let resource_claims = runtime_descriptor.resource_claims.clone();
         let generation = runtime_descriptor.generation.clone();
         let session_id = runtime_descriptor.session_id;
-        let driver_fence = runtime_descriptor.driver_fence.clone();
+        let outer_fence = runtime_descriptor.outer_fence.clone();
         let client = Arc::new(BoundaryClient::new(
             runtime_descriptor,
             self.sandbox_bearer.clone(),
@@ -135,7 +135,7 @@ impl IsolationBackend for OpenShellRuntimeBackend {
             generation,
             session_id,
             resource_claims,
-            driver_fence,
+            outer_fence,
         }))
     }
 }
@@ -167,7 +167,9 @@ fn validate_runtime_descriptor(
         ));
     }
     validate_resource_claims(&runtime_descriptor.resource_claims)?;
-    runtime_descriptor.driver_fence.validate()?;
+    runtime_descriptor
+        .outer_fence
+        .validate(&runtime_descriptor.generation)?;
     match &runtime_descriptor.transport {
         SandboxTransport::Unix { socket_path } => {
             validate_socket_path(socket_path)?;
@@ -278,7 +280,7 @@ struct RemoteBound {
     generation: String,
     session_id: openshell_core::SandboxSessionId,
     resource_claims: std::collections::BTreeMap<String, String>,
-    driver_fence: openshell_isolation_interface::contract::DriverFenceEvidence,
+    outer_fence: openshell_isolation_interface::contract::OuterFenceGuarantees,
 }
 
 #[async_trait]
@@ -299,10 +301,10 @@ impl BoundBoundary for RemoteBound {
         if confirmation.generation != self.generation
             || confirmation.session_id != self.session_id
             || confirmation.resource_claims != self.resource_claims
-            || confirmation.driver_fence != self.driver_fence
+            || confirmation.outer_fence != self.outer_fence
         {
             return Err(BackendError::Confirm(
-                "sandbox confirmation generation, session, resource claims, or driver fence do not match runtime descriptor"
+                "sandbox confirmation generation, session, resource claims, or outer fence do not match runtime descriptor"
                     .to_string(),
             ));
         }
@@ -1855,11 +1857,12 @@ mod tests {
         FilesystemPolicy, LandlockPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy,
     };
 
-    fn test_driver_fence() -> openshell_isolation_interface::contract::DriverFenceEvidence {
-        openshell_isolation_interface::contract::DriverFenceEvidence::Vm {
-            generation: "test-generation".to_string(),
-            network_device_count: 0,
-        }
+    fn test_outer_fence() -> openshell_isolation_interface::contract::OuterFenceGuarantees {
+        openshell_isolation_interface::contract::OuterFenceGuarantees::confirmed(
+            "test-generation",
+            b"test-vm-fence",
+        )
+        .unwrap()
     }
 
     #[tokio::test]
@@ -2363,7 +2366,7 @@ mod tests {
             tls,
             host_gateway_ip: None,
             resource_claims: std::collections::BTreeMap::new(),
-            driver_fence: test_driver_fence(),
+            outer_fence: test_outer_fence(),
         }
     }
 
@@ -2486,7 +2489,7 @@ mod tests {
             properties: audit.properties(),
             authenticated_supervisor: true,
             session_id: test_session_id(),
-            driver_fence: test_driver_fence(),
+            outer_fence: test_outer_fence(),
             runtime_exit_terminates_workload: true,
             resource_claims: std::collections::BTreeMap::new(),
             backend_audit: serde_json::to_value(audit).expect("serialize audit evidence"),
@@ -2507,7 +2510,7 @@ mod tests {
             tls: certificate.client_tls.clone(),
             host_gateway_ip: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
             resource_claims: std::collections::BTreeMap::new(),
-            driver_fence: test_driver_fence(),
+            outer_fence: test_outer_fence(),
         };
         let debug = format!("{runtime_descriptor:?}");
         assert!(debug.contains("<redacted>"));
@@ -2527,7 +2530,7 @@ mod tests {
             tls: test_certificate().client_tls,
             host_gateway_ip: None,
             resource_claims: std::collections::BTreeMap::new(),
-            driver_fence: test_driver_fence(),
+            outer_fence: test_outer_fence(),
         };
         assert!(matches!(
             validate_runtime_descriptor(&runtime_descriptor, &sandbox()),
@@ -2549,7 +2552,7 @@ mod tests {
             tls: test_certificate().client_tls,
             host_gateway_ip: None,
             resource_claims: std::collections::BTreeMap::new(),
-            driver_fence: test_driver_fence(),
+            outer_fence: test_outer_fence(),
         };
         assert!(matches!(
             validate_runtime_descriptor(&runtime_descriptor, &sandbox()),
@@ -2571,7 +2574,7 @@ mod tests {
             tls: test_certificate().client_tls,
             host_gateway_ip: None,
             resource_claims: std::collections::BTreeMap::new(),
-            driver_fence: test_driver_fence(),
+            outer_fence: test_outer_fence(),
         };
         validate_runtime_descriptor(&runtime_descriptor, &sandbox())
             .expect("TCP runtime descriptor should be valid");
@@ -2764,7 +2767,7 @@ mod tests {
                 tls: certificate.client_tls,
                 host_gateway_ip: None,
                 resource_claims: std::collections::BTreeMap::new(),
-                driver_fence: test_driver_fence(),
+                outer_fence: test_outer_fence(),
             },
             test_bearer(&"a".repeat(32)),
         ));
@@ -2851,7 +2854,7 @@ mod tests {
                 tls: certificate.client_tls,
                 host_gateway_ip: None,
                 resource_claims: std::collections::BTreeMap::new(),
-                driver_fence: test_driver_fence(),
+                outer_fence: test_outer_fence(),
             },
             test_bearer(&"a".repeat(32)),
         );
