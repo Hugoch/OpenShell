@@ -27,7 +27,9 @@ jobs:
   macos:
     name: macOS Homebrew
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: macos-latest-xlarge
+    # Keep this pinned to the image used by the branch build lane. The current
+    # macos-latest image resolves to macOS 26, where libkrun VM creation fails.
+    runs-on: macos-15-xlarge
     timeout-minutes: 20
     steps:
       - name: Ensure VM driver
