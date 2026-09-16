@@ -32,6 +32,7 @@ jobs:
     steps:
       - name: Ensure VM driver
         run: |
+          brew install e2fsprogs
           launchctl setenv OPENSHELL_COMPUTE_DRIVER vm
           launchctl setenv OPENSHELL_TELEMETRY_ENABLED "$OPENSHELL_TELEMETRY_ENABLED"
 
@@ -292,6 +293,7 @@ jobs:
             --version 0.0.0-dev \
             --namespace "$RELEASE_NAMESPACE" --create-namespace \
             --set server.disableTls=true \
+            --set server.auth.allowUnauthenticatedUsers=true \
             --set "server.telemetryEnabled=${OPENSHELL_TELEMETRY_ENABLED}" \
             --set supervisor.sandboxRuntime.networkPolicyEnforced=true \
             --wait --timeout 5m
