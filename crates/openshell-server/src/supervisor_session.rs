@@ -1352,9 +1352,15 @@ pub async fn handle_connect_supervisor(
             .await;
     }
 
-    if !stream_applies_config {
-        let _ =
-            mark_supervisor_initialized(state, &sandbox_id, &session_id, &hello.instance_id).await;
+    if !stream_applies_config
+        && !mark_supervisor_initialized(state, &sandbox_id, &session_id, &hello.instance_id).await
+    {
+        state
+            .supervisor_sessions
+            .remove_if_current(&sandbox_id, &session_id);
+        return Err(Status::aborted(
+            "failed to persist supervisor session state; reconnect",
+        ));
     }
 
     // Step 4: Spawn the session loop that reads inbound messages.
