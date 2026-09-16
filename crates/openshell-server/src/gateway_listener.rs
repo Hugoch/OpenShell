@@ -27,6 +27,9 @@ pub struct GatewayListenerSpec {
     pub scope: GatewayListenerScope,
     covered_addresses: Vec<CoveredGatewayAddress>,
     provenance: Option<GatewayListenerProvenance>,
+    // Exact driver addresses may belong to a runtime-managed interface that
+    // appears only after the first workload is attached.
+    allow_nonlocal_bind: bool,
 }
 
 /// Diagnostic source of a driver-requested listener.
@@ -49,6 +52,7 @@ impl GatewayListenerSpec {
             scope,
             covered_addresses: Vec::new(),
             provenance: None,
+            allow_nonlocal_bind: false,
         }
     }
 
@@ -185,6 +189,7 @@ fn callback_listener_spec(
             driver_name: requirement.driver_name().to_string(),
             reason: requirement.reason().to_string(),
         }),
+        allow_nonlocal_bind: matches!(requirement, GatewayListenerRequirement::Exact { .. }),
     }
 }
 
@@ -272,7 +277,7 @@ pub async fn bind_gateway_listeners(
         ) && specs.iter().any(|candidate| {
             candidate.address.port() == spec.address.port() && candidate.address.is_ipv4()
         });
-        let listener = bind_gateway_listener(spec.address, ipv6_only)
+        let listener = bind_gateway_listener(spec.address, ipv6_only, spec.allow_nonlocal_bind)
             .await
             .map_err(|e| Error::transport(format!("failed to bind to {}: {e}", spec.address)))?;
         let local_addr = listener.local_addr().unwrap_or(spec.address);
@@ -341,11 +346,27 @@ fn resolve_ephemeral_port(
 async fn bind_gateway_listener(
     address: SocketAddr,
     ipv6_only: bool,
+    allow_nonlocal_bind: bool,
 ) -> std::io::Result<TcpListener> {
-    if ipv6_only {
-        let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    if ipv6_only || (cfg!(target_os = "linux") && allow_nonlocal_bind) {
+        let domain = if address.is_ipv4() {
+            Domain::IPV4
+        } else {
+            Domain::IPV6
+        };
+        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
         socket.set_reuse_address(true)?;
-        socket.set_only_v6(true)?;
+        if ipv6_only {
+            socket.set_only_v6(true)?;
+        }
+        #[cfg(target_os = "linux")]
+        if allow_nonlocal_bind {
+            if address.is_ipv4() {
+                socket.set_freebind_v4(true)?;
+            } else {
+                socket.set_freebind_v6(true)?;
+            }
+        }
         socket.set_nonblocking(true)?;
         socket.bind(&address.into())?;
         socket.listen(1024)?;
@@ -435,6 +456,7 @@ mod tests {
                     scope: GatewayListenerScope::Primary,
                     covered_addresses: Vec::new(),
                     provenance: None,
+                    allow_nonlocal_bind: false,
                 },
                 GatewayListenerSpec {
                     address: callback,
@@ -444,6 +466,7 @@ mod tests {
                         driver_name: "alpha".to_string(),
                         reason: "managed bridge".to_string(),
                     }),
+                    allow_nonlocal_bind: true,
                 },
             ]
         );
@@ -491,7 +514,7 @@ mod tests {
                 .unwrap(),
             vec![
                 primary_listener_spec(primary),
-                callback_listener_spec(network_gateway, "beta", "managed bridge",),
+                callback_listener_spec(network_gateway, "beta", "managed bridge", true),
             ]
         );
     }
@@ -526,6 +549,7 @@ mod tests {
                     "192.168.20.20:8080".parse().unwrap(),
                     "beta",
                     "default route interface",
+                    false,
                 ),
             ]
         );
@@ -568,7 +592,12 @@ mod tests {
             gateway_listener_specs(primary, &[loopback_listener_requirement()]).unwrap(),
             vec![
                 primary_listener_spec(primary),
-                callback_listener_spec("127.0.0.1:8080".parse().unwrap(), "beta", "host forwarder",),
+                callback_listener_spec(
+                    "127.0.0.1:8080".parse().unwrap(),
+                    "beta",
+                    "host forwarder",
+                    false,
+                ),
             ]
         );
     }
@@ -650,6 +679,23 @@ mod tests {
 
     #[tokio::test]
     #[cfg(target_os = "linux")]
+    async fn exact_listener_can_bind_before_driver_interface_exists() {
+        let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let primary = SocketAddr::from(([127, 0, 0, 1], port));
+        let callback = SocketAddr::from(([192, 0, 2, 123], port));
+        let listeners = bind_gateway_listeners(primary, &[exact_listener_requirement(callback)])
+            .await
+            .expect("exact driver listener should not require its interface to exist yet");
+
+        assert_eq!(listeners.len(), 2);
+        assert_eq!(listeners[1].spec.address, callback);
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
     #[ignore = "flaky under concurrent test execution"]
     async fn gateway_listeners_bind_ipv6_wildcard_and_ipv4_callback_on_same_port() {
         let probe = TcpListener::bind("[::1]:0")
@@ -707,6 +753,7 @@ mod tests {
             scope: GatewayListenerScope::Primary,
             covered_addresses: Vec::new(),
             provenance: None,
+            allow_nonlocal_bind: false,
         }
     }
 
@@ -714,6 +761,7 @@ mod tests {
         address: SocketAddr,
         driver_name: &str,
         reason: &str,
+        allow_nonlocal_bind: bool,
     ) -> GatewayListenerSpec {
         GatewayListenerSpec {
             address,
@@ -723,6 +771,7 @@ mod tests {
                 driver_name: driver_name.to_string(),
                 reason: reason.to_string(),
             }),
+            allow_nonlocal_bind,
         }
     }
 }
