@@ -187,7 +187,7 @@ impl RelayProcess {
     async fn expect_ready(&mut self) {
         let v = self.next_json().await;
         assert_eq!(v["event"], "ready");
-        assert_eq!(v["protocol_version"], 2);
+        assert_eq!(v["protocol_version"], 3);
     }
 
     async fn launch(&mut self, id: u64, command: &[&str]) -> Value {
@@ -525,6 +525,91 @@ async fn control_channel_forward_round_trips_bytes_without_host_callback_network
         }))
         .await;
     assert_eq!(relay.next_json().await, json!({"id": 4, "ok": true}));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn forward_shutdown_half_closes_target_and_preserves_its_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_port = listener.local_addr().unwrap().port();
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        stream.read_to_end(&mut request).await.unwrap();
+        request_tx.send(request).unwrap();
+        stream.write_all(b"response-after-eof").await.unwrap();
+    });
+
+    let mut relay = RelayProcess::spawn(0).await;
+    relay.expect_ready().await;
+    let session_id = "c".repeat(64);
+
+    relay
+        .send(json!({
+            "id": 1, "op": "forward_open",
+            "data": {"session_id": session_id, "target_port": target_port},
+        }))
+        .await;
+    assert_eq!(relay.next_json().await, json!({"id": 1, "ok": true}));
+
+    for (id, payload) in [(2, b"request-".as_slice()), (3, b"body".as_slice())] {
+        relay
+            .send(json!({
+                "id": id, "op": "forward_write",
+                "data": {
+                    "session_id": session_id,
+                    "bytes": base64::engine::general_purpose::STANDARD.encode(payload),
+                },
+            }))
+            .await;
+        assert_eq!(relay.next_json().await, json!({"id": id, "ok": true}));
+    }
+
+    relay
+        .send(json!({
+            "id": 4, "op": "forward_shutdown", "data": {"session_id": session_id},
+        }))
+        .await;
+    assert_eq!(relay.next_json().await, json!({"id": 4, "ok": true}));
+    assert_eq!(
+        tokio::time::timeout(TIMEOUT, request_rx)
+            .await
+            .expect("target did not observe EOF")
+            .unwrap(),
+        b"request-body"
+    );
+
+    let mut response = Vec::new();
+    let mut saw_eof = false;
+    for id in 5..100 {
+        relay
+            .send(json!({
+                "id": id, "op": "forward_read", "data": {"session_id": session_id},
+            }))
+            .await;
+        let frame = relay.next_json().await;
+        assert_eq!(frame["ok"], true, "forward_read failed: {frame}");
+        let data = &frame["data"];
+        let encoded = data["bytes"].as_str().unwrap();
+        response.extend(
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap(),
+        );
+        if data["eof"] == true {
+            saw_eof = true;
+            break;
+        }
+    }
+    assert!(saw_eof, "target response never reached EOF");
+    assert_eq!(response, b"response-after-eof");
+
+    relay
+        .send(json!({
+            "id": 100, "op": "forward_close", "data": {"session_id": session_id},
+        }))
+        .await;
+    assert_eq!(relay.next_json().await, json!({"id": 100, "ok": true}));
 }
 
 #[tokio::test(flavor = "multi_thread")]

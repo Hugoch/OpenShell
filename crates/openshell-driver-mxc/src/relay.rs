@@ -262,19 +262,42 @@ async fn control_channel_relay_task(
         let mut host_to_sandbox_bytes = 0_u64;
         let mut sandbox_to_host_bytes = 0_u64;
         let mut shutting_down = false;
+        let mut host_eof = false;
         'connection: loop {
             // Keep this request alive when host input wins the select. Dropping
             // an in-flight correlated read loses a response (and potentially
             // its bytes) when the sandbox replies a moment later.
-            let mut forward_read = Box::pin(control_channel.request(
-                "forward_read",
-                serde_json::json!({"session_id": session_id}),
-                Duration::from_secs(10),
-            ));
+            let mut forward_read = tokio::spawn({
+                let control_channel = control_channel.clone();
+                let session_id = session_id.clone();
+                async move {
+                    control_channel
+                        .request(
+                            "forward_read",
+                            serde_json::json!({"session_id": session_id}),
+                            Duration::from_secs(10),
+                        )
+                        .await
+                }
+            });
             loop {
                 tokio::select! {
-                    result = host_read.read(&mut host_buf) => match result {
-                        Ok(0) | Err(_) => break 'connection,
+                    result = host_read.read(&mut host_buf), if !host_eof => match result {
+                        Ok(0) => {
+                            // Preserve TCP half-close semantics: tell the target
+                            // that no more request bytes are coming, then keep
+                            // draining its response until target EOF.
+                            let response = control_channel.request(
+                                "forward_shutdown",
+                                serde_json::json!({"session_id": session_id}),
+                                Duration::from_secs(10),
+                            ).await;
+                            if !control_response_ok(&response) {
+                                break 'connection;
+                            }
+                            host_eof = true;
+                        }
+                        Err(_) => break 'connection,
                         Ok(n) => {
                             let bytes = base64::engine::general_purpose::STANDARD.encode(&host_buf[..n]);
                             let response = control_channel.request(
@@ -289,7 +312,7 @@ async fn control_channel_relay_task(
                         }
                     },
                     response = &mut forward_read => {
-                        let Ok(response) = response else { break 'connection };
+                        let Ok(Ok(response)) = response else { break 'connection };
                         if response.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
                             break 'connection;
                         }
@@ -606,12 +629,30 @@ mod control_relay_cleanup_tests {
         let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
         let (observed_tx, mut observed_rx) = tokio::sync::mpsc::unbounded_channel();
         let responder = tokio::spawn(async move {
+            let mut drain_response = false;
+            let mut response_sent = false;
             while let Some(line) = lines.next_line().await.unwrap() {
                 let request: serde_json::Value = serde_json::from_str(&line).unwrap();
                 let op = request["op"].as_str().unwrap().to_string();
+                if op == "forward_shutdown" {
+                    drain_response = true;
+                }
+                let data = if op == "forward_read" && drain_response {
+                    if response_sent {
+                        serde_json::json!({"bytes": "", "eof": true})
+                    } else {
+                        response_sent = true;
+                        serde_json::json!({
+                            "bytes": base64::engine::general_purpose::STANDARD.encode(b"response"),
+                            "eof": false,
+                        })
+                    }
+                } else {
+                    serde_json::json!({"bytes": "", "eof": false})
+                };
                 let response = serde_json::json!({
                     "id": request["id"], "ok": true,
-                    "data": {"bytes": "", "eof": false},
+                    "data": data,
                 });
                 ControlChannel::try_route_response(&pending, &response.to_string()).await;
                 observed_tx
@@ -647,6 +688,12 @@ mod control_relay_cleanup_tests {
             shutdown_tx.take().unwrap().send(()).unwrap();
         } else {
             client.shutdown().await.unwrap();
+            let mut response = Vec::new();
+            tokio::time::timeout(Duration::from_secs(10), client.read_to_end(&mut response))
+                .await
+                .expect("timed out draining the response after client half-close")
+                .unwrap();
+            assert_eq!(response, b"response");
         }
         let closed_id = tokio::time::timeout(Duration::from_secs(10), async {
             while let Some((op, id)) = observed_rx.recv().await {

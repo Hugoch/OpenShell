@@ -50,7 +50,7 @@ pub type ReadySlot = Mutex<Option<oneshot::Sender<Result<(), String>>>>;
 /// "forward", or the `"target_ready"` event itself) -- an independently
 /// staged, stale relay binary then fails fast with a clear error instead of
 /// hanging or misbehaving against fields/events it doesn't understand.
-const REQUIRED_SUPERVISOR_RELAY_PROTOCOL_VERSION: u64 = 2;
+const REQUIRED_SUPERVISOR_RELAY_PROTOCOL_VERSION: u64 = 3;
 
 /// One control channel per sandboxed process. `request()` is safe to call
 /// concurrently — each call gets its own correlation id and awaits only its
@@ -281,7 +281,7 @@ mod tests {
         let (slot, rx) = armed_ready_slot();
 
         let consumed =
-            ControlChannel::try_route_ready(&slot, r#"{"event":"ready","protocol_version":2}"#)
+            ControlChannel::try_route_ready(&slot, r#"{"event":"ready","protocol_version":3}"#)
                 .await;
 
         assert!(consumed);
@@ -300,13 +300,13 @@ mod tests {
             consumed,
             "a recognized ready event is consumed even when rejected"
         );
-        let err = rx.await.unwrap().expect_err("version 2 must be rejected");
+        let err = rx.await.unwrap().expect_err("version 1 must be rejected");
         assert!(
-            err.contains('2'),
+            err.contains('1'),
             "error should name the offending version: {err}"
         );
         assert!(
-            err.contains('1'),
+            err.contains('3'),
             "error should name the required version: {err}"
         );
     }
@@ -360,7 +360,7 @@ mod tests {
         // other's slot.
         let consumed = ControlChannel::try_route_target_ready(
             &slot,
-            r#"{"event":"ready","protocol_version":2}"#,
+            r#"{"event":"ready","protocol_version":3}"#,
         )
         .await;
 

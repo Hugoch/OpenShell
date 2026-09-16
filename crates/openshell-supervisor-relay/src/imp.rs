@@ -107,7 +107,7 @@ use tokio_tungstenite::tungstenite::Message;
 /// out-of-sync peer can't safely ignore, so an independently staged, stale
 /// binary on either side fails fast with a clear version-mismatch error
 /// instead of hanging or misbehaving against a field/event it predates.
-const PROTOCOL_VERSION: u64 = 2;
+const PROTOCOL_VERSION: u64 = 3;
 
 struct ForwardSession {
     reader: tokio::sync::Mutex<tokio::net::tcp::OwnedReadHalf>,
@@ -631,6 +631,22 @@ async fn handle_control_request(
                 }
                 Err(_) => {
                     serde_json::json!({"id": id, "ok": true, "data": {"bytes": "", "eof": false}})
+                }
+            }
+        }
+        "forward_shutdown" => {
+            let data = req.get("data").cloned().unwrap_or(serde_json::Value::Null);
+            let Some(session_id) = data.get("session_id").and_then(|v| v.as_str()) else {
+                return serde_json::json!({"id": id, "ok": false, "error": "forward_shutdown requires session_id"});
+            };
+            let session = forward_sessions.lock().await.get(session_id).cloned();
+            let Some(session) = session else {
+                return serde_json::json!({"id": id, "ok": false, "error": "forward session not found"});
+            };
+            match session.writer.lock().await.shutdown().await {
+                Ok(()) => serde_json::json!({"id": id, "ok": true}),
+                Err(error) => {
+                    serde_json::json!({"id": id, "ok": false, "error": format!("target shutdown failed: {error}")})
                 }
             }
         }
