@@ -453,7 +453,7 @@ mod tests {
     fn provisioning_binds_gvisor_adapter_on_both_protocol_sides() {
         let mut boundary = spec();
         boundary.adapter = SandboxRuntimeAdapter::Gvisor;
-        let provisioned = boundary.provision();
+        let provisioned = boundary.provision().expect("provision gVisor boundary");
 
         assert_eq!(
             provisioned.boundary_config.adapter,
