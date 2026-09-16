@@ -408,10 +408,22 @@ fn driver_fence_evidence_is_backend_specific_and_fail_closed() {
         generation: "generation-1".to_string(),
         network_device_count: 0,
     };
+    let bluefield_vm = DriverFenceEvidence::BluefieldVm {
+        generation: "generation-1".to_string(),
+        vf_pci_address: "0000:03:00.2".to_string(),
+        representor: "pf0vf0".to_string(),
+        dpu_id: "dpu-1".to_string(),
+        assignment_generation: "assignment-1".to_string(),
+        policy_generation: 1,
+        default_deny: true,
+        attached_vf_count: 1,
+        unmanaged_network_device_count: 0,
+    };
 
     assert!(docker.validate().is_ok());
     assert!(kubernetes.validate().is_ok());
     assert!(vm.validate().is_ok());
+    assert!(bluefield_vm.validate().is_ok());
 
     let drifted = DriverFenceEvidence::Docker {
         container_id: "sha256:container".to_string(),
@@ -419,6 +431,19 @@ fn driver_fence_evidence_is_backend_specific_and_fail_closed() {
         unexpected_networks: vec!["bridge".to_string()],
     };
     assert!(drifted.validate().is_err());
+
+    let unfenced_bluefield_vm = DriverFenceEvidence::BluefieldVm {
+        generation: "generation-1".to_string(),
+        vf_pci_address: "0000:03:00.2".to_string(),
+        representor: "pf0vf0".to_string(),
+        dpu_id: "dpu-1".to_string(),
+        assignment_generation: "assignment-1".to_string(),
+        policy_generation: 1,
+        default_deny: false,
+        attached_vf_count: 1,
+        unmanaged_network_device_count: 0,
+    };
+    assert!(unfenced_bluefield_vm.validate().is_err());
 }
 
 /// The backend-independent supervisor sequence. Identical for every backend:

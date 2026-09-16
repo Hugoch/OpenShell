@@ -416,6 +416,22 @@ pub enum DriverFenceEvidence {
         generation: String,
         network_device_count: u32,
     },
+    /// A VM with one `BlueField` VF whose direct datapath is fenced by the DPU.
+    ///
+    /// Unlike the generic VM fence, this permits a workload-visible network
+    /// device only when the driver has established a generation-scoped,
+    /// default-deny hardware boundary with no unmanaged guest uplinks.
+    BluefieldVm {
+        generation: String,
+        vf_pci_address: String,
+        representor: String,
+        dpu_id: String,
+        assignment_generation: String,
+        policy_generation: u64,
+        default_deny: bool,
+        attached_vf_count: u32,
+        unmanaged_network_device_count: u32,
+    },
 }
 
 impl DriverFenceEvidence {
@@ -426,6 +442,7 @@ impl DriverFenceEvidence {
             Self::Podman { .. } => "podman",
             Self::Kubernetes { .. } => "kubernetes",
             Self::Vm { .. } => "vm",
+            Self::BluefieldVm { .. } => "bluefield-vm",
         }
     }
 
@@ -461,6 +478,27 @@ impl DriverFenceEvidence {
                 generation,
                 network_device_count,
             } => !generation.is_empty() && *network_device_count == 0,
+            Self::BluefieldVm {
+                generation,
+                vf_pci_address,
+                representor,
+                dpu_id,
+                assignment_generation,
+                policy_generation,
+                default_deny,
+                attached_vf_count,
+                unmanaged_network_device_count,
+            } => {
+                !generation.is_empty()
+                    && !vf_pci_address.is_empty()
+                    && !representor.is_empty()
+                    && !dpu_id.is_empty()
+                    && !assignment_generation.is_empty()
+                    && *policy_generation > 0
+                    && *default_deny
+                    && *attached_vf_count == 1
+                    && *unmanaged_network_device_count == 0
+            }
         };
         if valid {
             Ok(())

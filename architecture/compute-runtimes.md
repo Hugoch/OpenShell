@@ -307,6 +307,15 @@ and OCSF decisions. Native mode does not require proxy environment variables;
 gVisor mode injects loopback HTTP proxy variables and applies endpoint-only
 policy without added capabilities or an unconfined AppArmor profile.
 
+The BlueField VM prototype keeps the same split while allowing one accelerated
+guest VF behind a separate hardware outer fence. The compute driver owns VF and
+representor assignment; the isolation backend proves that DPU steering starts
+default-deny and that supervisor-authorized, process-attributed flows can be
+installed and revoked for the current sandbox generation. Ordinary VM evidence
+continues to require a NIC-less guest. The prototype currently defines only the
+fence and confirmation evidence; it does not attach hardware or enable a runtime
+adapter.
+
 The Kubernetes deployment packaging has two ownership boundaries. The gateway
 chart owns the gateway workload, configuration, Services, PKI, and
 cluster-scoped gateway resources. The workspace chart is installed into a

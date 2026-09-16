@@ -100,8 +100,19 @@ OpenShell uses overlapping controls rather than a single sandbox primitive:
 | Filesystem policy | Landlock restricts the paths the agent can read or write. |
 | Process policy | Sandbox and children run as one immutable non-root identity with zero capabilities. |
 | Seccomp notification | Virtualizes supported INET sockets and sends DNS/TCP decisions to the supervisor without nftables or proxy environment variables. |
-| Driver outer fence | Docker `network_mode=none`, a NIC-less VM, or Kubernetes NetworkPolicy prevents any missed or unsupported kernel path from escaping. |
+| Driver outer fence | Docker `network_mode=none`, a NIC-less VM, Kubernetes NetworkPolicy, or a default-deny BlueField DPU assignment prevents any missed or unsupported kernel path from escaping. |
 | Policy proxy | Evaluates destination, binary identity, TLS/L7 rules, SSRF checks, and inference interception. |
+
+The BlueField VM prototype permits one workload-visible VF without weakening
+the ordinary VM fence. Its distinct fence binds the VF, representor, DPU,
+assignment generation, and policy generation to the sandbox generation. The
+DPU starts default-deny with no unmanaged guest uplinks. Before an accelerated
+flow can carry traffic, the backend must prove an attributed supervisor
+authorization round trip, revocation, and fail-closed behavior when its control
+channel is lost. These measurements remain backend-owned audit evidence and
+project into the same backend-neutral properties as other adapters. This layer
+defines and tests that confirmation contract; hardware discovery, VF attachment,
+and flow programming remain follow-up work and no driver selects it yet.
 
 The Kubernetes gVisor adapter uses the same authenticated lifecycle and process
 backend with different enforcement mechanisms. The gVisor sentry and OCI mounts

@@ -196,6 +196,98 @@ impl OpenShellSandboxAuditEvidence {
     }
 }
 
+/// Host-validated evidence for a `BlueField`-accelerated VM datapath.
+///
+/// The native sandbox evidence proves that the workload is confined and that
+/// connection requests have authoritative process attribution. The `BlueField`
+/// measurements prove that an attached VF remains default-deny until the
+/// supervisor authorizes a generation-scoped hardware flow, and that the flow
+/// can be revoked without falling back to unrestricted guest networking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "audit evidence preserves independently measured DPU safety results"
+)]
+pub struct BluefieldVmAccelerationEvidence {
+    pub native_sandbox: OpenShellSandboxAuditEvidence,
+    pub vf_pci_address: String,
+    pub representor: String,
+    pub dpu_id: String,
+    pub assignment_generation: String,
+    pub policy_generation: u64,
+    pub default_deny: bool,
+    pub authorization_round_trip: bool,
+    pub revocation_round_trip: bool,
+    pub controller_loss_fails_closed: bool,
+}
+
+impl BluefieldVmAccelerationEvidence {
+    /// Validate the software boundary and hardware acceleration proof against
+    /// the exact driver-owned outer fence bound to this launch.
+    pub fn validate_against(&self, fence: &DriverFenceEvidence) -> Result<(), BackendError> {
+        self.native_sandbox.validate()?;
+        let DriverFenceEvidence::BluefieldVm {
+            vf_pci_address,
+            representor,
+            dpu_id,
+            assignment_generation,
+            policy_generation,
+            default_deny,
+            attached_vf_count,
+            unmanaged_network_device_count,
+            ..
+        } = fence
+        else {
+            return Err(BackendError::Confirm(
+                "BlueField acceleration evidence requires a BlueField VM driver fence".to_string(),
+            ));
+        };
+        fence.validate()?;
+        let complete = self.vf_pci_address == *vf_pci_address
+            && self.representor == *representor
+            && self.dpu_id == *dpu_id
+            && self.assignment_generation == *assignment_generation
+            && self.policy_generation == *policy_generation
+            && self.default_deny
+            && *default_deny
+            && *attached_vf_count == 1
+            && *unmanaged_network_device_count == 0
+            && self.authorization_round_trip
+            && self.revocation_round_trip
+            && self.controller_loss_fails_closed;
+        if complete {
+            Ok(())
+        } else {
+            Err(BackendError::Confirm(
+                "BlueField VM acceleration evidence is incomplete or mismatched".to_string(),
+            ))
+        }
+    }
+
+    /// Project the composite Linux and DPU measurements into the common
+    /// backend-neutral confirmation contract introduced by PR 3366.
+    #[must_use]
+    pub fn properties(&self) -> BoundaryProperties {
+        let native = self.native_sandbox.properties();
+        BoundaryProperties {
+            filesystem_confinement: native.filesystem_confinement,
+            egress_interception: EnforcedProperty::new(
+                native.egress_interception.enforced
+                    && self.default_deny
+                    && self.authorization_round_trip
+                    && self.revocation_round_trip
+                    && self.controller_loss_fails_closed,
+                "seccomp-notify+bluefield-dpu-flow-steering",
+            ),
+            request_attribution: EnforcedProperty::new(
+                native.request_attribution.enforced && self.authorization_round_trip,
+                "seccomp-notify-procfs+bluefield-flow-binding",
+            ),
+            privilege_floor: native.privilege_floor,
+        }
+    }
+}
+
 /// Mechanism-specific evidence produced by the gVisor runtime adapter.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1492,6 +1584,66 @@ mod tests {
         audit.seccomp.addfd_send = false;
         assert!(audit.validate().is_err());
         assert!(!audit.properties().egress_interception.enforced);
+    }
+
+    fn bluefield_fence() -> DriverFenceEvidence {
+        DriverFenceEvidence::BluefieldVm {
+            generation: "generation-1".to_string(),
+            vf_pci_address: "0000:03:00.2".to_string(),
+            representor: "pf0vf0".to_string(),
+            dpu_id: "dpu-1".to_string(),
+            assignment_generation: "assignment-1".to_string(),
+            policy_generation: 7,
+            default_deny: true,
+            attached_vf_count: 1,
+            unmanaged_network_device_count: 0,
+        }
+    }
+
+    fn bluefield_acceleration_evidence() -> BluefieldVmAccelerationEvidence {
+        BluefieldVmAccelerationEvidence {
+            native_sandbox: complete_audit_evidence(),
+            vf_pci_address: "0000:03:00.2".to_string(),
+            representor: "pf0vf0".to_string(),
+            dpu_id: "dpu-1".to_string(),
+            assignment_generation: "assignment-1".to_string(),
+            policy_generation: 7,
+            default_deny: true,
+            authorization_round_trip: true,
+            revocation_round_trip: true,
+            controller_loss_fails_closed: true,
+        }
+    }
+
+    #[test]
+    fn bluefield_acceleration_requires_matching_fail_closed_hardware_evidence() {
+        let evidence = bluefield_acceleration_evidence();
+        evidence.validate_against(&bluefield_fence()).unwrap();
+
+        let properties = evidence.properties();
+        assert!(properties.egress_interception.enforced);
+        assert_eq!(
+            properties.egress_interception.mechanism,
+            "seccomp-notify+bluefield-dpu-flow-steering"
+        );
+        assert!(properties.request_attribution.enforced);
+
+        let mut unavailable = evidence.clone();
+        unavailable.controller_loss_fails_closed = false;
+        assert!(unavailable.validate_against(&bluefield_fence()).is_err());
+        assert!(!unavailable.properties().egress_interception.enforced);
+
+        let mut mismatched = evidence;
+        mismatched.policy_generation += 1;
+        assert!(mismatched.validate_against(&bluefield_fence()).is_err());
+        assert!(
+            mismatched
+                .validate_against(&DriverFenceEvidence::Vm {
+                    generation: "generation-1".to_string(),
+                    network_device_count: 0,
+                })
+                .is_err()
+        );
     }
 
     #[test]
