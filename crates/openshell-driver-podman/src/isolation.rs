@@ -87,6 +87,19 @@ pub fn resolve_identity(
     } else {
         requested_group
     };
+    if user.is_empty() && group.is_empty() {
+        // The image declares no OCI USER (e.g. a plain Alpine base) and the
+        // policy requested no identity. Synthesize a numeric non-root identity
+        // instead of rejecting the image, matching Docker, Kubernetes, and VM.
+        return ResolvedWorkloadIdentity::new(
+            openshell_core::sandbox_env::DEFAULT_SANDBOX_UID,
+            openshell_core::sandbox_env::DEFAULT_SANDBOX_GID,
+            Vec::new(),
+            "default".into(),
+            image_id.into(),
+        )
+        .map_err(invalid);
+    }
     let account = accounts
         .iter()
         .find(|(name, uid, _)| *name == user || user.parse::<u32>().ok() == Some(*uid));
@@ -361,8 +374,28 @@ mod tests {
         assert_eq!(identity.supplementary_gids, vec![2000]);
         assert_eq!(identity.resource_digest, "sha256:pinned");
         assert!(resolve_identity(&sandbox, "sha256:pinned", "root", passwd, groups).is_err());
-        assert!(resolve_identity(&sandbox, "sha256:pinned", "", passwd, groups).is_err());
         assert!(resolve_identity(&sandbox, "sha256:pinned", "2000", passwd, groups).is_err());
+    }
+
+    #[test]
+    fn identity_uses_numeric_default_for_userless_image() {
+        let identity = resolve_identity(
+            &DriverSandbox::default(),
+            "sha256:pinned",
+            "",
+            b"root:x:0:0:root:/root:/bin/sh\n",
+            b"root:x:0:\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            (identity.uid, identity.gid),
+            (
+                openshell_core::sandbox_env::DEFAULT_SANDBOX_UID,
+                openshell_core::sandbox_env::DEFAULT_SANDBOX_GID,
+            )
+        );
+        assert_eq!(identity.source, "default");
     }
 
     fn files(bytes: &[u8]) -> BTreeMap<PathBuf, Vec<u8>> {
