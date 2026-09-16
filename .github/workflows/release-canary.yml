@@ -27,28 +27,24 @@ jobs:
   macos:
     name: macOS Homebrew
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    # Keep this pinned to the image used by the branch build lane. The current
-    # macos-latest image resolves to macOS 26, where libkrun VM creation fails.
-    runs-on: macos-15-xlarge
+    runs-on: macos-latest-xlarge
     timeout-minutes: 20
     steps:
       - name: Ensure VM driver
         run: |
-          brew install e2fsprogs
           launchctl setenv OPENSHELL_COMPUTE_DRIVER vm
           launchctl setenv OPENSHELL_TELEMETRY_ENABLED "$OPENSHELL_TELEMETRY_ENABLED"
 
-      - name: Install and check status
+      - name: Install and check gateway status
         run: |
           set -euo pipefail
           curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/${{ github.event.workflow_run.head_sha || github.sha }}/install.sh | sh
+          openshell --version
           openshell status
-          sandbox="rc-${GITHUB_RUN_ID}"
-          openshell sandbox create --name "$sandbox" --detach
-          openshell sandbox exec --name "$sandbox" --no-tty -- true
-          openshell sandbox delete "$sandbox"
 
-      - name: Collect Homebrew and VM diagnostics
+      # GitHub-hosted macOS runners do not expose the Hypervisor.framework
+      # support libkrun needs. Sandbox launch is covered by the VM E2E lane.
+      - name: Collect Homebrew diagnostics
         if: failure()
         run: |
           set +e
@@ -61,8 +57,6 @@ jobs:
               tail -n 300 "$log"
             fi
           done
-          find "${HOME}/.local/state/openshell" -type f \
-            \( -name '*.log' -o -name '*.err.log' \) -print -exec tail -n 300 {} \;
 
   ubuntu:
     name: Ubuntu Docker
