@@ -528,6 +528,43 @@ async fn control_channel_forward_round_trips_bytes_without_host_callback_network
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn slow_forward_read_does_not_block_other_control_requests() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_port = listener.local_addr().unwrap().port();
+    let target = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let mut relay = RelayProcess::spawn(0).await;
+    relay.expect_ready().await;
+    let session_id = "b".repeat(64);
+
+    relay
+        .send(json!({
+            "id": 1, "op": "forward_open",
+            "data": {"session_id": session_id, "target_port": target_port},
+        }))
+        .await;
+    assert_eq!(relay.next_json().await, json!({"id": 1, "ok": true}));
+
+    // forward_read long-polls the silent socket for 100 ms. A serial control
+    // loop returns id 2 first; independent request tasks let ping complete
+    // immediately while the forwarding session remains blocked.
+    relay
+        .send(json!({
+            "id": 2, "op": "forward_read", "data": {"session_id": session_id},
+        }))
+        .await;
+    relay.send(json!({"id": 3, "op": "ping"})).await;
+    assert_eq!(
+        relay.next_json().await,
+        json!({"id": 3, "ok": true, "data": "pong"})
+    );
+
+    target.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn forward_with_correct_auth_bridges_bytes_both_directions() {
     let target_port = spawn_echo_target().await;
     let relay_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

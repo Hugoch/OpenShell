@@ -327,7 +327,6 @@ async fn run_control_channel(
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let stdin = tokio::io::stdin();
-    let mut lines = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
 
     // Announce readiness before entering the request loop: this is the
@@ -343,6 +342,44 @@ async fn run_control_channel(
     }
     eprintln!("[openshell-supervisor-relay] control channel ready (stdin/stdout)");
 
+    // Read and execute requests independently so a slow target socket write
+    // or long poll on one forwarding session cannot block shutdown, launch,
+    // or traffic for another session. Correlation ids make response ordering
+    // irrelevant; stdout remains single-owner below to prevent interleaving.
+    let (response_tx, mut response_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let request_reader = tokio::spawn({
+        let launch = launch.clone();
+        let shutdown = shutdown.clone();
+        let forward_sessions = forward_sessions.clone();
+        async move {
+            let mut lines = BufReader::new(stdin).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                eprintln!(
+                    "[openshell-supervisor-relay] control request: {}",
+                    describe_control_request(trimmed)
+                );
+                let request = trimmed.to_string();
+                let launch = launch.clone();
+                let shutdown = shutdown.clone();
+                let forward_sessions = forward_sessions.clone();
+                let response_tx = response_tx.clone();
+                tokio::spawn(async move {
+                    let mut response =
+                        handle_control_request(&request, &launch, &shutdown, &forward_sessions)
+                            .await
+                            .to_string();
+                    response.push('\n');
+                    let _ = response_tx.send(response);
+                });
+            }
+            eprintln!("[openshell-supervisor-relay] control channel: stdin closed");
+        }
+    });
+
     // `None` once fired (or once main()'s sender is dropped without firing,
     // e.g. wait_for_port_ready failed) -- the `if` guard below then disables
     // that select arm instead of it firing repeatedly on every subsequent
@@ -351,41 +388,8 @@ async fn run_control_channel(
 
     loop {
         tokio::select! {
-            line_result = lines.next_line() => {
-                let line = match line_result {
-                    Ok(Some(l)) => l,
-                    Ok(None) => {
-                        eprintln!("[openshell-supervisor-relay] control channel: stdin closed");
-                        break;
-                    }
-                    Err(e) => {
-                        eprintln!("[openshell-supervisor-relay] control channel read error: {e}");
-                        break;
-                    }
-                };
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-
-                // Log only the operation and correlation id, never the raw request --
-                // "launch" carries the target's complete environment (e.g.
-                // OPENCLAW_GATEWAY_TOKEN) and this process's stderr is forwarded
-                // verbatim into the gateway's own logs, so printing `trimmed` here
-                // would expose it even when MXC's own --debug flag is off.
-                eprintln!(
-                    "[openshell-supervisor-relay] control request: {}",
-                    describe_control_request(trimmed)
-                );
-                let response = handle_control_request(
-                    trimmed,
-                    &launch,
-                    &shutdown,
-                    &forward_sessions,
-                )
-                .await;
-                let mut out = response.to_string();
-                out.push('\n');
+            response = response_rx.recv() => {
+                let Some(out) = response else { break };
                 if stdout.write_all(out.as_bytes()).await.is_err() || stdout.flush().await.is_err() {
                     eprintln!("[openshell-supervisor-relay] control channel write failed");
                     break;
@@ -410,6 +414,7 @@ async fn run_control_channel(
             }
         }
     }
+    request_reader.abort();
 }
 
 /// `forward` opens a new, independent relay bridge for a target port, e.g.

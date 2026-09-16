@@ -262,53 +262,60 @@ async fn control_channel_relay_task(
         let mut host_to_sandbox_bytes = 0_u64;
         let mut sandbox_to_host_bytes = 0_u64;
         let mut shutting_down = false;
-        loop {
-            tokio::select! {
-                result = host_read.read(&mut host_buf) => match result {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let bytes = base64::engine::general_purpose::STANDARD.encode(&host_buf[..n]);
-                        let response = control_channel.request(
-                            "forward_write",
-                            serde_json::json!({"session_id": session_id, "bytes": bytes}),
-                            Duration::from_secs(10),
-                        ).await;
-                        if !control_response_ok(&response) {
-                            break;
+        'connection: loop {
+            // Keep this request alive when host input wins the select. Dropping
+            // an in-flight correlated read loses a response (and potentially
+            // its bytes) when the sandbox replies a moment later.
+            let mut forward_read = Box::pin(control_channel.request(
+                "forward_read",
+                serde_json::json!({"session_id": session_id}),
+                Duration::from_secs(10),
+            ));
+            loop {
+                tokio::select! {
+                    result = host_read.read(&mut host_buf) => match result {
+                        Ok(0) | Err(_) => break 'connection,
+                        Ok(n) => {
+                            let bytes = base64::engine::general_purpose::STANDARD.encode(&host_buf[..n]);
+                            let response = control_channel.request(
+                                "forward_write",
+                                serde_json::json!({"session_id": session_id, "bytes": bytes}),
+                                Duration::from_secs(10),
+                            ).await;
+                            if !control_response_ok(&response) {
+                                break 'connection;
+                            }
+                            host_to_sandbox_bytes += n as u64;
                         }
-                        host_to_sandbox_bytes += n as u64;
-                    }
-                },
-                response = control_channel.request(
-                    "forward_read",
-                    serde_json::json!({"session_id": session_id}),
-                    Duration::from_secs(10),
-                ) => {
-                    let Ok(response) = response else { break };
-                    if response.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-                        break;
-                    }
-                    let data = response.get("data").unwrap_or(&serde_json::Value::Null);
-                    if data.get("eof").and_then(serde_json::Value::as_bool) == Some(true) {
-                        break;
-                    }
-                    let Some(encoded) = data.get("bytes").and_then(serde_json::Value::as_str) else {
-                        break;
-                    };
-                    if !encoded.is_empty() {
-                        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
-                            break;
+                    },
+                    response = &mut forward_read => {
+                        let Ok(response) = response else { break 'connection };
+                        if response.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+                            break 'connection;
+                        }
+                        let data = response.get("data").unwrap_or(&serde_json::Value::Null);
+                        if data.get("eof").and_then(serde_json::Value::as_bool) == Some(true) {
+                            break 'connection;
+                        }
+                        let Some(encoded) = data.get("bytes").and_then(serde_json::Value::as_str) else {
+                            break 'connection;
                         };
-                        if host_write.write_all(&bytes).await.is_err() {
-                            break;
+                        if !encoded.is_empty() {
+                            let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+                                break 'connection;
+                            };
+                            if host_write.write_all(&bytes).await.is_err() {
+                                break 'connection;
+                            }
+                            sandbox_to_host_bytes += bytes.len() as u64;
                         }
-                        sandbox_to_host_bytes += bytes.len() as u64;
-                    }
-                },
-                _ = &mut shutdown_rx => {
-                    shutting_down = true;
-                    break;
-                },
+                        break;
+                    },
+                    _ = &mut shutdown_rx => {
+                        shutting_down = true;
+                        break 'connection;
+                    },
+                }
             }
         }
         let _ = control_channel

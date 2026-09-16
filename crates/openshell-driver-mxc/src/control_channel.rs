@@ -192,21 +192,23 @@ impl ControlChannel {
         let mut line = serde_json::to_string(&req)?;
         line.push('\n');
 
-        let write_result = {
+        let request = async {
             let mut stdin = self.stdin.lock().await;
-            match stdin.write_all(line.as_bytes()).await {
-                Ok(()) => stdin.flush().await,
-                Err(e) => Err(e),
-            }
+            stdin
+                .write_all(line.as_bytes())
+                .await
+                .map_err(ControlChannelError::Write)?;
+            stdin.flush().await.map_err(ControlChannelError::Write)?;
+            drop(stdin);
+            Ok::<_, ControlChannelError>(rx.await.map_err(|_| ControlChannelError::Dropped)?)
         };
-        if let Err(e) = write_result {
-            self.pending.lock().await.remove(&id);
-            return Err(ControlChannelError::Write(e));
-        }
 
-        match tokio::time::timeout(timeout, rx).await {
+        match tokio::time::timeout(timeout, request).await {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(_)) => Err(ControlChannelError::Dropped),
+            Ok(Err(error)) => {
+                self.pending.lock().await.remove(&id);
+                Err(error)
+            }
             Err(_) => {
                 self.pending.lock().await.remove(&id);
                 Err(ControlChannelError::Timeout(timeout))

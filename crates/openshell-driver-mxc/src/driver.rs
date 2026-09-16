@@ -2191,14 +2191,12 @@ async fn monitor_exec(
     } else {
         (child.wait().await, None)
     };
-    if wait_result.is_ok() {
+    let termination_confirmed = wait_result.is_ok();
+    if termination_confirmed {
         if let Some(pid) = wxc_pid
             && let Ok(mut idx) = attribution.lock()
         {
             idx.retire_launch(&sandbox_id, pid);
-        }
-        if let Some(done_tx) = done_tx {
-            let _ = done_tx.send(true);
         }
     }
 
@@ -2256,6 +2254,13 @@ async fn monitor_exec(
         Err(error) => {
             warn!(sandbox = %sandbox.name, error = %error, "MXC agent exec wait error");
         }
+    }
+    // Publish the terminal registry state and watch event before waking a
+    // concurrent stop/delete waiter. Otherwise that waiter can publish
+    // Stopped (or remove the entry), only for this monitor to race in later
+    // and resurrect an AgentCompleted/ExecFailed state.
+    if termination_confirmed && let Some(done_tx) = done_tx {
+        let _ = done_tx.send(true);
     }
 }
 async fn set_failed(
