@@ -59,11 +59,13 @@ mod linux {
     use openshell_sandbox_backend::boundary_protocol::{
         AgentSpecWire, BinaryIdentityWire, BoundaryConfig, BoundaryErrorKind,
         BoundaryListener as BoundaryListenerConfig, DnsQueryResultWire, ExecSpecWire,
-        ExitStatusWire, MediationTimingWire, OpenShellSandboxAuditEvidence, OutputWindowWire,
+        ExitStatusWire, GvisorSandboxAuditEvidence, MediationTimingWire,
+        OpenShellSandboxAdapterAudit, OpenShellSandboxAuditEvidence, OutputWindowWire,
         ProcessKindWire, ProcessSnapshotWire, Request, RequestEnvelope, Response, ResponseEnvelope,
         STREAM_EXIT, STREAM_NETWORK_DECISION, STREAM_STDERR, STREAM_STDIN, STREAM_STDIN_CLOSED,
-        STREAM_STDOUT, SandboxPolicyWire, SessionSnapshotWire, SignalWire, encode_frame,
-        read_frame, read_stream_frame, validate_resource_claims, write_frame, write_stream_frame,
+        STREAM_STDOUT, SandboxPolicyWire, SandboxRuntimeAdapter, SessionSnapshotWire, SignalWire,
+        encode_frame, read_frame, read_stream_frame, validate_resource_claims, write_frame,
+        write_stream_frame,
     };
 
     const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(30);
@@ -194,6 +196,9 @@ mod linux {
         let config: BoundaryConfig = serde_json::from_slice(&bytes).map_err(|error| {
             format!("decode boundary config {}: {error}", config_path.display())
         })?;
+        if config.adapter != qualification.adapter {
+            return Err("runtime qualification does not match boundary adapter".to_string());
+        }
         validate_config(&config)?;
         validate_runtime_resource_claims(&config)?;
         validate_running_identity(
@@ -211,20 +216,38 @@ mod linux {
         unsafe {
             std::env::set_var(openshell_core::sandbox_env::USER_ENVIRONMENT, child_env);
         }
-        crate::sandbox::apply_supervisor_startup_hardening()
-            .map_err(|error| format!("install sandbox process prelude: {error}"))?;
+        if matches!(config.adapter, SandboxRuntimeAdapter::NativeLinux) {
+            crate::sandbox::apply_supervisor_startup_hardening()
+                .map_err(|error| format!("install sandbox process prelude: {error}"))?;
+        }
         if nix::unistd::getpid().as_raw() == 1 {
             crate::managed_children::start_orphan_reaper()
                 .map_err(|error| format!("start sandbox orphan reaper: {error}"))?;
         }
-        let (launcher, listener) = openshell_isolation_interface::linux::workload_launcher::start()
-            .map_err(|error| format!("start sandbox workload launcher: {error}"))?;
-        let protected_control_port = match &config.listener {
-            BoundaryListenerConfig::TlsTcp { address, .. } => Some(address.port()),
-            BoundaryListenerConfig::Unix { .. } | BoundaryListenerConfig::Vsock { .. } => None,
+        let (launcher, network_broker) = match config.adapter {
+            SandboxRuntimeAdapter::NativeLinux => {
+                let (launcher, listener) =
+                    openshell_isolation_interface::linux::workload_launcher::start()
+                        .map_err(|error| format!("start sandbox workload launcher: {error}"))?;
+                let protected_control_port = match &config.listener {
+                    BoundaryListenerConfig::TlsTcp { address, .. } => Some(address.port()),
+                    BoundaryListenerConfig::Unix { .. } | BoundaryListenerConfig::Vsock { .. } => {
+                        None
+                    }
+                };
+                let broker = NetworkBroker::start(listener, protected_control_port)
+                    .map_err(|error| format!("start sandbox network broker: {error}"))?;
+                (launcher, broker)
+            }
+            SandboxRuntimeAdapter::Gvisor => {
+                let launcher =
+                    openshell_isolation_interface::linux::workload_launcher::start_unfiltered()
+                        .map_err(|error| format!("start gVisor workload launcher: {error}"))?;
+                let broker = NetworkBroker::start_explicit_proxy()
+                    .map_err(|error| format!("start gVisor explicit proxy: {error}"))?;
+                (launcher, broker)
+            }
         };
-        let network_broker = NetworkBroker::start(listener, protected_control_port)
-            .map_err(|error| format!("start sandbox network broker: {error}"))?;
         let process_runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -1229,6 +1252,38 @@ mod linux {
                 })?;
                 return Ok(());
             }
+            Request::AcceptExplicitProxy => {
+                let broker = runtime.network_accept_context()?;
+                if !broker.is_explicit_proxy() {
+                    return Err("explicit proxy requested from native network adapter".to_string());
+                }
+                let request_id = request.request_id;
+                runtime.process_runtime.block_on(async move {
+                    let target = broker.accept_explicit_proxy().await.map_err(|error| {
+                        format!("accept sandbox explicit proxy stream: {error}")
+                    })?;
+                    target.set_nonblocking(true).map_err(|error| {
+                        format!("set explicit proxy stream nonblocking: {error}")
+                    })?;
+                    let mut target = tokio::net::TcpStream::from_std(target)
+                        .map_err(|error| format!("register explicit proxy stream: {error}"))?;
+                    let mut stream = stream.into_tokio()?;
+                    let response = encode_frame(&ResponseEnvelope {
+                        request_id,
+                        response: Response::ExplicitProxyConnected,
+                    })
+                    .map_err(|error| format!("encode explicit proxy response: {error}"))?;
+                    stream
+                        .write_all(&response)
+                        .await
+                        .map_err(|error| format!("write explicit proxy response: {error}"))?;
+                    tokio::io::copy_bidirectional(&mut stream, &mut target)
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| format!("bridge explicit proxy stream: {error}"))
+                })?;
+                return Ok(());
+            }
             _ => {}
         }
         let supervisor_instance_id = match &request.request {
@@ -1883,7 +1938,8 @@ mod linux {
                 | Request::TerminateBoundary
                 | Request::AttachProcess { .. }
                 | Request::LoopbackConnect { .. }
-                | Request::AcceptNetwork => guest_error(
+                | Request::AcceptNetwork
+                | Request::AcceptExplicitProxy => guest_error(
                     BoundaryErrorKind::Invalid,
                     "streaming request used on control path",
                 ),
@@ -2276,22 +2332,46 @@ mod linux {
             }
             // SAFETY: successful getrlimit initialized the value.
             let core_limit = unsafe { core_limit.assume_init() };
-            let (native_architecture, kernel_release) = uname_values()?;
-            let audit = OpenShellSandboxAuditEvidence {
-                capabilities,
-                no_new_privileges,
-                sandbox_dumpable,
-                child_dumpable: true,
-                core_limit_zero: core_limit.rlim_cur == 0 && core_limit.rlim_max == 0,
-                native_architecture,
-                kernel_release,
-                seccomp: self.qualification.seccomp,
-                landlock_abi: self.qualification.landlock_abi,
-                landlock_allow_deny: self.qualification.landlock_allow_deny,
-                udp_dns_round_trip: self.qualification.udp_dns_round_trip,
-                tcp_dns_round_trip: self.qualification.tcp_dns_round_trip,
-                tcp_allow_round_trip: self.qualification.tcp_allow_round_trip,
-                tcp_deny_round_trip: self.qualification.tcp_deny_round_trip,
+            let audit = match self.config.adapter {
+                SandboxRuntimeAdapter::NativeLinux => {
+                    let (native_architecture, kernel_release) = uname_values()?;
+                    OpenShellSandboxAdapterAudit::NativeLinux(OpenShellSandboxAuditEvidence {
+                        capabilities,
+                        no_new_privileges,
+                        sandbox_dumpable,
+                        child_dumpable: true,
+                        core_limit_zero: core_limit.rlim_cur == 0 && core_limit.rlim_max == 0,
+                        native_architecture,
+                        kernel_release,
+                        seccomp: self.qualification.seccomp,
+                        landlock_abi: self.qualification.landlock_abi,
+                        landlock_allow_deny: self.qualification.landlock_allow_deny,
+                        udp_dns_round_trip: self.qualification.udp_dns_round_trip,
+                        tcp_dns_round_trip: self.qualification.tcp_dns_round_trip,
+                        tcp_allow_round_trip: self.qualification.tcp_allow_round_trip,
+                        tcp_deny_round_trip: self.qualification.tcp_deny_round_trip,
+                    })
+                }
+                SandboxRuntimeAdapter::Gvisor => {
+                    let (outer_egress_isolated, outer_egress_rule_count) = match &self.config.driver_fence {
+                        openshell_isolation_interface::contract::DriverFenceEvidence::Kubernetes {
+                            egress_isolated,
+                            egress_rule_count,
+                            ..
+                        } => (*egress_isolated, *egress_rule_count),
+                        _ => (false, u32::MAX),
+                    };
+                    OpenShellSandboxAdapterAudit::Gvisor(GvisorSandboxAuditEvidence {
+                        sentry_detected: self.qualification.gvisor_sentry_detected,
+                        capabilities,
+                        sandbox_dumpable,
+                        core_limit_zero: core_limit.rlim_cur == 0 && core_limit.rlim_max == 0,
+                        workload_launcher_healthy: self.workload_launcher.is_alive(),
+                        explicit_proxy_healthy: self.network_broker.is_explicit_proxy(),
+                        outer_egress_isolated,
+                        outer_egress_rule_count,
+                    })
+                }
             };
             // The boundary reports mechanism evidence; the authenticated host
             // backend validates it before constructing a ConfirmedBoundary.
@@ -3649,6 +3729,7 @@ mod linux {
                 resource_claims: std::collections::BTreeMap::new(),
                 resource_claim_files: std::collections::BTreeMap::new(),
                 workload_identity: test_workload_identity(),
+                adapter: SandboxRuntimeAdapter::default(),
                 driver_fence: test_driver_fence(),
                 child_env: std::collections::HashMap::new(),
             };
@@ -3800,6 +3881,7 @@ mod linux {
                         resource_claims: std::collections::BTreeMap::new(),
                         resource_claim_files: std::collections::BTreeMap::new(),
                         workload_identity: test_workload_identity(),
+                        adapter: SandboxRuntimeAdapter::default(),
                         driver_fence: test_driver_fence(),
                         child_env: std::collections::HashMap::new(),
                     },
@@ -4211,6 +4293,8 @@ mod linux {
 
         fn test_runtime_qualification() -> crate::RuntimeQualification {
             crate::RuntimeQualification {
+                adapter: SandboxRuntimeAdapter::default(),
+                gvisor_sentry_detected: false,
                 seccomp: openshell_sandbox_backend::boundary_protocol::SeccompEvidence {
                     new_listener: true,
                     notification_round_trip: true,
@@ -4314,6 +4398,7 @@ mod linux {
                 resource_claims: std::collections::BTreeMap::new(),
                 resource_claim_files: std::collections::BTreeMap::new(),
                 workload_identity: test_workload_identity(),
+                adapter: SandboxRuntimeAdapter::default(),
                 driver_fence: test_driver_fence(),
                 child_env: std::collections::HashMap::new(),
             };
@@ -4349,6 +4434,7 @@ mod linux {
                     pod_uid_path,
                 )]),
                 workload_identity: test_workload_identity(),
+                adapter: SandboxRuntimeAdapter::default(),
                 driver_fence: test_driver_fence(),
                 child_env: std::collections::HashMap::new(),
             };
@@ -4389,6 +4475,7 @@ mod linux {
                         resource_claims: std::collections::BTreeMap::new(),
                         resource_claim_files: std::collections::BTreeMap::new(),
                         workload_identity: test_workload_identity(),
+                        adapter: SandboxRuntimeAdapter::default(),
                         driver_fence: test_driver_fence(),
                         child_env: std::collections::HashMap::new(),
                     },
@@ -4564,6 +4651,7 @@ mod linux {
                         resource_claims: std::collections::BTreeMap::new(),
                         resource_claim_files: std::collections::BTreeMap::new(),
                         workload_identity: test_workload_identity(),
+                        adapter: SandboxRuntimeAdapter::default(),
                         driver_fence: test_driver_fence(),
                         child_env: std::collections::HashMap::new(),
                     },
@@ -4593,7 +4681,11 @@ mod linux {
                 boundary.attach(policy.clone()),
                 Response::Attached { .. }
             ));
-            assert!(matches!(boundary.confirm(), Response::Confirmed { .. }));
+            let confirmation = boundary.confirm();
+            assert!(
+                matches!(confirmation, Response::Confirmed { .. }),
+                "unexpected confirmation response: {confirmation:?}"
+            );
             let start = || {
                 boundary.start_agent(
                     "sandbox-reconnect".to_string(),
@@ -4666,7 +4758,11 @@ mod linux {
                 boundary.attach(policy.clone()),
                 Response::Attached { .. }
             ));
-            assert!(matches!(boundary.confirm(), Response::Confirmed { .. }));
+            let confirmation = boundary.confirm();
+            assert!(
+                matches!(confirmation, Response::Confirmed { .. }),
+                "unexpected confirmation response: {confirmation:?}"
+            );
             assert_eq!(
                 start(),
                 Response::Started {
@@ -4837,6 +4933,7 @@ mod linux {
                         resource_claims: std::collections::BTreeMap::new(),
                         resource_claim_files: std::collections::BTreeMap::new(),
                         workload_identity: test_workload_identity(),
+                        adapter: SandboxRuntimeAdapter::default(),
                         driver_fence: test_driver_fence(),
                         child_env: std::collections::HashMap::new(),
                     },

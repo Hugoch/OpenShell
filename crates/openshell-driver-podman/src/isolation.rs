@@ -12,8 +12,8 @@ use openshell_core::ComputeDriverError;
 use openshell_core::proto::compute::v1::DriverSandbox;
 use openshell_isolation_interface::contract::{DriverFenceEvidence, ResolvedWorkloadIdentity};
 use openshell_sandbox_backend::boundary_protocol::{
-    BoundaryConfig, BoundaryListener, GatewayVerificationKey, SandboxRuntimeDescriptor,
-    SandboxTlsClientConfig, SandboxTlsServerConfig, SandboxTransport,
+    BoundaryConfig, BoundaryListener, GatewayVerificationKey, SandboxRuntimeAdapter,
+    SandboxRuntimeDescriptor, SandboxTlsClientConfig, SandboxTlsServerConfig, SandboxTransport,
     generate_sandbox_tls_material,
 };
 use serde::{Deserialize, Serialize};
@@ -198,6 +198,7 @@ pub fn bootstrap_archives(
         resource_claims: resource_claims.clone(),
         resource_claim_files: BTreeMap::new(),
         workload_identity: identity.clone(),
+        adapter: SandboxRuntimeAdapter::default(),
         driver_fence: driver_fence.clone(),
         child_env: child_env.clone(),
     };
@@ -215,6 +216,7 @@ pub fn bootstrap_archives(
         host_gateway_ip: None,
         resource_claims,
         workload_identity: identity.clone(),
+        adapter: SandboxRuntimeAdapter::default(),
         driver_fence,
     };
     // Libpod resolves the requested upload destination once for a stopped

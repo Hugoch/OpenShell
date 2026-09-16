@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use openshell_isolation_interface::contract::{DriverFenceEvidence, ResolvedWorkloadIdentity};
 use openshell_sandbox_backend::GPU_RESOURCE_CLAIM;
 use openshell_sandbox_backend::boundary_protocol::{
-    BoundaryConfig, BoundaryListener, GatewayVerificationKey, SandboxRuntimeDescriptor,
-    SandboxTlsClientConfig, SandboxTlsServerConfig, SandboxTransport,
+    BoundaryConfig, BoundaryListener, GatewayVerificationKey, SandboxRuntimeAdapter,
+    SandboxRuntimeDescriptor, SandboxTlsClientConfig, SandboxTlsServerConfig, SandboxTransport,
 };
 
 /// Driver-owned inputs that bind one Docker container to one boundary.
@@ -78,6 +78,7 @@ impl DockerBoundarySpec {
                 resource_claims: resource_claims.clone(),
                 resource_claim_files: BTreeMap::new(),
                 workload_identity: self.workload_identity.clone(),
+                adapter: SandboxRuntimeAdapter::default(),
                 driver_fence: driver_fence.clone(),
                 child_env: self.child_env,
             },
@@ -86,6 +87,7 @@ impl DockerBoundarySpec {
                 generation: self.generation,
                 session_id: self.session_id,
                 workload_identity: self.workload_identity,
+                adapter: SandboxRuntimeAdapter::default(),
                 transport: SandboxTransport::Unix {
                     socket_path: self.control_socket,
                 },

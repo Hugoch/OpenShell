@@ -22,8 +22,8 @@ use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::core::ObjectMeta;
 use openshell_isolation_interface::contract::{DriverFenceEvidence, ResolvedWorkloadIdentity};
 use openshell_sandbox_backend::boundary_protocol::{
-    BoundaryConfig, BoundaryListener, GatewayVerificationKey, SandboxRuntimeDescriptor,
-    SandboxTlsClientConfig, SandboxTlsServerConfig, SandboxTransport,
+    BoundaryConfig, BoundaryListener, GatewayVerificationKey, SandboxRuntimeAdapter,
+    SandboxRuntimeDescriptor, SandboxTlsClientConfig, SandboxTlsServerConfig, SandboxTransport,
 };
 
 /// Isolation backend implemented by the `OpenShell` sandbox runtime.
@@ -169,6 +169,7 @@ pub struct KubernetesSandboxRuntimeBoundarySpec {
     pub supervisor_tls: SandboxTlsClientConfig,
     pub host_gateway_ip: Option<IpAddr>,
     pub workload_identity: ResolvedWorkloadIdentity,
+    pub adapter: SandboxRuntimeAdapter,
     pub child_env: HashMap<String, String>,
 }
 
@@ -233,6 +234,7 @@ impl KubernetesSandboxRuntimeBoundarySpec {
                     self.workload_pod_uid_path,
                 )]),
                 workload_identity: self.workload_identity.clone(),
+                adapter: self.adapter,
                 driver_fence: driver_fence.clone(),
                 child_env: self.child_env,
             },
@@ -241,6 +243,7 @@ impl KubernetesSandboxRuntimeBoundarySpec {
                 generation: self.generation,
                 session_id: self.session_id,
                 workload_identity: self.workload_identity,
+                adapter: self.adapter,
                 transport: SandboxTransport::Tcp {
                     authority: self.control_authority,
                     addresses: vec![self.control_address],
@@ -297,6 +300,7 @@ mod tests {
                 "sandbox:sandbox-resource-uid".to_string(),
             )
             .unwrap(),
+            adapter: SandboxRuntimeAdapter::NativeLinux,
             child_env: HashMap::new(),
         }
     }
@@ -357,6 +361,22 @@ mod tests {
                 server_name: "boundary.sandbox.openshell".to_string(),
                 trust_anchor_pem: "test-ca".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn provisioning_binds_gvisor_adapter_on_both_protocol_sides() {
+        let mut boundary = spec();
+        boundary.adapter = SandboxRuntimeAdapter::Gvisor;
+        let provisioned = boundary.provision();
+
+        assert_eq!(
+            provisioned.boundary_config.adapter,
+            SandboxRuntimeAdapter::Gvisor
+        );
+        assert_eq!(
+            provisioned.runtime_descriptor.adapter,
+            SandboxRuntimeAdapter::Gvisor
         );
     }
 

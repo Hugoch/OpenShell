@@ -43,6 +43,20 @@ pub const STREAM_STDIN_CLOSED: u8 = 4;
 pub const STREAM_NETWORK_DECISION: u8 = 5;
 pub const MAX_STREAM_FRAME_BYTES: usize = 64 * 1024;
 
+/// Workload-isolation mechanism used behind the shared `OpenShell` Sandbox
+/// Protocol.
+///
+/// The native adapter uses Linux Landlock and seccomp notification; the gVisor
+/// adapter relies on the sentry boundary, the driver's outer network fence,
+/// and an explicit proxy tunnel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxRuntimeAdapter {
+    #[default]
+    NativeLinux,
+    Gvisor,
+}
+
 /// Capability masks measured from `/proc/<pid>/status` by the `OpenShell`
 /// co-located runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +192,94 @@ impl OpenShellSandboxAuditEvidence {
                     && self.core_limit_zero,
                 "linux-capability-free",
             ),
+        }
+    }
+}
+
+/// Mechanism-specific evidence produced by the gVisor runtime adapter.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GvisorSandboxAuditEvidence {
+    pub sentry_detected: bool,
+    pub capabilities: CapabilityEvidence,
+    pub sandbox_dumpable: bool,
+    pub core_limit_zero: bool,
+    pub workload_launcher_healthy: bool,
+    pub explicit_proxy_healthy: bool,
+    pub outer_egress_isolated: bool,
+    pub outer_egress_rule_count: u32,
+}
+
+impl GvisorSandboxAuditEvidence {
+    pub fn validate(&self) -> Result<(), BackendError> {
+        let complete = self.sentry_detected
+            && self.capabilities.is_empty()
+            && !self.sandbox_dumpable
+            && self.core_limit_zero
+            && self.workload_launcher_healthy
+            && self.explicit_proxy_healthy
+            && self.outer_egress_isolated
+            && self.outer_egress_rule_count == 0;
+        if complete {
+            Ok(())
+        } else {
+            Err(BackendError::Confirm(
+                "gVisor sandbox audit evidence is incomplete".to_string(),
+            ))
+        }
+    }
+
+    #[must_use]
+    pub fn properties(&self) -> BoundaryProperties {
+        BoundaryProperties {
+            filesystem_confinement: EnforcedProperty::new(
+                self.sentry_detected,
+                "gvisor-sentry-oci-mounts",
+            ),
+            egress_interception: EnforcedProperty::new(
+                self.outer_egress_isolated
+                    && self.outer_egress_rule_count == 0
+                    && self.explicit_proxy_healthy,
+                "kubernetes-network-policy+authenticated-proxy-tunnel",
+            ),
+            request_attribution: EnforcedProperty::new(
+                self.explicit_proxy_healthy,
+                "authenticated-boundary-session+endpoint-policy",
+            ),
+            privilege_floor: EnforcedProperty::new(
+                self.sentry_detected && self.capabilities.is_empty(),
+                "gvisor-sentry+capability-free-container",
+            ),
+        }
+    }
+}
+
+/// Tagged adapter evidence validated by the `OpenShell` runtime backend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "adapter", content = "evidence", rename_all = "kebab-case")]
+pub enum OpenShellSandboxAdapterAudit {
+    NativeLinux(OpenShellSandboxAuditEvidence),
+    Gvisor(GvisorSandboxAuditEvidence),
+}
+
+impl OpenShellSandboxAdapterAudit {
+    pub fn validate_for(&self, adapter: SandboxRuntimeAdapter) -> Result<(), BackendError> {
+        match (adapter, self) {
+            (SandboxRuntimeAdapter::NativeLinux, Self::NativeLinux(evidence)) => {
+                evidence.validate()
+            }
+            (SandboxRuntimeAdapter::Gvisor, Self::Gvisor(evidence)) => evidence.validate(),
+            _ => Err(BackendError::Confirm(
+                "sandbox audit evidence does not match the selected runtime adapter".to_string(),
+            )),
+        }
+    }
+
+    #[must_use]
+    pub fn properties(&self) -> BoundaryProperties {
+        match self {
+            Self::NativeLinux(evidence) => evidence.properties(),
+            Self::Gvisor(evidence) => evidence.properties(),
         }
     }
 }
@@ -414,6 +516,9 @@ pub struct SandboxRuntimeDescriptor {
     pub session_id: SandboxSessionId,
     /// Immutable numeric identity already applied to the sandbox workload.
     pub workload_identity: openshell_isolation_interface::contract::ResolvedWorkloadIdentity,
+    /// Mechanism adapter used inside the workload boundary.
+    #[serde(default)]
+    pub adapter: SandboxRuntimeAdapter,
     /// Driver-provisioned byte-stream endpoint.
     pub transport: SandboxTransport,
     /// Per-generation pinned TLS server identity.
@@ -437,6 +542,7 @@ impl fmt::Debug for SandboxRuntimeDescriptor {
             .field("boundary_id", &self.boundary_id)
             .field("generation", &self.generation)
             .field("session_id", &self.session_id)
+            .field("adapter", &self.adapter)
             .field("transport", &self.transport)
             .field("tls", &self.tls)
             .field("host_gateway_ip", &self.host_gateway_ip)
@@ -494,6 +600,9 @@ pub struct BoundaryConfig {
     pub resource_claim_files: std::collections::BTreeMap<String, PathBuf>,
     /// Exact identity already applied by the runtime to the sandbox process.
     pub workload_identity: openshell_isolation_interface::contract::ResolvedWorkloadIdentity,
+    /// Mechanism adapter selected by the trusted compute driver.
+    #[serde(default)]
+    pub adapter: SandboxRuntimeAdapter,
     /// Concrete outer-fence evidence validated by the driver.
     pub driver_fence: DriverFenceEvidence,
     /// Driver-resolved environment exposed only to workload processes.
@@ -523,6 +632,7 @@ impl fmt::Debug for BoundaryConfig {
             .field("resource_claims", &self.resource_claims)
             .field("resource_claim_files", &self.resource_claim_files)
             .field("workload_identity", &self.workload_identity)
+            .field("adapter", &self.adapter)
             .field("driver_fence", &self.driver_fence)
             .field("child_env_keys", &self.child_env.keys().collect::<Vec<_>>())
             .finish()
@@ -716,6 +826,8 @@ pub enum Request {
     /// plane.
     OpenMediation,
     AcceptNetwork,
+    /// Upgrade one authenticated stream into a raw explicit-proxy tunnel.
+    AcceptExplicitProxy,
 }
 
 impl Request {
@@ -827,6 +939,7 @@ impl fmt::Debug for Request {
                 .finish(),
             Self::OpenMediation => formatter.write_str("OpenMediation"),
             Self::AcceptNetwork => formatter.write_str("AcceptNetwork"),
+            Self::AcceptExplicitProxy => formatter.write_str("AcceptExplicitProxy"),
         }
     }
 }
@@ -878,6 +991,7 @@ pub enum Response {
         policy_generation: u64,
         timing: MediationTimingWire,
     },
+    ExplicitProxyConnected,
     Error {
         kind: BoundaryErrorKind,
         message: String,
@@ -1378,6 +1492,39 @@ mod tests {
         audit.seccomp.addfd_send = false;
         assert!(audit.validate().is_err());
         assert!(!audit.properties().egress_interception.enforced);
+    }
+
+    #[test]
+    fn gvisor_audit_requires_sentry_proxy_and_zero_rule_outer_fence() {
+        let mut evidence = GvisorSandboxAuditEvidence {
+            sentry_detected: true,
+            capabilities: CapabilityEvidence {
+                inheritable: 0,
+                permitted: 0,
+                effective: 0,
+                bounding: 0,
+                ambient: 0,
+            },
+            sandbox_dumpable: false,
+            core_limit_zero: true,
+            workload_launcher_healthy: true,
+            explicit_proxy_healthy: true,
+            outer_egress_isolated: true,
+            outer_egress_rule_count: 0,
+        };
+        evidence.validate().unwrap();
+        let audit = OpenShellSandboxAdapterAudit::Gvisor(evidence.clone());
+        audit.validate_for(SandboxRuntimeAdapter::Gvisor).unwrap();
+        assert!(audit.properties().egress_interception.enforced);
+        assert!(
+            audit
+                .validate_for(SandboxRuntimeAdapter::NativeLinux)
+                .is_err()
+        );
+
+        evidence.outer_egress_rule_count = 1;
+        assert!(evidence.validate().is_err());
+        assert!(!evidence.properties().egress_interception.enforced);
     }
 
     #[test]

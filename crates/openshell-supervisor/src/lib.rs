@@ -462,6 +462,7 @@ pub async fn run_network_proxy(
     }
 
     let extension_credentials = openshell_extension_core::ExtensionCredentialStore::new();
+
     let (mut policy, opa_engine, _, _, _, initial_agent_proposals_enabled, _) = load_policy(
         None,
         None,
@@ -608,6 +609,20 @@ pub async fn run_sandbox(
     // and the policy poll loop that rotates them stay the same objects.
     let extension_credentials = openshell_extension_core::ExtensionCredentialStore::new();
 
+    let selected_runtime_adapter = serde_json::from_slice::<
+        openshell_sandbox_backend::boundary_protocol::SandboxRuntimeDescriptor,
+    >(&backend_descriptor.payload)
+    .map_err(|error| miette::miette!("decode sandbox runtime descriptor: {error}"))?
+    .adapter;
+    let local_policy_identity = match selected_runtime_adapter {
+        openshell_sandbox_backend::boundary_protocol::SandboxRuntimeAdapter::NativeLinux => {
+            LocalPolicyIdentity::Required
+        }
+        openshell_sandbox_backend::boundary_protocol::SandboxRuntimeAdapter::Gvisor => {
+            LocalPolicyIdentity::EndpointOnly
+        }
+    };
+
     // Load policy and initialize OPA engine
     let openshell_endpoint_for_proxy = openshell_endpoint.clone();
     let sandbox_name_for_agg = sandbox.clone();
@@ -626,7 +641,7 @@ pub async fn run_sandbox(
         policy_rules,
         policy_data,
         &extension_credentials,
-        LocalPolicyIdentity::Required,
+        local_policy_identity,
     )
     .await?;
 
@@ -806,8 +821,11 @@ pub async fn run_sandbox(
     info!(backend = %admitted_backend_name, "Isolation boundary attached");
     let remote_boundary = (bound, admitted_backend_name, ca_file_paths);
 
-    let transparent_tcp_capable = true;
-    let transparent_tcp_substrate_ready = true;
+    let transparent_tcp_capable = matches!(
+        selected_runtime_adapter,
+        openshell_sandbox_backend::boundary_protocol::SandboxRuntimeAdapter::NativeLinux
+    );
+    let transparent_tcp_substrate_ready = transparent_tcp_capable;
     // The denial channel is owned by the orchestrator: the proxy (in the
     // networking leaf) and the bypass monitor (in the process leaf) both
     // produce DenialEvents that the denial aggregator (orchestrator-side)
