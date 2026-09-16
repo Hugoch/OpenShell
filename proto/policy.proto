@@ -1,0 +1,182 @@
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package openshell.policy.v1;
+
+import "google/protobuf/struct.proto";
+
+// Author-controlled sandbox policy.
+//
+// This package is the public policy contract used by policy files and SDKs.
+// Runtime-derived authority and normalization state live in
+// openshell.sandbox.v1 and cannot be supplied through these messages.
+message SandboxPolicy {
+  // Authored policy schema version. The only supported value is 1.
+  uint32 version = 1;
+  // Filesystem access policy. Absence enables the runtime workdir default;
+  // a present empty message explicitly disables that default.
+  FilesystemPolicy filesystem_policy = 2;
+  // Landlock compatibility policy.
+  LandlockPolicy landlock = 3;
+  // Process identity policy.
+  ProcessPolicy process = 4;
+  // Network rules keyed by stable policy-local name.
+  map<string, NetworkPolicyRule> network_policies = 5;
+  // Reusable middleware configs keyed by stable policy-local name.
+  map<string, NetworkMiddleware> network_middlewares = 6;
+}
+
+message FilesystemPolicy {
+  bool include_workdir = 1;
+  repeated string read_only = 2;
+  repeated string read_write = 3;
+}
+
+message LandlockPolicy {
+  // Documented values are "best_effort" and "hard_requirement".
+  string compatibility = 1;
+}
+
+message ProcessPolicy {
+  string run_as_user = 1;
+  string run_as_group = 2;
+}
+
+message NetworkPolicyRule {
+  // Display name. An empty value falls back to the surrounding map key.
+  string name = 1;
+  repeated NetworkEndpoint endpoints = 2;
+  repeated NetworkBinary binaries = 3;
+}
+
+message NetworkEndpoint {
+  string host = 1;
+  // Compatibility shorthand for a single port. Mutually exclusive with ports.
+  uint32 port = 2;
+  string protocol = 3;
+  string tls = 4;
+  string enforcement = 5;
+  string access = 6;
+  repeated L7Rule rules = 7;
+  repeated string allowed_ips = 8;
+  repeated uint32 ports = 9;
+  repeated L7DenyRule deny_rules = 10;
+  bool allow_encoded_slash = 11;
+  string persisted_queries = 12;
+  map<string, GraphqlOperation> graphql_persisted_queries = 13;
+  uint32 graphql_max_body_bytes = 14;
+  string path = 15;
+  bool websocket_credential_rewrite = 16;
+  bool request_body_credential_rewrite = 17;
+  reserved 18;
+  string credential_signing = 19;
+  string signing_service = 20;
+  string signing_region = 21;
+  JsonRpcConfig json_rpc = 22;
+  McpConfig mcp = 23;
+  NetworkCredentialBinding credential_binding = 24;
+  bool allow_uninspected_credentials = 25;
+
+  // Runtime-only fields intentionally have no public tags. Reserve their
+  // internal wire numbers so authority cannot be added here accidentally.
+  reserved 26;
+  reserved "advisor_proposed", "provider_credentialed";
+}
+
+message NetworkCredentialBinding {
+  string provider = 1;
+}
+
+message JsonRpcConfig {
+  uint32 max_body_bytes = 1;
+}
+
+// Presence-bearing MCP version allowlist. An absent message selects the pinned
+// default. A present message with no values is invalid.
+message McpVersions {
+  repeated string values = 1;
+}
+
+message McpConfig {
+  McpVersions versions = 1;
+  uint32 max_body_bytes = 2;
+  optional bool strict_tool_names = 3;
+  optional bool allow_all_known_mcp_methods = 4;
+}
+
+message GraphqlOperation {
+  string operation_type = 1;
+  string operation_name = 2;
+  repeated string fields = 3;
+}
+
+message L7Rule {
+  L7Allow allow = 1;
+}
+
+message L7Allow {
+  string method = 1;
+  string path = 2;
+  string command = 3;
+  map<string, Matcher> query = 4;
+  string operation_type = 5;
+  string operation_name = 6;
+  repeated string fields = 7;
+  Matcher tool = 8;
+  map<string, ParameterMatcher> params = 9;
+}
+
+message L7DenyRule {
+  string method = 1;
+  string path = 2;
+  string command = 3;
+  map<string, Matcher> query = 4;
+  string operation_type = 5;
+  string operation_name = 6;
+  repeated string fields = 7;
+  Matcher tool = 8;
+  map<string, ParameterMatcher> params = 9;
+}
+
+message Matcher {
+  oneof kind {
+    string glob = 1;
+    AnyMatcher any = 2;
+  }
+}
+
+message AnyMatcher {
+  repeated string values = 1;
+}
+
+message ParameterMatcher {
+  oneof kind {
+    Matcher matcher = 1;
+    ParameterObject object = 2;
+  }
+}
+
+message ParameterObject {
+  map<string, ParameterMatcher> fields = 1;
+}
+
+message NetworkBinary {
+  string path = 1;
+}
+
+message NetworkMiddleware {
+  // Display name. An empty value falls back to the surrounding map key.
+  string name = 1;
+  string middleware = 2;
+  google.protobuf.Struct config = 3;
+  string on_error = 4;
+  MiddlewareEndpointSelector endpoints = 5;
+  int32 order = 6;
+}
+
+message MiddlewareEndpointSelector {
+  repeated string include = 1;
+  repeated string exclude = 2;
+}

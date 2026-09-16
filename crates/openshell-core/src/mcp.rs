@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::proto::{McpOptions, ProviderProfile};
+use crate::proto::{ProviderProfile, policy::McpConfig, policy::McpVersions};
 
 pub use openshell_policy_schema::{
     DEFAULT_MCP_PROTOCOL_VERSION, MAX_MCP_LEGACY_BATCH_MESSAGES, McpProtocolVersion,
@@ -36,34 +36,44 @@ pub fn normalize_provider_profile_mcp_fields(profile: &mut ProviderProfile) {
         }
 
         let Some(options) = endpoint.mcp.as_mut() else {
-            endpoint.mcp = Some(McpOptions {
-                versions: vec![DEFAULT_MCP_PROTOCOL_VERSION.as_str().to_string()],
-                ..McpOptions::default()
+            endpoint.mcp = Some(McpConfig {
+                versions: Some(McpVersions {
+                    values: vec![DEFAULT_MCP_PROTOCOL_VERSION.as_str().to_string()],
+                }),
+                ..McpConfig::default()
             });
             continue;
         };
 
-        if options.versions.is_empty() {
-            options.versions = vec![DEFAULT_MCP_PROTOCOL_VERSION.as_str().to_string()];
+        let Some(versions) = options.versions.as_mut() else {
+            options.versions = Some(McpVersions {
+                values: vec![DEFAULT_MCP_PROTOCOL_VERSION.as_str().to_string()],
+            });
+            continue;
+        };
+        if versions.values.is_empty() {
+            // Presence is meaningful in the authored contract: omitted selects
+            // the pinned default, while an explicitly empty list is invalid.
+            // Preserve the latter so the validation boundary can reject it.
             continue;
         }
 
         // Parse into the shared version type before mutation. Comparing the
         // set size with the input length detects duplicates without erasing
         // the duplicate values that a fail-closed validator must report.
-        let Ok(versions) = options
-            .versions
+        let Ok(canonical) = versions
+            .values
             .iter()
             .map(|version| version.parse::<McpProtocolVersion>())
             .collect::<Result<BTreeSet<_>, _>>()
         else {
             continue;
         };
-        if versions.len() != options.versions.len() {
+        if canonical.len() != versions.values.len() {
             continue;
         }
 
-        options.versions = versions
+        versions.values = canonical
             .into_iter()
             .map(|version| version.as_str().to_string())
             .collect();
@@ -108,24 +118,24 @@ mod tests {
         assert_eq!(profile.max_batch_messages(), None);
     }
 
-    fn provider_profile_with_mcp(protocol: &str, options: Option<McpOptions>) -> ProviderProfile {
+    fn provider_profile_with_mcp(protocol: &str, options: Option<McpConfig>) -> ProviderProfile {
         ProviderProfile {
             id: "mcp-profile".to_string(),
             display_name: "MCP profile".to_string(),
             description: "source-owned description".to_string(),
-            endpoints: vec![crate::proto::NetworkEndpoint {
+            endpoints: vec![crate::proto::policy::NetworkEndpoint {
                 host: "mcp.example.com".to_string(),
                 port: 443,
                 protocol: protocol.to_string(),
                 mcp: options,
-                ..crate::proto::NetworkEndpoint::default()
+                ..crate::proto::policy::NetworkEndpoint::default()
             }],
             ..ProviderProfile::default()
         }
     }
 
     #[test]
-    fn provider_profile_mcp_normalization_materializes_omitted_and_empty_versions() {
+    fn provider_profile_mcp_normalization_materializes_only_omitted_versions() {
         let mut omitted = provider_profile_with_mcp("McP", None);
         normalize_provider_profile_mcp_fields(&mut omitted);
         assert_eq!(
@@ -133,16 +143,20 @@ mod tests {
                 .mcp
                 .as_ref()
                 .expect("omitted MCP options must materialize")
-                .versions,
+                .versions
+                .as_ref()
+                .expect("versions must materialize")
+                .values,
             ["2025-11-25"]
         );
 
         let mut empty = provider_profile_with_mcp(
             "mcp",
-            Some(McpOptions {
+            Some(McpConfig {
                 strict_tool_names: Some(false),
                 allow_all_known_mcp_methods: Some(true),
-                versions: Vec::new(),
+                versions: Some(McpVersions { values: Vec::new() }),
+                ..McpConfig::default()
             }),
         );
         normalize_provider_profile_mcp_fields(&mut empty);
@@ -150,11 +164,12 @@ mod tests {
             empty.endpoints[0]
                 .mcp
                 .as_ref()
-                .expect("empty MCP versions must materialize"),
-            &McpOptions {
+                .expect("explicit MCP options remain present"),
+            &McpConfig {
                 strict_tool_names: Some(false),
                 allow_all_known_mcp_methods: Some(true),
-                versions: vec!["2025-11-25".to_string()],
+                versions: Some(McpVersions { values: Vec::new() }),
+                ..McpConfig::default()
             }
         );
     }
@@ -163,14 +178,16 @@ mod tests {
     fn provider_profile_mcp_normalization_canonicalizes_valid_explicit_versions_only() {
         let mut profile = provider_profile_with_mcp(
             "mcp",
-            Some(McpOptions {
+            Some(McpConfig {
                 strict_tool_names: Some(true),
-                versions: vec![
-                    "2025-11-25".to_string(),
-                    "2025-03-26".to_string(),
-                    "2025-06-18".to_string(),
-                ],
-                ..McpOptions::default()
+                versions: Some(McpVersions {
+                    values: vec![
+                        "2025-11-25".to_string(),
+                        "2025-03-26".to_string(),
+                        "2025-06-18".to_string(),
+                    ],
+                }),
+                ..McpConfig::default()
             }),
         );
         let original = profile.clone();
@@ -191,14 +208,16 @@ mod tests {
                 .mcp
                 .as_ref()
                 .expect("valid MCP options"),
-            &McpOptions {
+            &McpConfig {
                 strict_tool_names: Some(true),
-                versions: vec![
-                    "2025-03-26".to_string(),
-                    "2025-06-18".to_string(),
-                    "2025-11-25".to_string(),
-                ],
-                ..McpOptions::default()
+                versions: Some(McpVersions {
+                    values: vec![
+                        "2025-03-26".to_string(),
+                        "2025-06-18".to_string(),
+                        "2025-11-25".to_string(),
+                    ]
+                }),
+                ..McpConfig::default()
             }
         );
     }
@@ -215,9 +234,11 @@ mod tests {
         ] {
             let mut profile = provider_profile_with_mcp(
                 "mcp",
-                Some(McpOptions {
-                    versions: versions.into_iter().map(ToString::to_string).collect(),
-                    ..McpOptions::default()
+                Some(McpConfig {
+                    versions: Some(McpVersions {
+                        values: versions.into_iter().map(ToString::to_string).collect(),
+                    }),
+                    ..McpConfig::default()
                 }),
             );
             let original = profile.clone();
@@ -232,9 +253,11 @@ mod tests {
     fn provider_profile_mcp_normalization_ignores_non_mcp_endpoint_evidence() {
         let mut profile = provider_profile_with_mcp(
             "rest",
-            Some(McpOptions {
-                versions: vec!["latest".to_string()],
-                ..McpOptions::default()
+            Some(McpConfig {
+                versions: Some(McpVersions {
+                    values: vec!["latest".to_string()],
+                }),
+                ..McpConfig::default()
             }),
         );
         let original = profile.clone();

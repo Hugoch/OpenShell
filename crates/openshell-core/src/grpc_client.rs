@@ -36,6 +36,7 @@ use crate::sandbox_env;
 use crate::time::{duration_to_std, timestamp_to_millis};
 use miette::{IntoDiagnostic, Result, WrapErr};
 use openshell_extension_core::{BearerTokenSlot, ExtensionCredentialStore};
+use openshell_policy_schema::AuthoredSandboxPolicy;
 use tonic::Status;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::interceptor::InterceptedService;
@@ -925,7 +926,7 @@ async fn fetch_policy_with_client(
 async fn sync_policy_with_client(
     client: &mut OpenShellClient<AuthedChannel>,
     sandbox: &str,
-    policy: &ProtoSandboxPolicy,
+    policy: &AuthoredSandboxPolicy,
     workspace: &str,
 ) -> Result<()> {
     client
@@ -950,7 +951,7 @@ pub async fn discover_and_sync_policy(
     endpoint: &str,
     sandbox_id: &str,
     sandbox: &str,
-    discovered_policy: &ProtoSandboxPolicy,
+    discovered_policy: &AuthoredSandboxPolicy,
     workspace: &str,
 ) -> Result<ProtoSandboxPolicy> {
     debug!(
@@ -980,7 +981,7 @@ pub async fn discover_and_sync_policy(
 pub async fn sync_policy(
     endpoint: &str,
     sandbox: &str,
-    policy: &ProtoSandboxPolicy,
+    policy: &AuthoredSandboxPolicy,
     workspace: &str,
 ) -> Result<()> {
     debug!(endpoint = %endpoint, sandbox = %sandbox, "Syncing enriched policy to gateway");
@@ -993,7 +994,7 @@ pub async fn sync_policy_and_fetch_snapshot(
     endpoint: &str,
     sandbox_id: &str,
     sandbox: &str,
-    policy: &ProtoSandboxPolicy,
+    policy: &AuthoredSandboxPolicy,
     workspace: &str,
 ) -> Result<SettingsPollResult> {
     let mut client = connect(endpoint).await?;

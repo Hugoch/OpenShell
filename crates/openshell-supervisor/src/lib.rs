@@ -2211,12 +2211,13 @@ async fn load_policy(
             // Sync and re-fetch over a single connection to avoid extra
             // TLS handshakes.
             let ws = snapshot.workspace.clone();
+            let authored_discovered = openshell_policy::project_base_policy(&discovered)?;
             snapshot = grpc_retry("Policy discovery sync", || {
                 openshell_core::grpc_client::sync_policy_and_fetch_snapshot(
                     endpoint,
                     id,
                     sandbox,
-                    &discovered,
+                    &authored_discovered,
                     &ws,
                 )
             })
@@ -2239,11 +2240,12 @@ async fn load_policy(
         let sync_policy = proto_sync_payload_for_enriched_policy(&proto_policy, enriched);
         if let Some(sync_policy) = sync_policy {
             if let Some(sandbox_name) = sandbox.as_deref() {
+                let authored_sync_policy = openshell_policy::project_base_policy(&sync_policy)?;
                 match openshell_core::grpc_client::sync_policy_and_fetch_snapshot(
                     endpoint,
                     id,
                     sandbox_name,
-                    &sync_policy,
+                    &authored_sync_policy,
                     &snapshot.workspace,
                 )
                 .await

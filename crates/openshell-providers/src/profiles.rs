@@ -4,6 +4,7 @@
 //! Declarative provider type profiles.
 
 use openshell_core::mcp::{DEFAULT_MCP_PROTOCOL_VERSION, McpProtocolVersion};
+use openshell_core::proto::policy as authored;
 use openshell_core::proto::{
     GraphqlOperation, L7Allow, L7DenyRule, L7QueryMatcher, L7Rule, McpOptions, NetworkBinary,
     NetworkEndpoint, NetworkPolicyRule, ProviderCredentialRefresh,
@@ -70,6 +71,8 @@ pub enum ProfileError {
         field: String,
         message: String,
     },
+    #[error("provider profile contains an invalid authored policy endpoint: {0}")]
+    InvalidAuthoredEndpoint(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -743,7 +746,13 @@ pub struct ProviderTypeProfile {
 impl ProviderTypeProfile {
     #[must_use]
     pub fn from_proto(profile: &ProviderProfile) -> Self {
-        Self {
+        Self::try_from_proto(profile)
+            .expect("validated provider profile protobuf must satisfy the authored policy schema")
+    }
+
+    /// Convert an untrusted public protobuf profile without panicking.
+    pub fn try_from_proto(profile: &ProviderProfile) -> Result<Self, ProfileError> {
+        Ok(Self {
             id: profile.id.clone(),
             resource_version: profile.resource_version,
             annotations: profile.annotations.clone(),
@@ -770,8 +779,16 @@ impl ProviderTypeProfile {
                     token_grant: credential.token_grant.as_ref().map(token_grant_from_proto),
                 })
                 .collect(),
-            endpoints: profile.endpoints.iter().map(endpoint_from_proto).collect(),
-            binaries: profile.binaries.iter().map(binary_from_proto).collect(),
+            endpoints: profile
+                .endpoints
+                .iter()
+                .map(authored_endpoint_from_proto)
+                .collect::<Result<Vec<_>, _>>()?,
+            binaries: profile
+                .binaries
+                .iter()
+                .map(authored_binary_from_proto)
+                .collect(),
             inference_capable: profile.inference_capable,
             discovery: profile
                 .discovery
@@ -780,7 +797,7 @@ impl ProviderTypeProfile {
                 .unwrap_or_default(),
             source: profile.source.clone(),
             scope: profile.scope.clone(),
-        }
+        })
     }
 
     #[must_use]
@@ -936,8 +953,12 @@ impl ProviderTypeProfile {
                     token_grant: credential.token_grant.as_ref().map(token_grant_to_proto),
                 })
                 .collect(),
-            endpoints: self.endpoints.iter().map(endpoint_to_proto).collect(),
-            binaries: self.binaries.iter().map(binary_to_proto).collect(),
+            endpoints: self
+                .endpoints
+                .iter()
+                .map(authored_endpoint_to_proto)
+                .collect(),
+            binaries: self.binaries.iter().map(authored_binary_to_proto).collect(),
             inference_capable: self.inference_capable,
             discovery: (!discovery_is_empty(&self.discovery))
                 .then(|| discovery_to_proto(&self.discovery)),
@@ -1607,6 +1628,39 @@ fn endpoint_to_proto(endpoint: &EndpointProfile) -> NetworkEndpoint {
     }
 }
 
+fn authored_endpoint_to_proto(endpoint: &EndpointProfile) -> authored::NetworkEndpoint {
+    let rule = NetworkPolicyRule {
+        name: "provider-profile".to_string(),
+        endpoints: vec![endpoint_to_proto(endpoint)],
+        binaries: Vec::new(),
+    };
+    openshell_policy::project_authored_rule("provider-profile", &rule)
+        .expect("validated provider profile endpoint must project to the public policy schema")
+        .endpoints
+        .into_iter()
+        .next()
+        .expect("projected provider profile rule must retain its endpoint")
+}
+
+fn authored_endpoint_from_proto(
+    endpoint: &authored::NetworkEndpoint,
+) -> Result<EndpointProfile, ProfileError> {
+    let rule = authored::NetworkPolicyRule {
+        name: "provider-profile".to_string(),
+        endpoints: vec![endpoint.clone()],
+        binaries: Vec::new(),
+    };
+    let internal = openshell_policy::lower_authored_rule("provider-profile", rule)
+        .map_err(|error| ProfileError::InvalidAuthoredEndpoint(error.to_string()))?;
+    Ok(endpoint_from_proto(internal.endpoints.first().ok_or_else(
+        || {
+            ProfileError::InvalidAuthoredEndpoint(
+                "lowered provider profile rule did not retain its endpoint".to_string(),
+            )
+        },
+    )?))
+}
+
 fn endpoint_from_proto(endpoint: &NetworkEndpoint) -> EndpointProfile {
     let mut profile = EndpointProfile {
         host: endpoint.host.clone(),
@@ -1715,7 +1769,13 @@ fn binary_to_proto(binary: &BinaryProfile) -> NetworkBinary {
     }
 }
 
-fn binary_from_proto(binary: &NetworkBinary) -> BinaryProfile {
+fn authored_binary_to_proto(binary: &BinaryProfile) -> authored::NetworkBinary {
+    authored::NetworkBinary {
+        path: binary.path.clone(),
+    }
+}
+
+fn authored_binary_from_proto(binary: &authored::NetworkBinary) -> BinaryProfile {
     BinaryProfile {
         path: binary.path.clone(),
     }
@@ -4083,7 +4143,8 @@ binaries:
                 .mcp
                 .as_ref()
                 .expect("MCP options")
-                .versions,
+                .versions
+                .as_slice(),
             expected_versions
         );
         let mut proto = profile.to_proto();
@@ -4092,7 +4153,10 @@ binaries:
                 .mcp
                 .as_ref()
                 .expect("MCP options")
-                .versions,
+                .versions
+                .as_ref()
+                .expect("MCP versions")
+                .values,
             expected_versions
         );
         proto.endpoints[0]
@@ -4100,13 +4164,17 @@ binaries:
             .as_mut()
             .expect("MCP options")
             .versions
+            .as_mut()
+            .expect("MCP versions")
+            .values
             .reverse();
         assert_eq!(
             profile.network_policy_rule("provider").endpoints[0]
                 .mcp
                 .as_ref()
                 .expect("MCP options")
-                .versions,
+                .versions
+                .as_slice(),
             expected_versions
         );
 
@@ -4116,7 +4184,8 @@ binaries:
                 .mcp
                 .as_ref()
                 .expect("MCP options")
-                .versions,
+                .versions
+                .as_slice(),
             expected_versions
         );
         assert_eq!(
@@ -4124,7 +4193,10 @@ binaries:
                 .mcp
                 .as_ref()
                 .expect("MCP options")
-                .versions,
+                .versions
+                .as_ref()
+                .expect("MCP versions")
+                .values,
             expected_versions
         );
         assert_eq!(
@@ -4211,7 +4283,7 @@ endpoints:
     }
 
     #[test]
-    fn provider_boundaries_materialize_programmatic_and_protobuf_empty_versions() {
+    fn provider_boundaries_materialize_programmatic_but_reject_public_empty_versions() {
         let mut profile = mcp_profile_for_serialization();
         profile.endpoints[0]
             .mcp
@@ -4259,7 +4331,10 @@ endpoints:
                 .mcp
                 .as_ref()
                 .expect("MCP options")
-                .versions,
+                .versions
+                .as_ref()
+                .expect("MCP versions")
+                .values,
             expected
         );
 
@@ -4269,16 +4344,11 @@ endpoints:
             .as_mut()
             .expect("MCP options")
             .versions
+            .as_mut()
+            .expect("MCP versions")
+            .values
             .clear();
-        let from_proto = ProviderTypeProfile::from_proto(&proto_with_empty_versions);
-        assert_eq!(
-            from_proto.endpoints[0]
-                .mcp
-                .as_ref()
-                .expect("materialized MCP options")
-                .versions,
-            expected
-        );
+        assert!(ProviderTypeProfile::try_from_proto(&proto_with_empty_versions).is_err());
     }
 
     #[test]
@@ -4515,7 +4585,10 @@ endpoints:
                 .mcp
                 .as_ref()
                 .expect("materialized MCP options")
-                .versions,
+                .versions
+                .as_ref()
+                .expect("MCP versions")
+                .values,
             [DEFAULT_MCP_PROTOCOL_VERSION.as_str()]
         );
     }
@@ -5529,7 +5602,6 @@ binaries:
         assert_eq!(rest_ep.allowed_ips, vec!["10.0.0.0/24"]);
         assert!(rest_ep.allow_encoded_slash);
         assert!(rest_ep.allow_uninspected_credentials);
-        assert!(!rest_ep.provider_credentialed);
         assert_eq!(
             rest_ep
                 .rules
@@ -5550,7 +5622,6 @@ binaries:
         assert_eq!(reprotoo.endpoints[1].deny_rules.len(), 1);
         assert_eq!(reprotoo.endpoints[1].ports, vec![443, 8443]);
         assert!(reprotoo.endpoints[1].allow_uninspected_credentials);
-        assert!(!reprotoo.endpoints[1].provider_credentialed);
         assert_eq!(reprotoo.binaries[0].path, "/usr/bin/custom");
     }
 

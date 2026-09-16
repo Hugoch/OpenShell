@@ -40,6 +40,34 @@ before any consumer-specific projection runs. There is no permissive parsing
 profile: unsupported policy fields always invalidate the document. Middleware `config`, query and persisted-query names, and recursive MCP
 parameter names are open user-data maps rather than schema extensions.
 
+The generated `openshell.policy.v1` package is the language-neutral authored
+contract used by the public gateway API and raw SDKs. The gateway lowers that
+message at ingress into the internal `openshell.sandbox.v1` runtime policy and
+projects stored or effective runtime policy back to the public message at
+egress. Compute drivers, the supervisor, policy history payloads, and merge
+execution continue to use the internal representation. Runtime-derived fields
+such as advisor and provider provenance have no public field and their internal
+wire numbers are reserved in the authored endpoint message.
+
+This boundary is part of the new major-version storage contract. Existing
+policy revision rows remain internal and retain their current encoding, but
+persisted `SandboxSpec` and `StoredProviderProfile` records now embed public
+policy messages. The reshaped MCP, matcher, and JSON-RPC messages are not wire
+compatible with records written by earlier versions. Deployments must start
+with a clean gateway database unless a one-time database migration is added
+before release; mixed-version gateway rollouts are unsupported across this
+boundary.
+
+Policy YAML is a compatibility syntax over the public message, not protobuf
+JSON/YAML serialization. A thin schema-owned codec preserves YAML-only
+distinctions such as an absent value versus an explicitly empty message and
+shorthands such as scalar matchers and MCP `tool`. Canonical API round trips may
+normalize those spellings while preserving their authored meaning. Contextual
+validation remains explicit code because rules such as endpoint protocol,
+credential binding, and provider composition depend on more than one message;
+the public proto does not use generated field-validation annotations as an
+enforcement substitute.
+
 Before applying Landlock, the supervisor enriches baseline filesystem paths that
 the runtime needs. Missing baseline paths are skipped so one absent runtime path
 does not weaken the whole ruleset. When GPU devices are present, GPU baseline

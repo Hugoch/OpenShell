@@ -770,9 +770,15 @@ async fn proposal_wait_response(
                         tokio::time::Instant::now() + RELOAD_WAIT_MIN_FLOOR,
                     );
                     match chunk.proposed_rule.as_ref() {
-                        Some(rule) => {
-                            wait_for_local_policy_to_cover(ctx, rule, reload_deadline).await
-                        }
+                        Some(rule) => match openshell_policy::lower_authored_rule(
+                            &chunk.rule_name,
+                            rule.clone(),
+                        ) {
+                            Ok(rule) => {
+                                wait_for_local_policy_to_cover(ctx, &rule, reload_deadline).await
+                            }
+                            Err(_) => false,
+                        },
                         None => false,
                     }
                 } else {
@@ -1068,11 +1074,14 @@ fn policy_chunk_from_add_rule(
         .map(|binary| binary.path.clone())
         .unwrap_or_default();
 
+    let proposed_rule = openshell_policy::project_authored_rule(&rule_name, &rule)
+        .map_err(|error| format!("failed to project proposed rule: {error}"))?;
+
     Ok(PolicyChunk {
         id: String::new(),
         status: "pending".to_string(),
         rule_name,
-        proposed_rule: Some(rule),
+        proposed_rule: Some(proposed_rule),
         rationale: intent_summary.to_string(),
         security_notes: String::new(),
         confidence: 0.75,
@@ -1459,7 +1468,7 @@ mod tests {
         assert_eq!(rule.endpoints[0].port, 443);
         assert_eq!(rule.endpoints[0].ports, vec![443]);
         assert_eq!(rule.endpoints[0].protocol, "rest");
-        assert!(rule.endpoints[0].advisor_proposed);
+        assert!(openshell_policy::lower_authored_rule(&chunks[0].rule_name, rule.clone()).is_ok());
         assert_eq!(rule.binaries[0].path, "/usr/bin/gh");
         assert_eq!(
             rule.endpoints[0].rules[0].allow.as_ref().unwrap().path,
@@ -1989,24 +1998,30 @@ mod tests {
             id: "ignored".to_string(),
             rule_name: "github_write".to_string(),
             binary: "/usr/bin/curl".to_string(),
-            proposed_rule: Some(NetworkPolicyRule {
-                name: "github_write".to_string(),
-                endpoints: vec![NetworkEndpoint {
-                    host: "api.github.com".to_string(),
-                    port: 443,
-                    rules: vec![L7Rule {
-                        allow: Some(L7Allow {
-                            method: "PUT".to_string(),
-                            path: "/repos/foo/bar/contents/x.md".to_string(),
+            proposed_rule: Some(
+                openshell_policy::project_authored_rule(
+                    "github_write",
+                    &NetworkPolicyRule {
+                        name: "github_write".to_string(),
+                        endpoints: vec![NetworkEndpoint {
+                            host: "api.github.com".to_string(),
+                            port: 443,
+                            rules: vec![L7Rule {
+                                allow: Some(L7Allow {
+                                    method: "PUT".to_string(),
+                                    path: "/repos/foo/bar/contents/x.md".to_string(),
+                                    ..Default::default()
+                                }),
+                            }],
                             ..Default::default()
-                        }),
-                    }],
-                    ..Default::default()
-                }],
-                binaries: vec![NetworkBinary {
-                    path: "/usr/bin/curl".to_string(),
-                }],
-            }),
+                        }],
+                        binaries: vec![NetworkBinary {
+                            path: "/usr/bin/curl".to_string(),
+                        }],
+                    },
+                )
+                .unwrap(),
+            ),
             ..Default::default()
         };
         let summary = summarize_chunk_for_audit(&chunk);

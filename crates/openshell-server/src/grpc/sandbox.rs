@@ -428,11 +428,22 @@ async fn handle_create_sandbox_inner(
         template.image = state.compute.default_image().to_string();
     }
 
-    if let Some(ref mut policy) = spec.policy {
-        super::policy::clear_provider_credentialed_markers(policy);
-        validate_no_reserved_provider_policy_keys(policy)?;
-        *policy = validate_and_canonicalize_policy(policy.clone())?;
-    }
+    let internal_policy = spec
+        .policy
+        .take()
+        .map(super::policy::lower_public_policy)
+        .transpose()?
+        .map(|mut policy| {
+            super::policy::clear_provider_credentialed_markers(&mut policy);
+            validate_no_reserved_provider_policy_keys(&policy)?;
+            validate_and_canonicalize_policy(policy)
+        })
+        .transpose()?;
+    spec.policy = internal_policy
+        .as_ref()
+        .map(openshell_policy::project_base_policy)
+        .transpose()
+        .map_err(|error| Status::internal(format!("failed to project public policy: {error}")))?;
 
     // Process identity and MCP default materialization can increase the
     // protobuf size. Recheck the exact canonical spec before any middleware or
@@ -440,7 +451,7 @@ async fn handle_create_sandbox_inner(
     // above so requests that are already oversized still fail before I/O.
     validate_sandbox_spec(&request.name, &spec)?;
 
-    if let Some(ref policy) = spec.policy {
+    if let Some(ref policy) = internal_policy {
         validate_policy_safety(policy)?;
         crate::middleware::validate_policy(state.middleware_registry.as_ref(), policy).await?;
     }
@@ -448,7 +459,7 @@ async fn handle_create_sandbox_inner(
         state,
         &workspace,
         &spec.providers,
-        spec.policy.as_ref(),
+        internal_policy.as_ref(),
     )
     .await?;
 
@@ -1161,11 +1172,16 @@ pub(super) async fn handle_attach_sandbox_provider(
         &candidate_spec.providers,
     )
     .await?;
+    let candidate_internal_policy = candidate_spec
+        .policy
+        .clone()
+        .map(super::policy::lower_public_policy)
+        .transpose()?;
     super::policy::validate_candidate_sandbox_credential_policy(
         state,
         &workspace,
         &candidate_spec.providers,
-        candidate_spec.policy.as_ref(),
+        candidate_internal_policy.as_ref(),
     )
     .await?;
 

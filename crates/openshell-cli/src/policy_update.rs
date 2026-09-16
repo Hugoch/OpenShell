@@ -66,7 +66,10 @@ pub fn build_policy_update_plan(
         merge_operations.push(PolicyMergeOperation {
             operation: Some(policy_merge_operation::Operation::AddRule(AddNetworkRule {
                 rule_name: target_rule_name.clone(),
-                rule: Some(rule.clone()),
+                rule: Some(openshell_policy::project_authored_rule(
+                    &target_rule_name,
+                    &rule,
+                )?),
             })),
         });
         preview_operations.push(PolicyMergeOp::AddRule {
@@ -116,7 +119,10 @@ pub fn build_policy_update_plan(
                 AddAllowRules {
                     host: host.clone(),
                     port,
-                    rules: rules.clone(),
+                    rules: rules
+                        .iter()
+                        .map(openshell_policy::project_authored_l7_rule)
+                        .collect::<Result<Vec<_>>>()?,
                 },
             )),
         });
@@ -129,7 +135,10 @@ pub fn build_policy_update_plan(
                 AddDenyRules {
                     host: host.clone(),
                     port,
-                    deny_rules: deny_rules.clone(),
+                    deny_rules: deny_rules
+                        .iter()
+                        .map(openshell_policy::project_authored_l7_deny_rule)
+                        .collect::<Result<Vec<_>>>()?,
                 },
             )),
         });

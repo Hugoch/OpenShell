@@ -7,6 +7,29 @@
 //! pure schema validation, and lexical policy-path normalization. Runtime and
 //! protobuf adaptation intentionally live in `openshell-policy`.
 
+/// Generated public authored-policy messages.
+pub mod proto {
+    #![allow(
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery,
+        dead_code,
+        unused_imports,
+        unused_qualifications,
+        rust_2018_idioms
+    )]
+
+    include!(concat!(env!("OUT_DIR"), "/openshell.policy.v1.rs"));
+}
+
+mod generated;
+
+pub use generated::{
+    parse_policy_proto, parse_policy_proto_file, policy_proto_to_json_value,
+    serialize_policy_proto, validate_authored_policy,
+};
+pub use proto::SandboxPolicy as AuthoredSandboxPolicy;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;

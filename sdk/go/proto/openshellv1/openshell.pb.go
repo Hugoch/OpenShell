@@ -12,6 +12,7 @@ package openshellv1
 import (
 	datamodelv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	_ "github.com/NVIDIA/OpenShell/sdk/go/proto/optionsv1"
+	policyv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1"
 	sandboxv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -1620,7 +1621,7 @@ type SandboxSpec struct {
 	// Container or VM template used to provision the sandbox.
 	Template *SandboxTemplate `protobuf:"bytes,6,opt,name=template,proto3" json:"template,omitempty"`
 	// Required sandbox policy configuration.
-	Policy *sandboxv1.SandboxPolicy `protobuf:"bytes,7,opt,name=policy,proto3" json:"policy,omitempty"`
+	Policy *policyv1.SandboxPolicy `protobuf:"bytes,7,opt,name=policy,proto3" json:"policy,omitempty"`
 	// Provider names to attach to this sandbox.
 	Providers []string `protobuf:"bytes,8,rep,name=providers,proto3" json:"providers,omitempty"`
 	// Portable resource requirements used by the gateway for driver selection
@@ -1687,7 +1688,7 @@ func (x *SandboxSpec) GetTemplate() *SandboxTemplate {
 	return nil
 }
 
-func (x *SandboxSpec) GetPolicy() *sandboxv1.SandboxPolicy {
+func (x *SandboxSpec) GetPolicy() *policyv1.SandboxPolicy {
 	if x != nil {
 		return x.Policy
 	}
@@ -8029,8 +8030,8 @@ type ProviderProfile struct {
 	Description      string                       `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
 	Category         ProviderProfileCategory      `protobuf:"varint,4,opt,name=category,proto3,enum=openshell.v1.ProviderProfileCategory" json:"category,omitempty"`
 	Credentials      []*ProviderProfileCredential `protobuf:"bytes,5,rep,name=credentials,proto3" json:"credentials,omitempty"`
-	Endpoints        []*sandboxv1.NetworkEndpoint `protobuf:"bytes,6,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
-	Binaries         []*sandboxv1.NetworkBinary   `protobuf:"bytes,7,rep,name=binaries,proto3" json:"binaries,omitempty"`
+	Endpoints        []*policyv1.NetworkEndpoint  `protobuf:"bytes,6,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
+	Binaries         []*policyv1.NetworkBinary    `protobuf:"bytes,7,rep,name=binaries,proto3" json:"binaries,omitempty"`
 	InferenceCapable bool                         `protobuf:"varint,8,opt,name=inference_capable,json=inferenceCapable,proto3" json:"inference_capable,omitempty"`
 	Discovery        *ProviderProfileDiscovery    `protobuf:"bytes,9,opt,name=discovery,proto3" json:"discovery,omitempty"`
 	// Storage resource version for custom profiles. Built-in profiles and new
@@ -8114,14 +8115,14 @@ func (x *ProviderProfile) GetCredentials() []*ProviderProfileCredential {
 	return nil
 }
 
-func (x *ProviderProfile) GetEndpoints() []*sandboxv1.NetworkEndpoint {
+func (x *ProviderProfile) GetEndpoints() []*policyv1.NetworkEndpoint {
 	if x != nil {
 		return x.Endpoints
 	}
 	return nil
 }
 
-func (x *ProviderProfile) GetBinaries() []*sandboxv1.NetworkBinary {
+func (x *ProviderProfile) GetBinaries() []*policyv1.NetworkBinary {
 	if x != nil {
 		return x.Binaries
 	}
@@ -9214,7 +9215,7 @@ type UpdateConfigRequest struct {
 	//
 	// Global scope (`global=true`):
 	// - applies to all sandboxes in full (no merge).
-	Policy *sandboxv1.SandboxPolicy `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
+	Policy *policyv1.SandboxPolicy `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
 	// Optional single setting key to mutate.
 	SettingKey string `protobuf:"bytes,3,opt,name=setting_key,json=settingKey,proto3" json:"setting_key,omitempty"`
 	// Setting value for upsert operations.
@@ -9283,7 +9284,7 @@ func (x *UpdateConfigRequest) GetName() string {
 	return ""
 }
 
-func (x *UpdateConfigRequest) GetPolicy() *sandboxv1.SandboxPolicy {
+func (x *UpdateConfigRequest) GetPolicy() *policyv1.SandboxPolicy {
 	if x != nil {
 		return x.Policy
 	}
@@ -9493,9 +9494,9 @@ func (*PolicyMergeOperation_AddAllowRules) isPolicyMergeOperation_Operation() {}
 func (*PolicyMergeOperation_RemoveBinary) isPolicyMergeOperation_Operation() {}
 
 type AddNetworkRule struct {
-	state         protoimpl.MessageState       `protogen:"open.v1"`
-	RuleName      string                       `protobuf:"bytes,1,opt,name=rule_name,json=ruleName,proto3" json:"rule_name,omitempty"`
-	Rule          *sandboxv1.NetworkPolicyRule `protobuf:"bytes,2,opt,name=rule,proto3" json:"rule,omitempty"`
+	state         protoimpl.MessageState      `protogen:"open.v1"`
+	RuleName      string                      `protobuf:"bytes,1,opt,name=rule_name,json=ruleName,proto3" json:"rule_name,omitempty"`
+	Rule          *policyv1.NetworkPolicyRule `protobuf:"bytes,2,opt,name=rule,proto3" json:"rule,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9537,7 +9538,7 @@ func (x *AddNetworkRule) GetRuleName() string {
 	return ""
 }
 
-func (x *AddNetworkRule) GetRule() *sandboxv1.NetworkPolicyRule {
+func (x *AddNetworkRule) GetRule() *policyv1.NetworkPolicyRule {
 	if x != nil {
 		return x.Rule
 	}
@@ -9649,10 +9650,10 @@ func (x *RemoveNetworkRule) GetRuleName() string {
 }
 
 type AddDenyRules struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Host          string                  `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
-	Port          uint32                  `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
-	DenyRules     []*sandboxv1.L7DenyRule `protobuf:"bytes,3,rep,name=deny_rules,json=denyRules,proto3" json:"deny_rules,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
+	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	DenyRules     []*policyv1.L7DenyRule `protobuf:"bytes,3,rep,name=deny_rules,json=denyRules,proto3" json:"deny_rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9701,7 +9702,7 @@ func (x *AddDenyRules) GetPort() uint32 {
 	return 0
 }
 
-func (x *AddDenyRules) GetDenyRules() []*sandboxv1.L7DenyRule {
+func (x *AddDenyRules) GetDenyRules() []*policyv1.L7DenyRule {
 	if x != nil {
 		return x.DenyRules
 	}
@@ -9712,7 +9713,7 @@ type AddAllowRules struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
 	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
-	Rules         []*sandboxv1.L7Rule    `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	Rules         []*policyv1.L7Rule     `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9761,7 +9762,7 @@ func (x *AddAllowRules) GetPort() uint32 {
 	return 0
 }
 
-func (x *AddAllowRules) GetRules() []*sandboxv1.L7Rule {
+func (x *AddAllowRules) GetRules() []*policyv1.L7Rule {
 	if x != nil {
 		return x.Rules
 	}
@@ -10303,7 +10304,7 @@ type SandboxPolicyRevision struct {
 	// Time when this revision was loaded by the sandbox. Absent if not loaded.
 	LoadedTime *timestamppb.Timestamp `protobuf:"bytes,106,opt,name=loaded_time,json=loadedTime,proto3" json:"loaded_time,omitempty"`
 	// The full policy (only populated when explicitly requested).
-	Policy *sandboxv1.SandboxPolicy `protobuf:"bytes,7,opt,name=policy,proto3" json:"policy,omitempty"`
+	Policy *policyv1.SandboxPolicy `protobuf:"bytes,7,opt,name=policy,proto3" json:"policy,omitempty"`
 	// Immutable provenance supplied with this policy revision.
 	Provenance    map[string]string `protobuf:"bytes,8,rep,name=provenance,proto3" json:"provenance,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
@@ -10382,7 +10383,7 @@ func (x *SandboxPolicyRevision) GetLoadedTime() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *SandboxPolicyRevision) GetPolicy() *sandboxv1.SandboxPolicy {
+func (x *SandboxPolicyRevision) GetPolicy() *policyv1.SandboxPolicy {
 	if x != nil {
 		return x.Policy
 	}
@@ -12144,7 +12145,7 @@ type PolicyChunk struct {
 	// Proposed network_policies map key.
 	RuleName string `protobuf:"bytes,3,opt,name=rule_name,json=ruleName,proto3" json:"rule_name,omitempty"`
 	// The proposed network policy rule.
-	ProposedRule *sandboxv1.NetworkPolicyRule `protobuf:"bytes,4,opt,name=proposed_rule,json=proposedRule,proto3" json:"proposed_rule,omitempty"`
+	ProposedRule *policyv1.NetworkPolicyRule `protobuf:"bytes,4,opt,name=proposed_rule,json=proposedRule,proto3" json:"proposed_rule,omitempty"`
 	// Human-readable explanation of why this rule is proposed.
 	Rationale string `protobuf:"bytes,5,opt,name=rationale,proto3" json:"rationale,omitempty"`
 	// Security concerns flagged by analysis (empty if none).
@@ -12190,8 +12191,8 @@ type PolicyChunk struct {
 	CandidateEffectivePolicyHash string `protobuf:"bytes,22,opt,name=candidate_effective_policy_hash,json=candidateEffectivePolicyHash,proto3" json:"candidate_effective_policy_hash,omitempty"`
 	// Complete effective policies used for review. These contain policy
 	// configuration only; credential secret values are never materialized.
-	CurrentEffectivePolicy   *sandboxv1.SandboxPolicy `protobuf:"bytes,23,opt,name=current_effective_policy,json=currentEffectivePolicy,proto3" json:"current_effective_policy,omitempty"`
-	CandidateEffectivePolicy *sandboxv1.SandboxPolicy `protobuf:"bytes,24,opt,name=candidate_effective_policy,json=candidateEffectivePolicy,proto3" json:"candidate_effective_policy,omitempty"`
+	CurrentEffectivePolicy   *policyv1.SandboxPolicy `protobuf:"bytes,23,opt,name=current_effective_policy,json=currentEffectivePolicy,proto3" json:"current_effective_policy,omitempty"`
+	CandidateEffectivePolicy *policyv1.SandboxPolicy `protobuf:"bytes,24,opt,name=candidate_effective_policy,json=candidateEffectivePolicy,proto3" json:"candidate_effective_policy,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -12247,7 +12248,7 @@ func (x *PolicyChunk) GetRuleName() string {
 	return ""
 }
 
-func (x *PolicyChunk) GetProposedRule() *sandboxv1.NetworkPolicyRule {
+func (x *PolicyChunk) GetProposedRule() *policyv1.NetworkPolicyRule {
 	if x != nil {
 		return x.ProposedRule
 	}
@@ -12380,14 +12381,14 @@ func (x *PolicyChunk) GetCandidateEffectivePolicyHash() string {
 	return ""
 }
 
-func (x *PolicyChunk) GetCurrentEffectivePolicy() *sandboxv1.SandboxPolicy {
+func (x *PolicyChunk) GetCurrentEffectivePolicy() *policyv1.SandboxPolicy {
 	if x != nil {
 		return x.CurrentEffectivePolicy
 	}
 	return nil
 }
 
-func (x *PolicyChunk) GetCandidateEffectivePolicy() *sandboxv1.SandboxPolicy {
+func (x *PolicyChunk) GetCandidateEffectivePolicy() *policyv1.SandboxPolicy {
 	if x != nil {
 		return x.CandidateEffectivePolicy
 	}
@@ -13218,7 +13219,7 @@ type EditDraftChunkRequest struct {
 	// Chunk ID to edit.
 	ChunkId string `protobuf:"bytes,2,opt,name=chunk_id,json=chunkId,proto3" json:"chunk_id,omitempty"`
 	// The modified rule (replaces existing proposed_rule).
-	ProposedRule *sandboxv1.NetworkPolicyRule `protobuf:"bytes,3,opt,name=proposed_rule,json=proposedRule,proto3" json:"proposed_rule,omitempty"`
+	ProposedRule *policyv1.NetworkPolicyRule `protobuf:"bytes,3,opt,name=proposed_rule,json=proposedRule,proto3" json:"proposed_rule,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,5,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -13269,7 +13270,7 @@ func (x *EditDraftChunkRequest) GetChunkId() string {
 	return ""
 }
 
-func (x *EditDraftChunkRequest) GetProposedRule() *sandboxv1.NetworkPolicyRule {
+func (x *EditDraftChunkRequest) GetProposedRule() *policyv1.NetworkPolicyRule {
 	if x != nil {
 		return x.ProposedRule
 	}
@@ -14882,7 +14883,7 @@ var File_openshell_proto protoreflect.FileDescriptor
 
 const file_openshell_proto_rawDesc = "" +
 	"\n" +
-	"\x0fopenshell.proto\x12\fopenshell.v1\x1a\x0fdatamodel.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\roptions.proto\x1a\rsandbox.proto\"\x1a\n" +
+	"\x0fopenshell.proto\x12\fopenshell.v1\x1a\x0fdatamodel.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\roptions.proto\x1a\fpolicy.proto\x1a\rsandbox.proto\"\x1a\n" +
 	"\x18IssueSandboxTokenRequest\"\x91\x01\n" +
 	"\x19IssueSandboxTokenResponse\x12\x1a\n" +
 	"\x05token\x18\x01 \x01(\tB\x04\x88\xb5\x18\x01R\x05token\x12C\n" +
@@ -14937,12 +14938,12 @@ const file_openshell_proto_rawDesc = "" +
 	"\bmetadata\x18\x01 \x01(\v2\".openshell.datamodel.v1.ObjectMetaR\bmetadata\x12-\n" +
 	"\x04spec\x18\x02 \x01(\v2\x19.openshell.v1.SandboxSpecR\x04spec\x123\n" +
 	"\x06status\x18\x03 \x01(\v2\x1b.openshell.v1.SandboxStatusR\x06status\x12t\n" +
-	"\x1ecreated_from_workload_template\x18\x14 \x01(\v2/.openshell.v1.SandboxWorkloadTemplateProvenanceR\x1bcreatedFromWorkloadTemplateJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x05phaseR\x16current_policy_version\"\x83\x04\n" +
+	"\x1ecreated_from_workload_template\x18\x14 \x01(\v2/.openshell.v1.SandboxWorkloadTemplateProvenanceR\x1bcreatedFromWorkloadTemplateJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x05phaseR\x16current_policy_version\"\x82\x04\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\tlog_level\x18\x01 \x01(\tR\blogLevel\x12L\n" +
 	"\venvironment\x18\x05 \x03(\v2*.openshell.v1.SandboxSpec.EnvironmentEntryR\venvironment\x129\n" +
-	"\btemplate\x18\x06 \x01(\v2\x1d.openshell.v1.SandboxTemplateR\btemplate\x12;\n" +
-	"\x06policy\x18\a \x01(\v2#.openshell.sandbox.v1.SandboxPolicyR\x06policy\x12\x1c\n" +
+	"\btemplate\x18\x06 \x01(\v2\x1d.openshell.v1.SandboxTemplateR\btemplate\x12:\n" +
+	"\x06policy\x18\a \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x06policy\x12\x1c\n" +
 	"\tproviders\x18\b \x03(\tR\tproviders\x12W\n" +
 	"\x15resource_requirements\x18\t \x01(\v2\".openshell.v1.ResourceRequirementsR\x14resourceRequirements\x12\x18\n" +
 	"\acommand\x18\f \x03(\tR\acommand\x12\x10\n" +
@@ -15441,15 +15442,15 @@ const file_openshell_proto_rawDesc = "" +
 	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12#\n" +
 	"\rallow_missing\x18\x05 \x01(\bR\fallowMissingJ\x04\b\x03\x10\x04R\tworkspace\"g\n" +
 	"\x1dDeleteProviderRefreshResponse\x127\n" +
-	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\adeleted\"\xd8\x05\n" +
+	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\adeleted\"\xd6\x05\n" +
 	"\x0fProviderProfile\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12A\n" +
 	"\bcategory\x18\x04 \x01(\x0e2%.openshell.v1.ProviderProfileCategoryR\bcategory\x12I\n" +
-	"\vcredentials\x18\x05 \x03(\v2'.openshell.v1.ProviderProfileCredentialR\vcredentials\x12C\n" +
-	"\tendpoints\x18\x06 \x03(\v2%.openshell.sandbox.v1.NetworkEndpointR\tendpoints\x12?\n" +
-	"\bbinaries\x18\a \x03(\v2#.openshell.sandbox.v1.NetworkBinaryR\bbinaries\x12+\n" +
+	"\vcredentials\x18\x05 \x03(\v2'.openshell.v1.ProviderProfileCredentialR\vcredentials\x12B\n" +
+	"\tendpoints\x18\x06 \x03(\v2$.openshell.policy.v1.NetworkEndpointR\tendpoints\x12>\n" +
+	"\bbinaries\x18\a \x03(\v2\".openshell.policy.v1.NetworkBinaryR\bbinaries\x12+\n" +
 	"\x11inference_capable\x18\b \x01(\bR\x10inferenceCapable\x12D\n" +
 	"\tdiscovery\x18\t \x01(\v2&.openshell.v1.ProviderProfileDiscoveryR\tdiscovery\x12)\n" +
 	"\x10resource_version\x18\n" +
@@ -15537,10 +15538,10 @@ const file_openshell_proto_rawDesc = "" +
 	"\rexpires_after\x18f \x01(\v2\x19.google.protobuf.DurationR\fexpiresAfter\x12\x1d\n" +
 	"\n" +
 	"token_type\x18\x03 \x01(\tR\ttokenTypeJ\x04\b\x02\x10\x03R\n" +
-	"expires_in\"\x95\x05\n" +
+	"expires_in\"\x94\x05\n" +
 	"\x13UpdateConfigRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12;\n" +
-	"\x06policy\x18\x02 \x01(\v2#.openshell.sandbox.v1.SandboxPolicyR\x06policy\x12\x1f\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12:\n" +
+	"\x06policy\x18\x02 \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x06policy\x12\x1f\n" +
 	"\vsetting_key\x18\x03 \x01(\tR\n" +
 	"settingKey\x12G\n" +
 	"\rsetting_value\x18\x04 \x01(\v2\".openshell.sandbox.v1.SettingValueR\fsettingValue\x12%\n" +
@@ -15562,25 +15563,25 @@ const file_openshell_proto_rawDesc = "" +
 	"\x0eadd_deny_rules\x18\x04 \x01(\v2\x1a.openshell.v1.AddDenyRulesH\x00R\faddDenyRules\x12E\n" +
 	"\x0fadd_allow_rules\x18\x05 \x01(\v2\x1b.openshell.v1.AddAllowRulesH\x00R\raddAllowRules\x12H\n" +
 	"\rremove_binary\x18\x06 \x01(\v2!.openshell.v1.RemoveNetworkBinaryH\x00R\fremoveBinaryB\v\n" +
-	"\toperation\"j\n" +
+	"\toperation\"i\n" +
 	"\x0eAddNetworkRule\x12\x1b\n" +
-	"\trule_name\x18\x01 \x01(\tR\bruleName\x12;\n" +
-	"\x04rule\x18\x02 \x01(\v2'.openshell.sandbox.v1.NetworkPolicyRuleR\x04rule\"\\\n" +
+	"\trule_name\x18\x01 \x01(\tR\bruleName\x12:\n" +
+	"\x04rule\x18\x02 \x01(\v2&.openshell.policy.v1.NetworkPolicyRuleR\x04rule\"\\\n" +
 	"\x15RemoveNetworkEndpoint\x12\x1b\n" +
 	"\trule_name\x18\x01 \x01(\tR\bruleName\x12\x12\n" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x03 \x01(\rR\x04port\"0\n" +
 	"\x11RemoveNetworkRule\x12\x1b\n" +
-	"\trule_name\x18\x01 \x01(\tR\bruleName\"w\n" +
+	"\trule_name\x18\x01 \x01(\tR\bruleName\"v\n" +
 	"\fAddDenyRules\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\x12?\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x12>\n" +
 	"\n" +
-	"deny_rules\x18\x03 \x03(\v2 .openshell.sandbox.v1.L7DenyRuleR\tdenyRules\"k\n" +
+	"deny_rules\x18\x03 \x03(\v2\x1f.openshell.policy.v1.L7DenyRuleR\tdenyRules\"j\n" +
 	"\rAddAllowRules\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\x122\n" +
-	"\x05rules\x18\x03 \x03(\v2\x1c.openshell.sandbox.v1.L7RuleR\x05rules\"S\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x121\n" +
+	"\x05rules\x18\x03 \x03(\v2\x1b.openshell.policy.v1.L7RuleR\x05rules\"S\n" +
 	"\x13RemoveNetworkBinary\x12\x1b\n" +
 	"\trule_name\x18\x01 \x01(\tR\bruleName\x12\x1f\n" +
 	"\vbinary_path\x18\x02 \x01(\tR\n" +
@@ -15620,7 +15621,7 @@ const file_openshell_proto_rawDesc = "" +
 	"\x06status\x18\x03 \x01(\x0e2\x1a.openshell.v1.PolicyStatusR\x06status\x12\x1d\n" +
 	"\n" +
 	"load_error\x18\x04 \x01(\tR\tloadError\"\x1c\n" +
-	"\x1aReportPolicyStatusResponse\"\x9b\x04\n" +
+	"\x1aReportPolicyStatusResponse\"\x9a\x04\n" +
 	"\x15SandboxPolicyRevision\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12\x1f\n" +
 	"\vpolicy_hash\x18\x02 \x01(\tR\n" +
@@ -15630,8 +15631,8 @@ const file_openshell_proto_rawDesc = "" +
 	"load_error\x18\x04 \x01(\tR\tloadError\x12=\n" +
 	"\fcreated_time\x18i \x01(\v2\x1a.google.protobuf.TimestampR\vcreatedTime\x12;\n" +
 	"\vloaded_time\x18j \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"loadedTime\x12;\n" +
-	"\x06policy\x18\a \x01(\v2#.openshell.sandbox.v1.SandboxPolicyR\x06policy\x12S\n" +
+	"loadedTime\x12:\n" +
+	"\x06policy\x18\a \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x06policy\x12S\n" +
 	"\n" +
 	"provenance\x18\b \x03(\v23.openshell.v1.SandboxPolicyRevision.ProvenanceEntryR\n" +
 	"provenance\x1a=\n" +
@@ -15763,12 +15764,12 @@ const file_openshell_proto_rawDesc = "" +
 	"\x16NetworkActivitySummary\x124\n" +
 	"\x16network_activity_count\x18\x01 \x01(\rR\x14networkActivityCount\x12.\n" +
 	"\x13denied_action_count\x18\x02 \x01(\rR\x11deniedActionCount\x12H\n" +
-	"\x10denials_by_group\x18\x03 \x03(\v2\x1e.openshell.v1.DenialGroupCountR\x0edenialsByGroup\"\xf9\t\n" +
+	"\x10denials_by_group\x18\x03 \x03(\v2\x1e.openshell.v1.DenialGroupCountR\x0edenialsByGroup\"\xf6\t\n" +
 	"\vPolicyChunk\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1b\n" +
-	"\trule_name\x18\x03 \x01(\tR\bruleName\x12L\n" +
-	"\rproposed_rule\x18\x04 \x01(\v2'.openshell.sandbox.v1.NetworkPolicyRuleR\fproposedRule\x12\x1c\n" +
+	"\trule_name\x18\x03 \x01(\tR\bruleName\x12K\n" +
+	"\rproposed_rule\x18\x04 \x01(\v2&.openshell.policy.v1.NetworkPolicyRuleR\fproposedRule\x12\x1c\n" +
 	"\trationale\x18\x05 \x01(\tR\trationale\x12%\n" +
 	"\x0esecurity_notes\x18\x06 \x01(\tR\rsecurityNotes\x12\x1e\n" +
 	"\n" +
@@ -15788,9 +15789,9 @@ const file_openshell_proto_rawDesc = "" +
 	"\x11application_error\x18\x13 \x01(\tR\x10applicationError\x12!\n" +
 	"\freview_token\x18\x14 \x01(\tR\vreviewToken\x12A\n" +
 	"\x1dcurrent_effective_policy_hash\x18\x15 \x01(\tR\x1acurrentEffectivePolicyHash\x12E\n" +
-	"\x1fcandidate_effective_policy_hash\x18\x16 \x01(\tR\x1ccandidateEffectivePolicyHash\x12]\n" +
-	"\x18current_effective_policy\x18\x17 \x01(\v2#.openshell.sandbox.v1.SandboxPolicyR\x16currentEffectivePolicy\x12a\n" +
-	"\x1acandidate_effective_policy\x18\x18 \x01(\v2#.openshell.sandbox.v1.SandboxPolicyR\x18candidateEffectivePolicyJ\x04\b\t\x10\n" +
+	"\x1fcandidate_effective_policy_hash\x18\x16 \x01(\tR\x1ccandidateEffectivePolicyHash\x12\\\n" +
+	"\x18current_effective_policy\x18\x17 \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x16currentEffectivePolicy\x12`\n" +
+	"\x1acandidate_effective_policy\x18\x18 \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x18candidateEffectivePolicyJ\x04\b\t\x10\n" +
 	"J\x04\b\n" +
 	"\x10\vJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\rcreated_at_msR\rdecided_at_msR\rfirst_seen_msR\flast_seen_ms\"\x96\x01\n" +
 	"\x11DraftPolicyUpdate\x12#\n" +
@@ -15848,11 +15849,11 @@ const file_openshell_proto_rawDesc = "" +
 	"\vpolicy_hash\x18\x02 \x01(\tR\n" +
 	"policyHash\x12'\n" +
 	"\x0fchunks_approved\x18\x03 \x01(\rR\x0echunksApproved\x12%\n" +
-	"\x0echunks_skipped\x18\x04 \x01(\rR\rchunksSkipped\"\xf9\x01\n" +
+	"\x0echunks_skipped\x18\x04 \x01(\rR\rchunksSkipped\"\xf8\x01\n" +
 	"\x15EditDraftChunkRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
-	"\bchunk_id\x18\x02 \x01(\tR\achunkId\x12L\n" +
-	"\rproposed_rule\x18\x03 \x01(\v2'.openshell.sandbox.v1.NetworkPolicyRuleR\fproposedRule\x12R\n" +
+	"\bchunk_id\x18\x02 \x01(\tR\achunkId\x12K\n" +
+	"\rproposed_rule\x18\x03 \x01(\v2&.openshell.policy.v1.NetworkPolicyRuleR\fproposedRule\x12R\n" +
 	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x04\x10\x05R\tworkspace\"\x18\n" +
 	"\x16EditDraftChunkResponse\"\xab\x01\n" +
 	"\x15UndoDraftChunkRequest\x12\x12\n" +
@@ -16440,17 +16441,17 @@ var file_openshell_proto_goTypes = []any{
 	nil,                                                  // 241: openshell.v1.CreateWorkspaceRequest.LabelsEntry
 	(*timestamppb.Timestamp)(nil),                        // 242: google.protobuf.Timestamp
 	(*datamodelv1.ObjectMeta)(nil),                       // 243: openshell.datamodel.v1.ObjectMeta
-	(*sandboxv1.SandboxPolicy)(nil),                      // 244: openshell.sandbox.v1.SandboxPolicy
+	(*policyv1.SandboxPolicy)(nil),                       // 244: openshell.policy.v1.SandboxPolicy
 	(*structpb.Struct)(nil),                              // 245: google.protobuf.Struct
 	(*durationpb.Duration)(nil),                          // 246: google.protobuf.Duration
 	(*datamodelv1.WorkspaceSelector)(nil),                // 247: openshell.datamodel.v1.WorkspaceSelector
 	(*datamodelv1.Provider)(nil),                         // 248: openshell.datamodel.v1.Provider
-	(*sandboxv1.NetworkEndpoint)(nil),                    // 249: openshell.sandbox.v1.NetworkEndpoint
-	(*sandboxv1.NetworkBinary)(nil),                      // 250: openshell.sandbox.v1.NetworkBinary
+	(*policyv1.NetworkEndpoint)(nil),                     // 249: openshell.policy.v1.NetworkEndpoint
+	(*policyv1.NetworkBinary)(nil),                       // 250: openshell.policy.v1.NetworkBinary
 	(*sandboxv1.SettingValue)(nil),                       // 251: openshell.sandbox.v1.SettingValue
-	(*sandboxv1.NetworkPolicyRule)(nil),                  // 252: openshell.sandbox.v1.NetworkPolicyRule
-	(*sandboxv1.L7DenyRule)(nil),                         // 253: openshell.sandbox.v1.L7DenyRule
-	(*sandboxv1.L7Rule)(nil),                             // 254: openshell.sandbox.v1.L7Rule
+	(*policyv1.NetworkPolicyRule)(nil),                   // 252: openshell.policy.v1.NetworkPolicyRule
+	(*policyv1.L7DenyRule)(nil),                          // 253: openshell.policy.v1.L7DenyRule
+	(*policyv1.L7Rule)(nil),                              // 254: openshell.policy.v1.L7Rule
 	(*datamodelv1.Workspace)(nil),                        // 255: openshell.datamodel.v1.Workspace
 	(*sandboxv1.GetSandboxConfigRequest)(nil),            // 256: openshell.sandbox.v1.GetSandboxConfigRequest
 	(*sandboxv1.GetGatewayConfigRequest)(nil),            // 257: openshell.sandbox.v1.GetGatewayConfigRequest
@@ -16476,7 +16477,7 @@ var file_openshell_proto_depIdxs = []int32{
 	37,  // 15: openshell.v1.Sandbox.created_from_workload_template:type_name -> openshell.v1.SandboxWorkloadTemplateProvenance
 	221, // 16: openshell.v1.SandboxSpec.environment:type_name -> openshell.v1.SandboxSpec.EnvironmentEntry
 	30,  // 17: openshell.v1.SandboxSpec.template:type_name -> openshell.v1.SandboxTemplate
-	244, // 18: openshell.v1.SandboxSpec.policy:type_name -> openshell.sandbox.v1.SandboxPolicy
+	244, // 18: openshell.v1.SandboxSpec.policy:type_name -> openshell.policy.v1.SandboxPolicy
 	28,  // 19: openshell.v1.SandboxSpec.resource_requirements:type_name -> openshell.v1.ResourceRequirements
 	29,  // 20: openshell.v1.ResourceRequirements.gpu:type_name -> openshell.v1.GpuResourceRequirements
 	222, // 21: openshell.v1.SandboxTemplate.labels:type_name -> openshell.v1.SandboxTemplate.LabelsEntry
@@ -16599,8 +16600,8 @@ var file_openshell_proto_depIdxs = []int32{
 	8,   // 138: openshell.v1.DeleteProviderRefreshResponse.outcome:type_name -> openshell.v1.DeletionOutcome
 	3,   // 139: openshell.v1.ProviderProfile.category:type_name -> openshell.v1.ProviderProfileCategory
 	105, // 140: openshell.v1.ProviderProfile.credentials:type_name -> openshell.v1.ProviderProfileCredential
-	249, // 141: openshell.v1.ProviderProfile.endpoints:type_name -> openshell.sandbox.v1.NetworkEndpoint
-	250, // 142: openshell.v1.ProviderProfile.binaries:type_name -> openshell.sandbox.v1.NetworkBinary
+	249, // 141: openshell.v1.ProviderProfile.endpoints:type_name -> openshell.policy.v1.NetworkEndpoint
+	250, // 142: openshell.v1.ProviderProfile.binaries:type_name -> openshell.policy.v1.NetworkBinary
 	110, // 143: openshell.v1.ProviderProfile.discovery:type_name -> openshell.v1.ProviderProfileDiscovery
 	233, // 144: openshell.v1.ProviderProfile.annotations:type_name -> openshell.v1.ProviderProfile.AnnotationsEntry
 	119, // 145: openshell.v1.ProviderProfileResponse.profile:type_name -> openshell.v1.ProviderProfile
@@ -16621,7 +16622,7 @@ var file_openshell_proto_depIdxs = []int32{
 	236, // 160: openshell.v1.GetSandboxProviderEnvironmentResponse.dynamic_credentials:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry
 	237, // 161: openshell.v1.GetSandboxProviderEnvironmentResponse.static_credential_bindings:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry
 	246, // 162: openshell.v1.ExchangeProviderSubjectTokenResponse.expires_after:type_name -> google.protobuf.Duration
-	244, // 163: openshell.v1.UpdateConfigRequest.policy:type_name -> openshell.sandbox.v1.SandboxPolicy
+	244, // 163: openshell.v1.UpdateConfigRequest.policy:type_name -> openshell.policy.v1.SandboxPolicy
 	251, // 164: openshell.v1.UpdateConfigRequest.setting_value:type_name -> openshell.sandbox.v1.SettingValue
 	138, // 165: openshell.v1.UpdateConfigRequest.merge_operations:type_name -> openshell.v1.PolicyMergeOperation
 	238, // 166: openshell.v1.UpdateConfigRequest.annotations:type_name -> openshell.v1.UpdateConfigRequest.AnnotationsEntry
@@ -16632,9 +16633,9 @@ var file_openshell_proto_depIdxs = []int32{
 	142, // 171: openshell.v1.PolicyMergeOperation.add_deny_rules:type_name -> openshell.v1.AddDenyRules
 	143, // 172: openshell.v1.PolicyMergeOperation.add_allow_rules:type_name -> openshell.v1.AddAllowRules
 	144, // 173: openshell.v1.PolicyMergeOperation.remove_binary:type_name -> openshell.v1.RemoveNetworkBinary
-	252, // 174: openshell.v1.AddNetworkRule.rule:type_name -> openshell.sandbox.v1.NetworkPolicyRule
-	253, // 175: openshell.v1.AddDenyRules.deny_rules:type_name -> openshell.sandbox.v1.L7DenyRule
-	254, // 176: openshell.v1.AddAllowRules.rules:type_name -> openshell.sandbox.v1.L7Rule
+	252, // 174: openshell.v1.AddNetworkRule.rule:type_name -> openshell.policy.v1.NetworkPolicyRule
+	253, // 175: openshell.v1.AddDenyRules.deny_rules:type_name -> openshell.policy.v1.L7DenyRule
+	254, // 176: openshell.v1.AddAllowRules.rules:type_name -> openshell.policy.v1.L7Rule
 	239, // 177: openshell.v1.UpdateConfigResponse.annotations:type_name -> openshell.v1.UpdateConfigResponse.AnnotationsEntry
 	247, // 178: openshell.v1.GetSandboxPolicyStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
 	152, // 179: openshell.v1.GetSandboxPolicyStatusResponse.revision:type_name -> openshell.v1.SandboxPolicyRevision
@@ -16644,7 +16645,7 @@ var file_openshell_proto_depIdxs = []int32{
 	4,   // 183: openshell.v1.SandboxPolicyRevision.status:type_name -> openshell.v1.PolicyStatus
 	242, // 184: openshell.v1.SandboxPolicyRevision.created_time:type_name -> google.protobuf.Timestamp
 	242, // 185: openshell.v1.SandboxPolicyRevision.loaded_time:type_name -> google.protobuf.Timestamp
-	244, // 186: openshell.v1.SandboxPolicyRevision.policy:type_name -> openshell.sandbox.v1.SandboxPolicy
+	244, // 186: openshell.v1.SandboxPolicyRevision.policy:type_name -> openshell.policy.v1.SandboxPolicy
 	240, // 187: openshell.v1.SandboxPolicyRevision.provenance:type_name -> openshell.v1.SandboxPolicyRevision.ProvenanceEntry
 	242, // 188: openshell.v1.GetSandboxLogsRequest.since_time:type_name -> google.protobuf.Timestamp
 	247, // 189: openshell.v1.GetSandboxLogsRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
@@ -16667,13 +16668,13 @@ var file_openshell_proto_depIdxs = []int32{
 	242, // 206: openshell.v1.DenialSummary.last_seen_time:type_name -> google.protobuf.Timestamp
 	175, // 207: openshell.v1.DenialSummary.l7_request_samples:type_name -> openshell.v1.L7RequestSample
 	177, // 208: openshell.v1.NetworkActivitySummary.denials_by_group:type_name -> openshell.v1.DenialGroupCount
-	252, // 209: openshell.v1.PolicyChunk.proposed_rule:type_name -> openshell.sandbox.v1.NetworkPolicyRule
+	252, // 209: openshell.v1.PolicyChunk.proposed_rule:type_name -> openshell.policy.v1.NetworkPolicyRule
 	242, // 210: openshell.v1.PolicyChunk.created_time:type_name -> google.protobuf.Timestamp
 	242, // 211: openshell.v1.PolicyChunk.decided_time:type_name -> google.protobuf.Timestamp
 	242, // 212: openshell.v1.PolicyChunk.first_seen_time:type_name -> google.protobuf.Timestamp
 	242, // 213: openshell.v1.PolicyChunk.last_seen_time:type_name -> google.protobuf.Timestamp
-	244, // 214: openshell.v1.PolicyChunk.current_effective_policy:type_name -> openshell.sandbox.v1.SandboxPolicy
-	244, // 215: openshell.v1.PolicyChunk.candidate_effective_policy:type_name -> openshell.sandbox.v1.SandboxPolicy
+	244, // 214: openshell.v1.PolicyChunk.current_effective_policy:type_name -> openshell.policy.v1.SandboxPolicy
+	244, // 215: openshell.v1.PolicyChunk.candidate_effective_policy:type_name -> openshell.policy.v1.SandboxPolicy
 	176, // 216: openshell.v1.SubmitPolicyAnalysisRequest.summaries:type_name -> openshell.v1.DenialSummary
 	179, // 217: openshell.v1.SubmitPolicyAnalysisRequest.proposed_chunks:type_name -> openshell.v1.PolicyChunk
 	178, // 218: openshell.v1.SubmitPolicyAnalysisRequest.network_activity_summaries:type_name -> openshell.v1.NetworkActivitySummary
@@ -16684,7 +16685,7 @@ var file_openshell_proto_depIdxs = []int32{
 	247, // 223: openshell.v1.RejectDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
 	189, // 224: openshell.v1.ApproveAllDraftChunksRequest.approvals:type_name -> openshell.v1.DraftChunkApproval
 	247, // 225: openshell.v1.ApproveAllDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	252, // 226: openshell.v1.EditDraftChunkRequest.proposed_rule:type_name -> openshell.sandbox.v1.NetworkPolicyRule
+	252, // 226: openshell.v1.EditDraftChunkRequest.proposed_rule:type_name -> openshell.policy.v1.NetworkPolicyRule
 	247, // 227: openshell.v1.EditDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
 	247, // 228: openshell.v1.UndoDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
 	247, // 229: openshell.v1.ClearDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector

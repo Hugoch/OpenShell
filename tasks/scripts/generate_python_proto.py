@@ -12,6 +12,7 @@ PROTO_FILES = [
     "proto/openshell.proto",
     "proto/datamodel.proto",
     "proto/options.proto",
+    "proto/policy.proto",
     "proto/sandbox.proto",
 ]
 
@@ -34,6 +35,10 @@ LINE_REWRITES = {
         (
             r"^import options_pb2 as options__pb2$",
             "from . import options_pb2 as options__pb2",
+        ),
+        (
+            r"^import policy_pb2 as policy__pb2$",
+            "from . import policy_pb2 as policy__pb2",
         ),
         (
             r"^import sandbox_pb2 as sandbox__pb2$",

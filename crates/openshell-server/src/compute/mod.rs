@@ -4139,6 +4139,16 @@ fn driver_sandbox_spec_from_public(
     spec: &SandboxSpec,
     driver_name: &str,
 ) -> Result<DriverSandboxSpec, Box<Status>> {
+    let policy = spec
+        .policy
+        .clone()
+        .map(openshell_policy::lower_authored_policy)
+        .transpose()
+        .map_err(|error| {
+            Box::new(Status::invalid_argument(format!(
+                "invalid authored policy: {error}"
+            )))
+        })?;
     Ok(DriverSandboxSpec {
         log_level: spec.log_level.clone(),
         environment: spec.environment.clone(),
@@ -4147,7 +4157,7 @@ fn driver_sandbox_spec_from_public(
             .as_ref()
             .map(|template| driver_sandbox_template_from_public(template, driver_name))
             .transpose()?,
-        policy: spec.policy.clone(),
+        policy: policy.clone(),
         resource_requirements: spec.resource_requirements.as_ref().map(|requirements| {
             DriverSandboxResourceRequirements {
                 gpu: requirements
@@ -4161,13 +4171,11 @@ fn driver_sandbox_spec_from_public(
         tty: spec.tty,
         await_main_process_attachment: false,
         workload_identity: Some(WorkloadIdentityRequest {
-            user: spec
-                .policy
+            user: policy
                 .as_ref()
                 .and_then(|policy| policy.process.as_ref())
                 .map_or_else(String::new, |process| process.run_as_user.clone()),
-            group: spec
-                .policy
+            group: policy
                 .as_ref()
                 .and_then(|policy| policy.process.as_ref())
                 .map_or_else(String::new, |process| process.run_as_group.clone()),

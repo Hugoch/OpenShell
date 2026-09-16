@@ -38,6 +38,7 @@ use crate::storage_proto::StoredProviderCredentialRefreshStateV2 as StoredProvid
 use crate::storage_proto::StoredProviderProfile;
 use openshell_core::net::{is_always_blocked_ip, is_internal_ip};
 use openshell_core::policy_identity::{canonical_rule_bytes, deterministic_policy_hash};
+use openshell_core::proto::policy as authored;
 use openshell_core::proto::policy_merge_operation;
 use openshell_core::proto::setting_value;
 use openshell_core::proto::{
@@ -92,6 +93,18 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
+
+pub(super) fn lower_public_policy(
+    policy: authored::SandboxPolicy,
+) -> Result<ProtoSandboxPolicy, Status> {
+    openshell_policy::lower_authored_policy(policy)
+        .map_err(|error| Status::invalid_argument(format!("invalid authored policy: {error}")))
+}
+
+fn project_public_policy(policy: &ProtoSandboxPolicy) -> Result<authored::SandboxPolicy, Status> {
+    openshell_policy::project_base_policy(policy)
+        .map_err(|error| Status::internal(format!("failed to project public policy: {error}")))
+}
 use tracing::{debug, info, warn};
 
 use super::validation::{
@@ -1757,9 +1770,10 @@ async fn current_effective_policy_for_sandbox(
         canonical_policy_record_identity(&record)?.0
     } else {
         match sandbox.spec.as_ref().and_then(|spec| spec.policy.clone()) {
-            Some(policy) => {
-                validate_and_canonicalize_stored_policy(policy, STORED_POLICY_SOURCE_SPEC)?
-            }
+            Some(policy) => validate_and_canonicalize_stored_policy(
+                lower_public_policy(policy)?,
+                STORED_POLICY_SOURCE_SPEC,
+            )?,
             None => ProtoSandboxPolicy::default(),
         }
     };
@@ -2046,17 +2060,25 @@ fn profile_declares_sigv4_credentials(profile: &openshell_providers::ProviderTyp
 
 fn signed_endpoint_is_covered(
     signed: &NetworkEndpoint,
-    profile_endpoints: &[NetworkEndpoint],
+    profile_endpoints: &[authored::NetworkEndpoint],
 ) -> bool {
     endpoint_ports_for_validation(signed)
         .into_iter()
         .all(|port| {
             profile_endpoints.iter().any(|profile| {
-                endpoint_ports_for_validation(profile).contains(&port)
+                authored_endpoint_ports(profile).contains(&port)
                     && host_pattern_covers(&profile.host, &signed.host)
                     && path_pattern_covers(&profile.path, &signed.path)
             })
         })
+}
+
+fn authored_endpoint_ports(endpoint: &authored::NetworkEndpoint) -> Vec<u32> {
+    if endpoint.ports.is_empty() {
+        vec![endpoint.port]
+    } else {
+        endpoint.ports.clone()
+    }
 }
 
 fn endpoint_ports_for_validation(endpoint: &NetworkEndpoint) -> Vec<u32> {
@@ -2176,7 +2198,12 @@ pub(super) async fn current_base_policy_for_sandbox(
         .and_then(|spec| spec.policy.clone())
         .map_or_else(
             || Ok(ProtoSandboxPolicy::default()),
-            |policy| validate_and_canonicalize_stored_policy(policy, STORED_POLICY_SOURCE_SPEC),
+            |policy| {
+                validate_and_canonicalize_stored_policy(
+                    lower_public_policy(policy)?,
+                    STORED_POLICY_SOURCE_SPEC,
+                )
+            },
         )
 }
 
@@ -2428,7 +2455,7 @@ async fn persist_existing_policy_projection(
     }
 
     let annotations = annotations.clone();
-    let backfill_policy = backfill_policy.cloned();
+    let backfill_policy = backfill_policy.map(project_public_policy).transpose()?;
     let updated = state
         .store
         .update_message_cas::<Sandbox, _>(sandbox_id, expected_resource_version, |sandbox| {
@@ -2566,7 +2593,7 @@ pub(super) async fn handle_get_sandbox_config(
                 // creating policy history so malformed state is never copied or
                 // marked loaded, and hash the canonical representation.
                 let spec_policy = validate_and_canonicalize_stored_policy(
-                    spec_policy,
+                    lower_public_policy(spec_policy)?,
                     STORED_POLICY_SOURCE_SPEC,
                 )?;
                 let hash = deterministic_policy_hash(&spec_policy);
@@ -3471,9 +3498,9 @@ async fn handle_update_config_inner(
                     "delete_setting cannot be combined with policy payload",
                 ));
             }
-            let mut new_policy = req.policy.ok_or_else(|| {
+            let mut new_policy = lower_public_policy(req.policy.ok_or_else(|| {
                 Status::invalid_argument("policy is required for global policy update")
-            })?;
+            })?)?;
             clear_provider_credentialed_markers(&mut new_policy);
             validate_no_reserved_provider_policy_keys(&new_policy)?;
             new_policy = validate_and_canonicalize_policy(new_policy)?;
@@ -3780,7 +3807,7 @@ async fn handle_update_config_inner(
             provenance: &req.annotations,
             annotations: &req.annotations,
         };
-        let baseline_policy = spec.policy.clone();
+        let baseline_policy = spec.policy.clone().map(lower_public_policy).transpose()?;
         let (version, hash, updated_sandbox) = apply_merge_operations_with_retry(
             state.store.as_ref(),
             &sandbox_id,
@@ -3853,9 +3880,10 @@ async fn handle_update_config_inner(
     }
 
     // Sandbox-scoped policy update.
-    let mut new_policy = req
-        .policy
-        .ok_or_else(|| Status::invalid_argument("policy is required"))?;
+    let mut new_policy = lower_public_policy(
+        req.policy
+            .ok_or_else(|| Status::invalid_argument("policy is required"))?,
+    )?;
     clear_provider_credentialed_markers(&mut new_policy);
     let global_settings = load_global_settings(state.store.as_ref()).await?;
     if global_settings.settings.contains_key(POLICY_SETTING_KEY) {
@@ -3881,7 +3909,7 @@ async fn handle_update_config_inner(
     }
 
     let should_backfill_policy = if let Some(baseline_policy) = spec.policy.as_ref() {
-        let comparable_baseline = baseline_policy.clone();
+        let comparable_baseline = lower_public_policy(baseline_policy.clone())?;
         validate_static_fields_unchanged(&comparable_baseline, &new_policy)?;
         false
     } else {
@@ -4691,7 +4719,17 @@ pub(super) async fn handle_submit_policy_analysis(
             }
         };
 
-        let rule_ref = chunk.proposed_rule.as_ref().expect("checked above");
+        let rule_ref = openshell_policy::lower_authored_rule(
+            &chunk.rule_name,
+            chunk.proposed_rule.clone().expect("checked above"),
+        )
+        .map_err(|error| {
+            Status::invalid_argument(format!(
+                "chunk '{}' contains an invalid authored rule: {error}",
+                chunk.rule_name
+            ))
+        })?;
+        let rule_ref = &rule_ref;
         if req.analysis_mode == "agent_authored"
             && let Some(reason) = rule_ref.endpoints.iter().find_map(|endpoint| {
                 openshell_policy::agent_authored_transport_rejection(
@@ -5658,6 +5696,9 @@ pub(super) async fn handle_edit_draft_chunk(
         )));
     }
 
+    let proposed_rule = openshell_policy::lower_authored_rule(&chunk.rule_name, proposed_rule)
+        .map_err(|error| Status::invalid_argument(format!("proposed_rule is invalid: {error}")))?;
+
     let mut edited_chunk = chunk.clone();
     edited_chunk.proposed_rule = proposed_rule.encode_to_vec();
     edited_chunk.review_token.clear();
@@ -6047,10 +6088,15 @@ fn current_draft_chunk_security_notes(record: &DraftChunkRecord) -> Result<Strin
 }
 
 fn draft_chunk_record_to_proto(record: &DraftChunkRecord) -> Result<PolicyChunk, Status> {
-    let proposed_rule = decode_draft_chunk_rule(record)?;
-    let security_notes = proposed_rule
+    let internal_proposed_rule = decode_draft_chunk_rule(record)?;
+    let security_notes = internal_proposed_rule
         .as_ref()
         .map_or_else(String::new, generate_security_notes);
+    let proposed_rule = internal_proposed_rule
+        .as_ref()
+        .map(|rule| openshell_policy::project_authored_rule(&record.rule_name, rule))
+        .transpose()
+        .map_err(|error| Status::internal(format!("failed to project draft rule: {error}")))?;
 
     Ok(PolicyChunk {
         id: record.id.clone(),
@@ -6086,8 +6132,22 @@ fn draft_chunk_record_to_proto(record: &DraftChunkRecord) -> Result<PolicyChunk,
         review_token: record.review_token.clone(),
         current_effective_policy_hash: record.current_effective_policy_hash.clone(),
         candidate_effective_policy_hash: record.candidate_effective_policy_hash.clone(),
-        current_effective_policy: record.current_effective_policy.clone(),
-        candidate_effective_policy: record.candidate_effective_policy.clone(),
+        current_effective_policy: record
+            .current_effective_policy
+            .as_ref()
+            .map(openshell_policy::project_effective_policy)
+            .transpose()
+            .map_err(|error| {
+                Status::internal(format!("failed to project current policy: {error}"))
+            })?,
+        candidate_effective_policy: record
+            .candidate_effective_policy
+            .as_ref()
+            .map(openshell_policy::project_effective_policy)
+            .transpose()
+            .map_err(|error| {
+                Status::internal(format!("failed to project candidate policy: {error}"))
+            })?,
         ..Default::default()
     })
 }
@@ -6114,7 +6174,9 @@ fn policy_record_to_revision(
             loaded_time: record
                 .loaded_at_ms
                 .and_then(|value| openshell_core::time::timestamp_from_millis(value).ok()),
-            policy: include_policy.then_some(policy),
+            policy: include_policy
+                .then(|| project_public_policy(&policy))
+                .transpose()?,
             provenance: record.provenance.clone(),
         }),
         Err(error) if !include_policy => {
@@ -6357,7 +6419,15 @@ fn parse_merge_operations(
                     }
                     Ok(PolicyMergeOp::AddRule {
                         rule_name: rule_name.to_string(),
-                        rule: add_rule.rule.clone().unwrap_or_default(),
+                        rule: openshell_policy::lower_authored_rule(
+                            rule_name,
+                            add_rule.rule.clone().unwrap_or_default(),
+                        )
+                        .map_err(|error| {
+                            Status::invalid_argument(format!(
+                                "merge_operations[{index}].add_rule is invalid: {error}"
+                            ))
+                        })?,
                     })
                 }
                 policy_merge_operation::Operation::RemoveEndpoint(remove_endpoint) => {
@@ -6428,7 +6498,17 @@ fn parse_proto_add_deny_rules(
     Ok(PolicyMergeOp::AddDenyRules {
         host: add_deny_rules.host.trim().to_string(),
         port: add_deny_rules.port,
-        deny_rules: add_deny_rules.deny_rules.clone(),
+        deny_rules: add_deny_rules
+            .deny_rules
+            .iter()
+            .cloned()
+            .map(openshell_policy::lower_authored_l7_deny_rule)
+            .collect::<miette::Result<Vec<_>>>()
+            .map_err(|error| {
+                Status::invalid_argument(format!(
+                    "merge_operations[{index}].add_deny_rules is invalid: {error}"
+                ))
+            })?,
     })
 }
 
@@ -6457,7 +6537,17 @@ fn parse_proto_add_allow_rules(
     Ok(PolicyMergeOp::AddAllowRules {
         host: add_allow_rules.host.trim().to_string(),
         port: add_allow_rules.port,
-        rules: add_allow_rules.rules.clone(),
+        rules: add_allow_rules
+            .rules
+            .iter()
+            .cloned()
+            .map(openshell_policy::lower_authored_l7_rule)
+            .collect::<miette::Result<Vec<_>>>()
+            .map_err(|error| {
+                Status::invalid_argument(format!(
+                    "merge_operations[{index}].add_allow_rules is invalid: {error}"
+                ))
+            })?,
     })
 }
 

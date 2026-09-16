@@ -21,6 +21,7 @@ plugins:
       - Mdatamodel.proto=github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1
       - Msandbox.proto=github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1
       - Moptions.proto=github.com/NVIDIA/OpenShell/sdk/go/proto/optionsv1
+      - Mpolicy.proto=github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1
   - local: protoc-gen-go-grpc
     out: sdk/go
     include_imports: true
@@ -30,3 +31,4 @@ plugins:
       - Mdatamodel.proto=github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1
       - Msandbox.proto=github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1
       - Moptions.proto=github.com/NVIDIA/OpenShell/sdk/go/proto/optionsv1
+      - Mpolicy.proto=github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1

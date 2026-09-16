@@ -75,21 +75,25 @@ pub fn project_policy_revision_onto_sandbox(
 
     let mut changed = false;
     if let Some(backfill_policy) = write.backfill_policy.as_ref() {
+        let public_backfill =
+            openshell_policy::project_base_policy(backfill_policy).map_err(|e| {
+                PersistenceError::Decode(format!(
+                    "project policy revision onto sandbox failed: {e}"
+                ))
+            })?;
         let spec = sandbox
             .spec
             .as_mut()
             .ok_or_else(|| PersistenceError::Decode("sandbox payload missing spec".to_string()))?;
-        match spec.policy.as_ref() {
-            None => {
-                spec.policy = Some(backfill_policy.clone());
-                changed = true;
-            }
-            Some(current) if current == backfill_policy => {}
-            Some(_) => {
+        if let Some(current) = spec.policy.as_ref() {
+            if current != &public_backfill {
                 return Err(PersistenceError::Conflict {
                     current_resource_version: Some(current_resource_version),
                 });
             }
+        } else {
+            spec.policy = Some(public_backfill);
+            changed = true;
         }
     }
 

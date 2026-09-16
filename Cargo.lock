@@ -4460,8 +4460,12 @@ version = "0.0.0"
 dependencies = [
  "miette",
  "noyalib",
+ "prost",
+ "prost-types",
+ "protoc-bin-vendored",
  "serde",
  "serde_json",
+ "tonic-prost-build",
 ]
 
 [[package]]

@@ -3322,7 +3322,16 @@ fn profiles_from_import_items(
                 });
             }
         }
-        profiles.push((source, ProviderTypeProfile::from_proto(profile)));
+        match ProviderTypeProfile::try_from_proto(profile) {
+            Ok(profile) => profiles.push((source, profile)),
+            Err(error) => diagnostics.push(ProfileValidationDiagnostic {
+                source,
+                profile_id: profile.id.clone(),
+                field: "profile".to_string(),
+                message: error.to_string(),
+                severity: "error".to_string(),
+            }),
+        }
     }
     (profiles, diagnostics)
 }

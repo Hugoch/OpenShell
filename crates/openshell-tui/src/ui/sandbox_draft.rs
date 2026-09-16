@@ -4,7 +4,8 @@
 //! Network rules panel for the sandbox screen.
 
 use crate::app::App;
-use openshell_core::proto::{L7Allow, L7DenyRule, L7QueryMatcher, NetworkEndpoint, PolicyChunk};
+use openshell_core::proto::PolicyChunk;
+use openshell_core::proto::policy::{L7Allow, L7DenyRule, Matcher, NetworkEndpoint, matcher};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -947,7 +948,7 @@ fn format_deny_rule(deny: &L7DenyRule) -> String {
 
 fn append_query_matchers(
     parts: &mut Vec<String>,
-    query: &std::collections::HashMap<String, L7QueryMatcher>,
+    query: &std::collections::HashMap<String, Matcher>,
 ) {
     if query.is_empty() {
         return;
@@ -956,12 +957,14 @@ fn append_query_matchers(
     entries.sort_by_key(|(key, _)| *key);
     let formatted = entries
         .into_iter()
-        .map(|(key, matcher)| {
-            if matcher.any.is_empty() {
-                format!("{key}={}", non_empty_or(&matcher.glob, "*"))
-            } else {
-                format!("{key} in [{}]", matcher.any.join(","))
+        .map(|(key, matcher)| match matcher.kind.as_ref() {
+            Some(matcher::Kind::Glob(glob)) => {
+                format!("{key}={}", non_empty_or(glob, "*"))
             }
+            Some(matcher::Kind::Any(any)) => {
+                format!("{key} in [{}]", any.values.join(","))
+            }
+            None => format!("{key}=*"),
         })
         .collect::<Vec<_>>()
         .join(", ");

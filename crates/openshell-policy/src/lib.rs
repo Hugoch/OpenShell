@@ -51,6 +51,7 @@ pub use middleware::validate_json_with_config as validate_network_middleware_jso
 // The authored serde tree lives in `openshell-policy-schema`. These local
 // aliases keep the protobuf adapter readable while exposing consumer-facing
 // names from the schema crate.
+use openshell_policy_schema::proto as authored;
 use openshell_policy_schema::{
     AnyMatcher as QueryAnyDef, FilesystemPolicy as FilesystemDef,
     GraphqlOperation as GraphqlOperationDef, JsonRpcConfig as JsonRpcConfigDef,
@@ -834,6 +835,123 @@ pub fn is_valid_sandbox_identity(value: &str) -> bool {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Lower an author-controlled public policy into the normalized internal model.
+///
+/// Runtime authority fields do not exist in the public message. Lowering
+/// therefore always produces a base policy with those fields cleared.
+pub fn lower_authored_policy(policy: authored::SandboxPolicy) -> Result<SandboxPolicy> {
+    let document = PolicyFile::try_from(policy)?;
+    to_proto(document)
+}
+
+/// Project an internal base policy into the public author-controlled model.
+///
+/// The projection is canonical and intentionally removes runtime provenance.
+pub fn project_base_policy(policy: &SandboxPolicy) -> Result<authored::SandboxPolicy> {
+    validate_proto_version_for_authored_serialization(policy)?;
+    let canonical = validate_and_canonicalize_mcp_policy_schema(policy.clone())
+        .map_err(|error| miette::miette!("cannot project invalid sandbox policy: {error}"))?;
+    authored::SandboxPolicy::try_from(from_proto(&canonical)?)
+}
+
+/// Project an internal effective policy into a read-only public view.
+///
+/// Provider-derived rules may remain visible, but internal authority markers
+/// are omitted. Callers must not treat this view as an authorable base policy.
+pub fn project_effective_policy(policy: &SandboxPolicy) -> Result<authored::SandboxPolicy> {
+    project_base_policy(policy)
+}
+
+/// Lower one public rule through the same checked policy boundary.
+pub fn lower_authored_rule(
+    rule_name: &str,
+    rule: authored::NetworkPolicyRule,
+) -> Result<NetworkPolicyRule> {
+    let policy = authored::SandboxPolicy {
+        version: 1,
+        filesystem_policy: None,
+        landlock: None,
+        process: None,
+        network_policies: HashMap::from([(rule_name.to_string(), rule)]),
+        network_middlewares: HashMap::new(),
+    };
+    lower_authored_policy(policy)?
+        .network_policies
+        .remove(rule_name)
+        .ok_or_else(|| miette::miette!("lowered policy did not retain rule '{rule_name}'"))
+}
+
+/// Project one internal rule into the public author-controlled model.
+pub fn project_authored_rule(
+    rule_name: &str,
+    rule: &NetworkPolicyRule,
+) -> Result<authored::NetworkPolicyRule> {
+    let internal = SandboxPolicy {
+        version: 1,
+        network_policies: HashMap::from([(rule_name.to_string(), rule.clone())]),
+        ..Default::default()
+    };
+    project_base_policy(&internal)?
+        .network_policies
+        .remove(rule_name)
+        .ok_or_else(|| miette::miette!("projected policy did not retain rule '{rule_name}'"))
+}
+
+/// Lower one public L7 allow rule for an incremental merge operation.
+pub fn lower_authored_l7_rule(rule: authored::L7Rule) -> Result<L7Rule> {
+    let definition = L7RuleDef::try_from(rule)?;
+    Ok(L7Rule {
+        allow: Some(allow_def_to_proto("", definition.allow)),
+    })
+}
+
+/// Lower one public L7 deny rule for an incremental merge operation.
+pub fn lower_authored_l7_deny_rule(rule: authored::L7DenyRule) -> Result<L7DenyRule> {
+    Ok(deny_def_to_proto("", L7DenyRuleDef::try_from(rule)?))
+}
+
+/// Project one normalized L7 allow rule for an incremental merge operation.
+pub fn project_authored_l7_rule(rule: &L7Rule) -> Result<authored::L7Rule> {
+    let allow = rule
+        .allow
+        .clone()
+        .ok_or_else(|| miette::miette!("L7Rule.allow is required"))?;
+    L7RuleDef {
+        allow: allow_proto_to_def("", allow, false),
+    }
+    .try_into()
+}
+
+/// Project one normalized L7 deny rule for an incremental merge operation.
+pub fn project_authored_l7_deny_rule(rule: &L7DenyRule) -> Result<authored::L7DenyRule> {
+    deny_proto_to_def("", rule, false).try_into()
+}
+
+/// Parse compatible policy YAML directly into the public generated message.
+pub fn parse_authored_policy(yaml: &str) -> Result<authored::SandboxPolicy> {
+    openshell_policy_schema::parse_policy_proto(yaml)
+}
+
+/// Parse a compatible policy YAML file into the public generated message.
+pub fn parse_authored_policy_file(path: &Path) -> Result<authored::SandboxPolicy> {
+    openshell_policy_schema::parse_policy_proto_file(
+        path,
+        openshell_policy_schema::ParseLimits::default(),
+    )
+}
+
+/// Serialize a public generated policy to canonical YAML.
+pub fn serialize_authored_policy(policy: &authored::SandboxPolicy) -> Result<String> {
+    openshell_policy_schema::serialize_policy_proto(policy)
+}
+
+/// Convert a public generated policy to canonical authored JSON.
+pub fn authored_policy_to_json_value(
+    policy: &authored::SandboxPolicy,
+) -> Result<serde_json::Value> {
+    openshell_policy_schema::policy_proto_to_json_value(policy)
+}
+
 // Validate raw authored values and their relationship to the endpoint protocol
 // before conversion. Keeping validation outside the Serde error wrapper makes
 // actionable MCP diagnostics the top-level user-facing error.
@@ -909,6 +1027,19 @@ pub fn load_sandbox_policy(cli_path: Option<&str>) -> Result<Option<SandboxPolic
         parse_sandbox_policy_file(Path::new(p))?
     } else if let Ok(policy_path) = std::env::var("OPENSHELL_SANDBOX_POLICY") {
         parse_sandbox_policy_file(Path::new(&policy_path))?
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(policy))
+}
+
+/// Load an authored policy for a public API request using the standard source
+/// resolution order.
+pub fn load_authored_policy(cli_path: Option<&str>) -> Result<Option<authored::SandboxPolicy>> {
+    let policy = if let Some(path) = cli_path {
+        parse_authored_policy_file(Path::new(path))?
+    } else if let Ok(policy_path) = std::env::var("OPENSHELL_SANDBOX_POLICY") {
+        parse_authored_policy_file(Path::new(&policy_path))?
     } else {
         return Ok(None);
     };

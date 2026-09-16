@@ -208,6 +208,8 @@ pub fn generate_proposals(summaries: &[DenialSummary]) -> Vec<PolicyChunk> {
             .first()
             .map_or_else(|| "connect".to_string(), |d| d.denial_stage.clone());
 
+        let proposed_rule = openshell_policy::project_authored_rule(&rule_name, &proposed_rule)
+            .expect("mechanistically generated rule must project to the public policy schema");
         proposals.push(PolicyChunk {
             id: String::new(), // Assigned by the gateway on persist
             status: "pending".to_string(),
