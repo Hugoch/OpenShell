@@ -11,8 +11,6 @@
 //! selection — it has no protocol awareness of the bytes flowing through.
 
 use std::net::IpAddr;
-#[cfg(target_os = "linux")]
-use std::os::fd::RawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -24,6 +22,7 @@ use openshell_core::proto::{
     SupervisorMessage, TcpRelayTarget, gateway_message, relay_open, supervisor_message,
 };
 use openshell_core::proto::{LEGACY_SUPERVISOR_PROTOCOL_REVISION, SUPERVISOR_PROTOCOL_REVISION};
+use openshell_isolation_interface::contract::{BoundaryLoopbackConnector, LoopbackTarget};
 use openshell_ocsf::{
     ActivityId, ConnectionInfo, Endpoint, EventContext, NetworkActivityBuilder, OcsfEvent,
     SeverityId, StatusId, ocsf_emit,
@@ -34,11 +33,18 @@ use tokio_stream::StreamExt;
 use tracing::{debug, warn};
 
 use openshell_core::grpc_client;
-use openshell_core::net::set_tcp_nodelay_best_effort;
 use openshell_core::transport_errors::is_expected_transport_close_status;
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Runtime identity and status channel shared with a supervisor session task.
+pub struct SessionRuntimeContext {
+    /// Identifies the local supervisor process across gateway reconnects.
+    pub instance_id: String,
+    /// Publishes the currently accepted gateway session to sibling reporters.
+    pub session_id_updates: Option<watch::Sender<Option<String>>>,
+}
 
 /// Parse a gRPC endpoint URI into an OCSF `Endpoint` (host + port). Falls back
 /// to treating the whole string as a domain if parsing fails.
@@ -267,14 +273,6 @@ fn map_session_stream_message<T>(
     }
 }
 
-/// Runtime identity and status channel shared with a supervisor session task.
-pub struct SessionRuntimeContext {
-    /// Identifies the local supervisor process across gateway reconnects.
-    pub instance_id: String,
-    /// Publishes the currently accepted gateway session to sibling reporters.
-    pub session_id_updates: Option<watch::Sender<Option<String>>>,
-}
-
 /// Spawn the supervisor session task.
 ///
 /// The task runs for the lifetime of the sandbox process, reconnecting with
@@ -283,35 +281,59 @@ pub fn spawn(
     endpoint: String,
     sandbox_id: String,
     ssh_socket_path: std::path::PathBuf,
-    netns_fd: Option<i32>,
+    port_forward: Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
     runtime: SessionRuntimeContext,
 ) -> tokio::task::JoinHandle<()> {
+    spawn_with_readiness(
+        endpoint,
+        sandbox_id,
+        ssh_socket_path,
+        port_forward,
+        expected_ssh_peer_pid,
+        terminating,
+        runtime,
+    )
+    .0
+}
+
+/// Spawn the supervisor session and expose when the gateway has accepted it.
+pub fn spawn_with_readiness(
+    endpoint: String,
+    sandbox_id: String,
+    ssh_socket_path: std::path::PathBuf,
+    port_forward: Arc<dyn BoundaryLoopbackConnector>,
+    expected_ssh_peer_pid: Option<u32>,
+    terminating: Arc<AtomicBool>,
+    runtime: SessionRuntimeContext,
+) -> (tokio::task::JoinHandle<()>, watch::Receiver<bool>) {
+    let (ready_tx, ready_rx) = watch::channel(false);
     let config = SessionConfig {
         endpoint,
         sandbox_id,
         ssh_socket_path,
-        netns_fd,
+        port_forward,
         expected_ssh_peer_pid,
         terminating,
         instance_id: runtime.instance_id,
         session_id_updates: runtime.session_id_updates,
+        ready_tx,
     };
-    tokio::spawn(run_session_loop(config))
+    (tokio::spawn(run_session_loop(config)), ready_rx)
 }
 
 struct SessionConfig {
     endpoint: String,
     sandbox_id: String,
     ssh_socket_path: std::path::PathBuf,
-    netns_fd: Option<i32>,
+    port_forward: Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
     instance_id: String,
-    /// Publishes the currently accepted session to sibling control-plane
-    /// reporters. `None` means no session is authorized to send observations.
+    /// Publishes the currently accepted session to sibling control-plane reporters.
     session_id_updates: Option<watch::Sender<Option<String>>>,
+    ready_tx: watch::Sender<bool>,
 }
 
 async fn run_session_loop(config: SessionConfig) {
@@ -327,6 +349,7 @@ async fn run_session_loop(config: SessionConfig) {
         }
         match result {
             Ok(()) => {
+                config.ready_tx.send_replace(false);
                 let event = session_closed_event(
                     openshell_ocsf::ctx::ctx(),
                     &config.endpoint,
@@ -336,6 +359,7 @@ async fn run_session_loop(config: SessionConfig) {
                 break;
             }
             Err(e) => {
+                config.ready_tx.send_replace(false);
                 let event = session_failed_event(
                     openshell_ocsf::ctx::ctx(),
                     &config.endpoint,
@@ -410,7 +434,6 @@ async fn run_single_session(
         heartbeat_secs,
     );
     ocsf_emit!(event);
-
     if accepted.bootstrap.is_some() {
         debug!(
             sandbox_id = %config.sandbox_id,
@@ -418,6 +441,7 @@ async fn run_single_session(
             "supervisor session: ignoring configuration bootstrap while polling remains active"
         );
     }
+    config.ready_tx.send_replace(true);
 
     // Main loop: receive gateway messages + send heartbeats.
     let mut heartbeat_interval =
@@ -438,7 +462,7 @@ async fn run_single_session(
                 let context = GatewayMessageContext {
                     sandbox_id: &config.sandbox_id,
                     ssh_socket_path: &config.ssh_socket_path,
-                    netns_fd: config.netns_fd,
+                    port_forward: &config.port_forward,
                     expected_ssh_peer_pid: config.expected_ssh_peer_pid,
                     channel: &channel,
                     tx: &tx,
@@ -524,7 +548,7 @@ pub async fn finalize_main_process_exit(
 struct GatewayMessageContext<'a> {
     sandbox_id: &'a str,
     ssh_socket_path: &'a std::path::Path,
-    netns_fd: Option<i32>,
+    port_forward: &'a Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
     channel: &'a grpc_client::AuthedChannel,
     tx: &'a mpsc::Sender<SupervisorMessage>,
@@ -552,7 +576,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
             let channel = context.channel.clone();
             let ssh_socket_path = context.ssh_socket_path.to_path_buf();
             let tx = context.tx.clone();
-            let netns_fd = context.netns_fd;
+            let port_forward = context.port_forward.clone();
             let expected_ssh_peer_pid = context.expected_ssh_peer_pid;
             let terminating = Arc::clone(context.terminating);
 
@@ -564,7 +588,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
                 match handle_relay_open(
                     relay_open,
                     &ssh_socket_path,
-                    netns_fd,
+                    port_forward,
                     expected_ssh_peer_pid,
                     channel,
                     tx,
@@ -621,7 +645,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
 async fn handle_relay_open(
     relay_open: RelayOpen,
     ssh_socket_path: &std::path::Path,
-    netns_fd: Option<i32>,
+    port_forward: Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
     channel: grpc_client::AuthedChannel,
     tx: mpsc::Sender<SupervisorMessage>,
@@ -631,7 +655,7 @@ async fn handle_relay_open(
     let target = match open_target(
         &relay_open,
         ssh_socket_path,
-        netns_fd,
+        &port_forward,
         expected_ssh_peer_pid,
     )
     .await
@@ -776,11 +800,11 @@ async fn send_relay_open_result(
 async fn open_target(
     relay_open: &RelayOpen,
     ssh_socket_path: &std::path::Path,
-    netns_fd: Option<i32>,
+    port_forward: &Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
 ) -> Result<Box<dyn TargetStream>, Box<dyn std::error::Error + Send + Sync>> {
     match relay_open.target.as_ref() {
-        Some(relay_open::Target::Tcp(target)) => open_tcp_target(target, netns_fd).await,
+        Some(relay_open::Target::Tcp(target)) => open_tcp_target(target, port_forward).await,
         Some(relay_open::Target::Ssh(_)) | None => {
             let runtime_path = crate::unix_socket::runtime_path(ssh_socket_path);
             let stream = tokio::net::UnixStream::connect(runtime_path.as_ref()).await?;
@@ -801,57 +825,24 @@ async fn open_target(
 
 async fn open_tcp_target(
     target: &TcpRelayTarget,
-    netns_fd: Option<i32>,
+    port_forward: &Arc<dyn BoundaryLoopbackConnector>,
 ) -> Result<Box<dyn TargetStream>, Box<dyn std::error::Error + Send + Sync>> {
     let host = normalize_tcp_target_host(target)?;
     let port = u16::try_from(target.port).map_err(|_| "tcp target port must fit in u16")?;
-    let stream = connect_tcp_target(host, port, netns_fd).await?;
+    // `normalize_tcp_target_host` returns a loopback IP string; parse it and let
+    // `LoopbackTarget::new` re-validate before connecting.
+    let ip: IpAddr = host
+        .parse()
+        .map_err(|_| "tcp target host must be a loopback IP")?;
+    let target = LoopbackTarget::new(ip, port)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+    // Connect through the sandbox-owned loopback-forward interface. The
+    // supervisor session remains independent of the driver's transport.
+    let stream = port_forward
+        .connect(target)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
     Ok(Box::new(stream))
-}
-
-#[cfg(target_os = "linux")]
-async fn connect_tcp_target(
-    host: String,
-    port: u16,
-    netns_fd: Option<RawFd>,
-) -> Result<tokio::net::TcpStream, Box<dyn std::error::Error + Send + Sync>> {
-    if let Some(fd) = netns_fd {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            let result = (|| -> std::io::Result<std::net::TcpStream> {
-                #[allow(unsafe_code)]
-                let rc = unsafe { libc::setns(fd, libc::CLONE_NEWNET) };
-                if rc != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                std::net::TcpStream::connect((host.as_str(), port))
-            })();
-            let _ = tx.send(result);
-        });
-
-        let stream = rx
-            .await
-            .map_err(|_| "netns tcp connect thread panicked")??;
-        stream.set_nonblocking(true)?;
-        let stream = tokio::net::TcpStream::from_std(stream)?;
-        set_tcp_nodelay_best_effort(&stream);
-        return Ok(stream);
-    }
-
-    let stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
-    set_tcp_nodelay_best_effort(&stream);
-    Ok(stream)
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn connect_tcp_target(
-    host: String,
-    port: u16,
-    _netns_fd: Option<i32>,
-) -> Result<tokio::net::TcpStream, Box<dyn std::error::Error + Send + Sync>> {
-    let stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
-    set_tcp_nodelay_best_effort(&stream);
-    Ok(stream)
 }
 
 #[cfg(test)]
@@ -906,20 +897,6 @@ mod target_tests {
         }
     }
 
-    /// Regression test: the TCP relay connect path sets `TCP_NODELAY`.
-    #[tokio::test]
-    async fn connect_tcp_target_sets_tcp_nodelay() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind listener");
-        let addr = listener.local_addr().expect("local addr");
-
-        let stream = connect_tcp_target(addr.ip().to_string(), addr.port(), None)
-            .await
-            .expect("connect");
-        assert!(stream.nodelay().expect("query TCP_NODELAY"));
-    }
-
     #[test]
     fn tcp_target_allows_loopback_hosts() {
         validate_tcp_target(&tcp("127.0.0.1", 8080)).expect("ipv4 loopback");
@@ -961,6 +938,23 @@ mod target_tests {
 #[cfg(test)]
 mod ocsf_event_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    struct UnusedLoopbackConnector;
+
+    #[cfg(target_os = "linux")]
+    #[async_trait::async_trait]
+    impl BoundaryLoopbackConnector for UnusedLoopbackConnector {
+        async fn connect(
+            &self,
+            _target: LoopbackTarget,
+        ) -> Result<
+            openshell_isolation_interface::contract::BoundaryDuplexStream,
+            openshell_isolation_interface::contract::BackendError,
+        > {
+            unreachable!("SSH relay does not use loopback port forwarding")
+        }
+    }
 
     fn ctx() -> EventContext {
         EventContext {
@@ -1202,7 +1196,11 @@ mod ocsf_event_tests {
         });
         let relay = ssh_relay_open("peer-check");
 
-        let trusted = open_target(&relay, &socket, None, Some(std::process::id()))
+        // The SSH relay path does not use the port-forward (that is the TCP
+        // target path); connect from the supervisor's own namespace.
+        let port_forward: Arc<dyn BoundaryLoopbackConnector> = Arc::new(UnusedLoopbackConnector);
+
+        let trusted = open_target(&relay, &socket, &port_forward, Some(std::process::id()))
             .await
             .expect("matching peer PID should be accepted");
         drop(trusted);
@@ -1210,7 +1208,7 @@ mod ocsf_event_tests {
         let Err(err) = open_target(
             &relay,
             &socket,
-            None,
+            &port_forward,
             Some(std::process::id().saturating_add(1)),
         )
         .await
