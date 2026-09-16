@@ -139,7 +139,7 @@ data:
 
     [openshell.drivers.kubernetes]
     namespace                    = {{ include "openshell.sandboxNamespace" . | quote }}
-    default_image                = {{ .Values.server.sandboxImage | quote }}
+    default_image                = {{ include "openshell.sandboxImage" . | quote }}
     {{- if include "openshell.sandboxRuntimeImageOverrideEnabled" . }}
     sandbox_runtime_image        = {{ include "openshell.sandboxRuntimeImage" . | quote }}
     {{- end }}
@@ -187,8 +187,8 @@ data:
     {{- if .Values.server.providerTokenGrants.spiffe.enabled }}
     provider_spiffe_workload_api_socket_path = {{ .Values.server.providerTokenGrants.spiffe.workloadApiSocketPath | quote }}
     {{- end }}
-    {{- if .Values.server.sandboxImagePullPolicy }}
-    image_pull_policy            = {{ include "openshell.canonicalImagePullPolicy" .Values.server.sandboxImagePullPolicy | quote }}
+    {{- if .Values.sandbox.image.pullPolicy }}
+    image_pull_policy            = {{ include "openshell.canonicalImagePullPolicy" .Values.sandbox.image.pullPolicy | quote }}
     {{- end }}
     {{- $sandboxImagePullSecretNames := list -}}
     {{- range .Values.server.sandboxImagePullSecrets }}

@@ -79,8 +79,9 @@ To override the default image references, use Helm values:
 
 | Helm value | Purpose |
 |---|---|
-| `image.repository` / `image.tag` | Override the gateway image reference. |
-| `server.sandboxImage` | Override the default sandbox image. |
+| `gateway.image.repository` / `gateway.image.tag` / `gateway.image.digest` | Override the gateway image reference. |
+| `supervisor.image.repository` / `supervisor.image.tag` / `supervisor.image.digest` | Override the supervisor image reference. |
+| `sandbox.image.repository` / `sandbox.image.tag` / `sandbox.image.digest` | Override the default sandbox image. |
 
 ## Kernel Requirements
 
