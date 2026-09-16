@@ -7,6 +7,15 @@
 # server.externalDbSecret because the default SQLite backend is per pod.
 replicaCount: 1
 
+global:
+  image:
+    # -- Shared OpenShell image repository. Individual image repositories take precedence.
+    repository: ghcr.io/nvidia/openshell
+    # -- Shared OpenShell image tag. Defaults to the chart appVersion when empty.
+    tag: ""
+    # -- Shared OpenShell image pull policy. Individual image pull policies take precedence.
+    pullPolicy: IfNotPresent
+
 workload:
   # -- Gateway workload controller kind. Use `statefulset` for the default
   # SQLite database, or `deployment` when server.externalDbSecret points at an
@@ -21,9 +30,9 @@ workload:
 gateway:
   image:
     # -- Gateway image repository.
-    repository: ghcr.io/nvidia/openshell/gateway
+    repository: ""
     # -- Gateway image pull policy.
-    pullPolicy: IfNotPresent
+    pullPolicy: null
     # -- Gateway image tag. Defaults to the chart appVersion when empty.
     tag: ""
     # -- Gateway image digest. When set, this takes precedence over tag.
@@ -33,9 +42,9 @@ gateway:
 sandboxRuntime:
   image:
     # -- Sandbox runtime image repository. Changing it uses the effective gateway image tag unless tag is also set.
-    repository: ghcr.io/nvidia/openshell/sandbox
+    repository: ""
     # -- Sandbox runtime image pull policy. Defaults to the gateway image pull policy when empty.
-    pullPolicy: ""
+    pullPolicy: null
     # -- Sandbox runtime image tag override. Empty uses the version pinned into the gateway unless repository is changed.
     tag: ""
 
@@ -43,7 +52,7 @@ sandboxRuntime:
 supervisor:
   image:
     # -- Supervisor image repository. Changing it uses the effective gateway image tag unless tag is also set.
-    repository: ghcr.io/nvidia/openshell/supervisor
+    repository: ""
     # -- Sandbox supervisor pull policy. Leave unset to use the Kubernetes
     # image default. Prefer always, if_not_present, or never; the chart also
     # accepts legacy Kubernetes spellings Always, IfNotPresent, and Never.

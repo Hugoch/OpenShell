@@ -208,11 +208,11 @@ data:
     {{- if .Values.server.defaultRuntimeClassName }}
     default_runtime_class_name   = {{ .Values.server.defaultRuntimeClassName | quote }}
     {{- end }}
-    {{- if .Values.supervisor.image.pullPolicy }}
-    supervisor_image_pull_policy = {{ include "openshell.canonicalImagePullPolicy" .Values.supervisor.image.pullPolicy | quote }}
+    {{- if (.Values.supervisor.image.pullPolicy | default .Values.global.image.pullPolicy) }}
+    supervisor_image_pull_policy = {{ include "openshell.canonicalImagePullPolicy" (.Values.supervisor.image.pullPolicy | default .Values.global.image.pullPolicy) | quote }}
     {{- end }}
-    {{- if .Values.sandboxRuntime.image.pullPolicy }}
-    sandbox_runtime_image_pull_policy = {{ include "openshell.canonicalImagePullPolicy" .Values.sandboxRuntime.image.pullPolicy | quote }}
+    {{- if (.Values.sandboxRuntime.image.pullPolicy | default .Values.global.image.pullPolicy) }}
+    sandbox_runtime_image_pull_policy = {{ include "openshell.canonicalImagePullPolicy" (.Values.sandboxRuntime.image.pullPolicy | default .Values.global.image.pullPolicy) | quote }}
     {{- end }}
 
     [openshell.drivers.kubernetes.managed_ssh_ingress]

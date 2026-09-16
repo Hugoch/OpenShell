@@ -86,10 +86,12 @@ default to enabled so upgrades with --reuse-values preserve the old topology.
 {{/* Gateway image reference. A digest takes precedence over a tag. */}}
 {{- define "openshell.image" -}}
 {{- $image := .Values.gateway.image -}}
+{{- $global := .Values.global.image -}}
+{{- $repository := $image.repository | default (printf "%s/gateway" $global.repository) -}}
 {{- if $image.digest -}}
-{{- printf "%s@%s" $image.repository $image.digest -}}
+{{- printf "%s@%s" $repository $image.digest -}}
 {{- else -}}
-{{- printf "%s:%s" $image.repository ($image.tag | default .Chart.AppVersion) -}}
+{{- printf "%s:%s" $repository ($image.tag | default $global.tag | default .Chart.AppVersion) -}}
 {{- end }}
 {{- end }}
 
@@ -111,14 +113,16 @@ ghcr.io/nvidia/openshell/sandbox
 {{/* Whether Helm must propagate a sandbox runtime image override. */}}
 {{- define "openshell.sandboxRuntimeImageOverrideEnabled" -}}
 {{- $defaultRepository := include "openshell.defaultSandboxRuntimeRepository" . -}}
-{{- $repository := .Values.sandboxRuntime.image.repository | default $defaultRepository -}}
-{{- if or (ne $repository $defaultRepository) .Values.sandboxRuntime.image.tag -}}true{{- end -}}
+{{- $global := .Values.global.image -}}
+{{- $repository := .Values.sandboxRuntime.image.repository | default (printf "%s/sandbox" $global.repository) -}}
+{{- if or (ne $repository $defaultRepository) .Values.sandboxRuntime.image.tag .Values.global.image.tag -}}true{{- end -}}
 {{- end }}
 
 {{/* Sandbox runtime image override. */}}
 {{- define "openshell.sandboxRuntimeImage" -}}
-{{- $repository := .Values.sandboxRuntime.image.repository | default (include "openshell.defaultSandboxRuntimeRepository" .) -}}
-{{- $tag := .Values.sandboxRuntime.image.tag | default .Values.gateway.image.tag | default .Chart.AppVersion -}}
+{{- $global := .Values.global.image -}}
+{{- $repository := .Values.sandboxRuntime.image.repository | default (printf "%s/sandbox" $global.repository) -}}
+{{- $tag := .Values.sandboxRuntime.image.tag | default $global.tag | default .Chart.AppVersion -}}
 {{- printf "%s:%s" $repository $tag }}
 {{- end }}
 
@@ -155,11 +159,12 @@ Supervisor image override. A tag-only override uses the official repository;
 a repository-only override uses the effective gateway image tag.
 */}}
 {{- define "openshell.supervisorImage" -}}
-{{- $repository := .Values.supervisor.image.repository | default (include "openshell.defaultSupervisorRepository" .) -}}
+{{- $global := .Values.global.image -}}
+{{- $repository := .Values.supervisor.image.repository | default (printf "%s/supervisor" $global.repository) -}}
 {{- if .Values.supervisor.image.digest -}}
 {{- printf "%s@%s" $repository .Values.supervisor.image.digest -}}
 {{- else -}}
-{{- $tag := .Values.supervisor.image.tag | default .Values.gateway.image.tag | default .Chart.AppVersion -}}
+{{- $tag := .Values.supervisor.image.tag | default $global.tag | default .Chart.AppVersion -}}
 {{- printf "%s:%s" $repository $tag -}}
 {{- end }}
 {{- end }}

@@ -56,6 +56,20 @@ tests:
           path: spec.template.spec.containers[0].image
           value: registry.example/gateway:0.0.0
 
+  - it: applies global image values to gateway, supervisor, and sandbox runtime
+    template: templates/gateway-config.yaml
+    set:
+      global.image.repository: registry.example.com/openshell
+      global.image.tag: v0.1.0
+      global.image.pullPolicy: IfNotPresent
+    asserts:
+      - matchRegex:
+          path: data["gateway.toml"]
+          pattern: 'supervisor_image\s*=\s*"registry\.example\.com/openshell/supervisor:v0\.1\.0"'
+      - matchRegex:
+          path: data["gateway.toml"]
+          pattern: 'sandbox_runtime_image\s*=\s*"registry\.example\.com/openshell/sandbox:v0\.1\.0"'
+
   - it: defaults a repository-only sandbox image to latest
     template: templates/gateway-config.yaml
     set:
@@ -235,12 +249,12 @@ tests:
           path: data["gateway.toml"]
           pattern: '(?ms)\[openshell\.gateway\][^\[]*?grpc_endpoint'
 
-  - it: omits pull policies by default so Kubernetes applies its own defaults
+  - it: applies the global pull policy by default
     template: templates/gateway-config.yaml
     asserts:
-      - notMatchRegex:
+      - matchRegex:
           path: data["gateway.toml"]
-          pattern: '(?m)^\s*(image_pull_policy|supervisor_image_pull_policy)\s*='
+          pattern: '(?ms)supervisor_image_pull_policy\s*=\s*"if_not_present".*?sandbox_runtime_image_pull_policy\s*=\s*"if_not_present"'
 
   - it: renders canonical image pull policies in the Kubernetes driver table
     template: templates/gateway-config.yaml
