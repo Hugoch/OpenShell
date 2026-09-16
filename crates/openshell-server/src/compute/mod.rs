@@ -25,16 +25,13 @@ use openshell_core::proto::compute::v1::{
     AuthenticateSandboxRequest, CreateSandboxRequest, DeleteSandboxRequest, DeleteWorkspaceRequest,
     DeleteWorkspaceResponse, DriverCondition, DriverPlatformEvent, DriverResourceRequirements,
     DriverSandbox, DriverSandboxSpec, DriverSandboxStatus, DriverSandboxTemplate,
-    EnsureWorkspaceRequest, EnsureWorkspaceResponse,
-    GatewayListenerRequirement as ProtoGatewayListenerRequirement, GetCapabilitiesRequest,
-    GetGatewayListenerRequirementsRequest, GetGatewayListenerRequirementsResponse,
-    GetSandboxRequest, GpuResourceRequirements as DriverGpuResourceRequirements,
-    ListSandboxesRequest, ResourceCapabilities as DriverResourceCapabilities,
+    EnsureWorkspaceRequest, EnsureWorkspaceResponse, GetCapabilitiesRequest, GetSandboxRequest,
+    GpuResourceRequirements as DriverGpuResourceRequirements, ListSandboxesRequest,
+    ResourceCapabilities as DriverResourceCapabilities,
     ResourceRequirements as DriverSandboxResourceRequirements, StartSandboxRequest,
     StopSandboxRequest, ValidateSandboxCreateRequest, WatchSandboxesEvent, WatchSandboxesRequest,
     WorkloadIdentityRequest, compute_driver_client::ComputeDriverClient,
-    compute_driver_server::ComputeDriver, gateway_listener_requirement::Selector,
-    watch_sandboxes_event,
+    compute_driver_server::ComputeDriver, watch_sandboxes_event,
 };
 use openshell_core::proto::{
     PlatformEvent, Sandbox, SandboxCondition, SandboxPhase, SandboxSpec, SandboxStatus,
@@ -46,7 +43,6 @@ use prost::Message;
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex, Weak};
@@ -176,41 +172,6 @@ mod traced_driver {
 
 const DELETE_PHASE_CAS_RETRY_LIMIT: usize = 3;
 const SUPERVISOR_SESSION_CAS_RETRY_LIMIT: usize = 3;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum GatewayListenerRequirement {
-    Exact {
-        address: SocketAddr,
-        driver_name: String,
-        reason: String,
-    },
-    DefaultRouteInterface {
-        driver_name: String,
-        reason: String,
-    },
-    LoopbackInterface {
-        driver_name: String,
-        reason: String,
-    },
-}
-
-impl GatewayListenerRequirement {
-    pub fn driver_name(&self) -> &str {
-        match self {
-            Self::Exact { driver_name, .. }
-            | Self::DefaultRouteInterface { driver_name, .. }
-            | Self::LoopbackInterface { driver_name, .. } => driver_name,
-        }
-    }
-
-    pub fn reason(&self) -> &str {
-        match self {
-            Self::Exact { reason, .. }
-            | Self::DefaultRouteInterface { reason, .. }
-            | Self::LoopbackInterface { reason, .. } => reason,
-        }
-    }
-}
 
 /// Serializes request-side lifecycle mutations for the same stable sandbox ID.
 ///
@@ -525,14 +486,6 @@ impl ComputeDriver for RemoteComputeDriver {
         client.authenticate_sandbox(request).await
     }
 
-    async fn get_gateway_listener_requirements(
-        &self,
-        request: Request<GetGatewayListenerRequirementsRequest>,
-    ) -> Result<tonic::Response<GetGatewayListenerRequirementsResponse>, Status> {
-        let mut client = self.client();
-        client.get_gateway_listener_requirements(request).await
-    }
-
     async fn validate_sandbox_create(
         &self,
         request: Request<ValidateSandboxCreateRequest>,
@@ -639,7 +592,6 @@ pub struct ComputeRuntime {
     supervisor_sessions: Arc<SupervisorSessionRegistry>,
     sync_lock: Arc<Mutex<()>>,
     lifecycle_gates: Arc<LifecycleGateRegistry>,
-    gateway_listener_requirements: Vec<GatewayListenerRequirement>,
     replica_id: String,
     /// Gateway-issued staging slots for rootfs tar archives. Shared across
     /// clones: `ServerState` holds `ComputeRuntime` by value, so a per-clone
@@ -699,59 +651,6 @@ impl ComputeRuntime {
             rootfs_tar_max_bytes: capabilities.rootfs_tar_max_bytes,
         };
         let default_image = capabilities.default_image;
-        let gateway_listener_requirements = match driver
-            .get_gateway_listener_requirements(Request::new(
-                GetGatewayListenerRequirementsRequest {},
-            ))
-            .await
-        {
-            Ok(response) => response
-                .into_inner()
-                .requirements
-                .into_iter()
-                .map(|requirement: ProtoGatewayListenerRequirement| {
-                    let Some(selector) = requirement.selector else {
-                        return Err(ComputeError::Message(format!(
-                            "compute driver '{driver_name}' returned a gateway listener requirement without a selector"
-                        )));
-                    };
-                    match selector {
-                        Selector::ExactBindAddress(bind_address) => {
-                            let address = bind_address.parse::<SocketAddr>().map_err(|err| {
-                                ComputeError::Message(format!(
-                                    "compute driver '{driver_name}' returned invalid gateway listener address '{bind_address}': {err}"
-                                ))
-                            })?;
-                            Ok(GatewayListenerRequirement::Exact {
-                                address,
-                                driver_name: driver_name.clone(),
-                                reason: requirement.reason,
-                            })
-                        }
-                        Selector::DefaultRouteInterface(_) => {
-                            Ok(GatewayListenerRequirement::DefaultRouteInterface {
-                                driver_name: driver_name.clone(),
-                                reason: requirement.reason,
-                            })
-                        }
-                        Selector::LoopbackInterface(_) => {
-                            Ok(GatewayListenerRequirement::LoopbackInterface {
-                                driver_name: driver_name.clone(),
-                                reason: requirement.reason,
-                            })
-                        }
-                    }
-                })
-                .collect::<Result<Vec<_>, ComputeError>>()?,
-            Err(status) if status.code() == Code::Unimplemented => {
-                debug!(
-                    driver = %driver_name,
-                    "Compute driver does not implement gateway listener requirements"
-                );
-                Vec::new()
-            }
-            Err(status) => return Err(compute_error_from_status(status)),
-        };
         let rootfs_tar_staging = Arc::new(rootfs_tar::RootfsTarStagingRegistry::new(
             (!driver_info.rootfs_tar_staging_dir.is_empty())
                 .then(|| PathBuf::from(&driver_info.rootfs_tar_staging_dir)),
@@ -771,7 +670,6 @@ impl ComputeRuntime {
             supervisor_sessions,
             sync_lock: Arc::new(Mutex::new(())),
             lifecycle_gates: Arc::new(LifecycleGateRegistry::default()),
-            gateway_listener_requirements,
             replica_id: lease::replica_id(),
             rootfs_tar_staging,
         })
@@ -884,11 +782,6 @@ impl ComputeRuntime {
     ) -> Self {
         self.telemetry_compute_driver = telemetry_compute_driver;
         self
-    }
-
-    #[must_use]
-    pub(crate) fn gateway_listener_requirements(&self) -> &[GatewayListenerRequirement] {
-        &self.gateway_listener_requirements
     }
 
     pub(crate) async fn ensure_workspace(&self, workspace: &str) -> Result<(), Status> {
@@ -5300,15 +5193,6 @@ impl ComputeDriver for NoopTestDriver {
         ))
     }
 
-    async fn get_gateway_listener_requirements(
-        &self,
-        _request: Request<GetGatewayListenerRequirementsRequest>,
-    ) -> Result<tonic::Response<GetGatewayListenerRequirementsResponse>, Status> {
-        Ok(tonic::Response::new(
-            GetGatewayListenerRequirementsResponse::default(),
-        ))
-    }
-
     async fn validate_sandbox_create(
         &self,
         _request: Request<ValidateSandboxCreateRequest>,
@@ -5454,7 +5338,6 @@ pub fn new_test_runtime_with_driver(
         supervisor_sessions: Arc::new(SupervisorSessionRegistry::new()),
         sync_lock: Arc::new(Mutex::new(())),
         lifecycle_gates: Arc::new(LifecycleGateRegistry::default()),
-        gateway_listener_requirements: Vec::new(),
         replica_id: "test-replica".to_string(),
         rootfs_tar_staging: Arc::new(rootfs_tar::RootfsTarStagingRegistry::disabled()),
     }
@@ -5859,15 +5742,6 @@ mod tests {
             }))
         }
 
-        async fn get_gateway_listener_requirements(
-            &self,
-            _request: Request<GetGatewayListenerRequirementsRequest>,
-        ) -> Result<tonic::Response<GetGatewayListenerRequirementsResponse>, Status> {
-            Ok(tonic::Response::new(
-                GetGatewayListenerRequirementsResponse::default(),
-            ))
-        }
-
         async fn validate_sandbox_create(
             &self,
             _request: Request<ValidateSandboxCreateRequest>,
@@ -6212,15 +6086,6 @@ mod tests {
             }))
         }
 
-        async fn get_gateway_listener_requirements(
-            &self,
-            _request: Request<GetGatewayListenerRequirementsRequest>,
-        ) -> Result<tonic::Response<GetGatewayListenerRequirementsResponse>, Status> {
-            Ok(tonic::Response::new(
-                GetGatewayListenerRequirementsResponse::default(),
-            ))
-        }
-
         async fn validate_sandbox_create(
             &self,
             _request: Request<ValidateSandboxCreateRequest>,
@@ -6437,7 +6302,6 @@ mod tests {
             supervisor_sessions: Arc::new(SupervisorSessionRegistry::new()),
             sync_lock: Arc::new(Mutex::new(())),
             lifecycle_gates: Arc::new(LifecycleGateRegistry::default()),
-            gateway_listener_requirements: Vec::new(),
             replica_id: "test-replica".to_string(),
             rootfs_tar_staging: Arc::new(rootfs_tar::RootfsTarStagingRegistry::disabled()),
         }
@@ -7634,14 +7498,6 @@ mod tests {
                 request: Request<GetCapabilitiesRequest>,
             ) -> Result<tonic::Response<GetCapabilitiesResponse>, Status> {
                 self.0.get_capabilities(request).await
-            }
-
-            async fn get_gateway_listener_requirements(
-                &self,
-                request: Request<GetGatewayListenerRequirementsRequest>,
-            ) -> Result<tonic::Response<GetGatewayListenerRequirementsResponse>, Status>
-            {
-                self.0.get_gateway_listener_requirements(request).await
             }
 
             async fn validate_sandbox_create(
@@ -11903,12 +11759,6 @@ mod tests {
                 .await
                 .unwrap();
             remote
-                .get_gateway_listener_requirements(Request::new(
-                    GetGatewayListenerRequirementsRequest {},
-                ))
-                .await
-                .unwrap();
-            remote
                 .validate_sandbox_create(Request::new(ValidateSandboxCreateRequest {
                     sandbox: Some(sandbox.clone()),
                 }))
@@ -11959,7 +11809,7 @@ mod tests {
         let traceparents = driver.traceparents();
         assert_eq!(
             traceparents.len(),
-            9,
+            8,
             "the client interceptor should cover every RPC"
         );
         assert!(
@@ -12002,14 +11852,14 @@ mod tests {
         let traceparents = driver.traceparents();
         assert_eq!(
             traceparents.len(),
-            2,
-            "the capability and listener-requirements probes should carry initialization trace context"
+            1,
+            "the capability probe should carry initialization trace context"
         );
         assert!(
             traceparents
                 .iter()
                 .all(|traceparent| traceparent.contains(&trace_id)),
-            "both initialization probes should be part of the initialization trace"
+            "the initialization probe should be part of the initialization trace"
         );
     }
 
@@ -12023,11 +11873,7 @@ mod tests {
         let driver = FakeComputeDriver::new()
             .with_driver_name("fake-remote-driver")
             .with_default_image("openshell/sandbox:remote")
-            .with_gateway_manages_lifecycle()
-            .with_gateway_listener_requirement(
-                "172.19.0.1:17670",
-                "external driver managed bridge",
-            );
+            .with_gateway_manages_lifecycle();
         let _server = driver.serve_uds(&socket_path).unwrap();
 
         let endpoint = connect_remote_compute_driver("docker", &socket_path)
@@ -12044,15 +11890,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(
-            runtime.gateway_listener_requirements(),
-            &[GatewayListenerRequirement::Exact {
-                address: "172.19.0.1:17670".parse().unwrap(),
-                driver_name: "docker".to_string(),
-                reason: "external driver managed bridge".to_string(),
-            }]
-        );
-
         let mut sandbox = sandbox_record("sb-uds", "uds-sandbox", SandboxPhase::Provisioning);
         sandbox.spec = Some(SandboxSpec {
             log_level: "debug".to_string(),
@@ -12084,8 +11921,8 @@ mod tests {
         runtime.validate_sandbox_create(&sandbox).await.unwrap();
         runtime.create_sandbox(sandbox, None, false).await.unwrap();
         let calls = driver.calls();
-        assert_eq!(calls.len(), 4, "unexpected calls: {calls:?}");
-        let validated = match &calls[2] {
+        assert_eq!(calls.len(), 3, "unexpected calls: {calls:?}");
+        let validated = match &calls[1] {
             FakeComputeDriverCall::ValidateSandboxCreate {
                 sandbox: Some(sandbox),
             } => sandbox,
@@ -12108,7 +11945,7 @@ mod tests {
             Some(42)
         );
         assert!(matches!(
-            &calls[3],
+            &calls[2],
             FakeComputeDriverCall::CreateSandbox { sandbox: Some(sandbox) }
                 if sandbox.spec.as_ref().and_then(|spec| spec.policy.as_ref())
                     .is_some_and(|policy| policy.version == 42)
@@ -12153,43 +11990,6 @@ mod tests {
             }
             other => panic!("expected DeleteSandbox call, got {other:?}"),
         }
-    }
-
-    #[tokio::test]
-    #[cfg(unix)]
-    async fn remote_compute_driver_accepts_unimplemented_listener_requirements_api() {
-        use crate::test_support::{FakeComputeDriver, FakeComputeDriverCall};
-
-        let dir = tempfile::tempdir().unwrap();
-        let socket_path = dir.path().join("compute-driver.sock");
-        let driver = FakeComputeDriver::new()
-            .with_driver_name("legacy-remote-driver")
-            .without_gateway_listener_requirements_api();
-        let _server = driver.serve_uds(&socket_path).unwrap();
-
-        let endpoint = connect_remote_compute_driver("external-test", &socket_path)
-            .await
-            .unwrap();
-        let store = Arc::new(Store::connect("sqlite::memory:").await.unwrap());
-        let runtime = ComputeRuntime::new_remote_driver(
-            endpoint,
-            store,
-            SandboxIndex::new(),
-            SandboxWatchBus::new(),
-            TracingLogBus::new(),
-            Arc::new(SupervisorSessionRegistry::new()),
-        )
-        .await
-        .unwrap();
-
-        assert!(runtime.gateway_listener_requirements().is_empty());
-        assert_eq!(
-            driver.calls(),
-            vec![
-                FakeComputeDriverCall::GetCapabilities,
-                FakeComputeDriverCall::GetGatewayListenerRequirements,
-            ]
-        );
     }
 
     #[tokio::test]

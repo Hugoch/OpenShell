@@ -534,7 +534,7 @@ STATE_DIR="${XDG_STATE_HOME}"
 mkdir -p "${STATE_DIR}"
 JWT_DIR="${STATE_DIR}/jwt"
 
-GATEWAY_ENDPOINT="https://host.openshell.internal:${HOST_PORT}"
+GATEWAY_ENDPOINT="https://127.0.0.1:${HOST_PORT}"
 E2E_NAMESPACE="e2e-docker-$$-${HOST_PORT}"
 DOCKER_NETWORK_NAME="${E2E_NAMESPACE}"
 GATEWAY_HOST_ALIAS_IP=""
@@ -586,23 +586,18 @@ GATEWAY_CONFIG="${STATE_DIR}/gateway.toml"
     printf 'socket_path = %s\n' "$(toml_string "${DRIVER_SOCKET}")"
   else
     printf 'sandbox_label = %s\n'        "$(toml_string "${E2E_NAMESPACE}")"
-    printf 'network_name = %s\n'         "$(toml_string "${DOCKER_NETWORK_NAME}")"
     printf 'grpc_endpoint = %s\n'        "$(toml_string "${GATEWAY_ENDPOINT}")"
     printf 'default_image = %s\n'        "$(toml_string "${SANDBOX_IMAGE}")"
     printf 'image_pull_policy = %s\n'    "$(toml_string "${SANDBOX_IMAGE_PULL_POLICY}")"
     printf 'enable_bind_mounts = true\n'
     printf 'sandbox_runtime_image = %s\n' "$(toml_string "${SANDBOX_RUNTIME_IMAGE}")"
     printf 'supervisor_image = %s\n'     "$(toml_string "${SUPERVISOR_IMAGE}")"
-    if [ -n "${GATEWAY_HOST_ALIAS_IP}" ]; then
-      printf 'host_gateway_ip = %s\n'    "$(toml_string "${GATEWAY_HOST_ALIAS_IP}")"
-    fi
   fi
 } > "${GATEWAY_CONFIG}"
 
 if [ "${OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER:-0}" = "1" ]; then
   {
     printf 'sandbox_label = %s\n'        "$(toml_string "${E2E_NAMESPACE}")"
-    printf 'network_name = %s\n'         "$(toml_string "${DOCKER_NETWORK_NAME}")"
     printf 'grpc_endpoint = %s\n'        "$(toml_string "${GATEWAY_ENDPOINT}")"
     printf 'default_image = %s\n'        "$(toml_string "${SANDBOX_IMAGE}")"
     printf 'image_pull_policy = %s\n'    "$(toml_string "${SANDBOX_IMAGE_PULL_POLICY}")"
@@ -612,9 +607,6 @@ if [ "${OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER:-0}" = "1" ]; then
     printf 'enable_bind_mounts = true\n'
     printf 'sandbox_runtime_image = %s\n' "$(toml_string "${SANDBOX_RUNTIME_IMAGE}")"
     printf 'supervisor_image = %s\n'     "$(toml_string "${SUPERVISOR_IMAGE}")"
-    if [ -n "${GATEWAY_HOST_ALIAS_IP}" ]; then
-      printf 'host_gateway_ip = %s\n'    "$(toml_string "${GATEWAY_HOST_ALIAS_IP}")"
-    fi
   } >"${DRIVER_CONFIG}"
   "${DRIVER_BIN}" \
     --bind-socket "${DRIVER_SOCKET}" \

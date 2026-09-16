@@ -667,16 +667,9 @@ export OPENSHELL_E2E_GATEWAY_CA_CERT="${PKI_DIR}/ca.crt"
 
 HOST_PORT=$(e2e_pick_port)
 HEALTH_PORT=$(e2e_pick_port)
-if [ "$(uname -s)" = "Darwin" ]; then
-  # Podman Machine reserves IPv4 loopback for its callback-only listener.
-  PRIMARY_BIND_IP="::1"
-  CLI_ENDPOINT_HOST="localhost"
-  HEALTH_ENDPOINT_HOST="[::1]"
-else
-  PRIMARY_BIND_IP="127.0.0.1"
-  CLI_ENDPOINT_HOST="127.0.0.1"
-  HEALTH_ENDPOINT_HOST="127.0.0.1"
-fi
+PRIMARY_BIND_IP="127.0.0.1"
+CLI_ENDPOINT_HOST="127.0.0.1"
+HEALTH_ENDPOINT_HOST="127.0.0.1"
 STATE_DIR="${WORKDIR}/state"
 mkdir -p "${STATE_DIR}"
 export XDG_STATE_HOME="${STATE_DIR}"
@@ -825,8 +818,8 @@ fi
 
 GATEWAY_ARGS=(
   --config "${GATEWAY_CONFIG}"
-  # compute_driver comes from the RPM template. Override the loopback address
-  # and port so Podman Machine can keep its IPv4 callback listener distinct.
+  # compute_driver comes from the RPM template. Override the loopback port for
+  # this isolated test gateway.
   --bind-address "${PRIMARY_BIND_IP}"
   --port "${HOST_PORT}"
   --health-port "${HEALTH_PORT}"

@@ -6,7 +6,7 @@ attachments; and asks compute runtimes to create or delete sandbox workloads.
 
 ## Responsibilities
 
-- Authenticate clients and sandbox callbacks.
+- Authenticate clients and sandbox supervisor sessions.
 - Serve gRPC APIs for sandbox lifecycle, provider management, policy updates,
   settings, logs, watch streams, and relay forwarding.
 - Serve HTTP endpoints for health, WebSocket tunnels, and edge-auth flows.
@@ -49,7 +49,7 @@ versions fail before runtime construction, and driver settings belong only to
 Package lifecycle code may replace an exact package-generated v1 default, but
 it preserves edited configurations for explicit operator migration.
 
-Gateway listener TLS and sandbox callback TLS are separate inputs. A selected
+Gateway listener TLS and sandbox supervisor TLS are separate inputs. A selected
 local Docker, Podman, or VM driver requires a complete guest bundle whenever
 the gateway listener uses TLS; package-managed local TLS can supply that bundle.
 Kubernetes instead projects guest credentials through its configured Secret.
@@ -141,24 +141,16 @@ template, provider, and service collection list RPCs use the same field with an
 all-workspaces marker. Platform-global policy operations omit both `sandbox`
 and `workspace_scope`, while sandbox policy operations require both.
 
-Docker and Podman report the local address through which their sandboxes can
-reach the gateway. When the primary listener covers that address, the gateway
-reuses it; sandbox JWT authentication and its RPC allowlist remain the callback
-authorization boundary. When the primary listener does not cover the address,
-the gateway adds a callback-only listener. Additional callback listeners accept
-only gRPC methods classified as sandbox-callable by the gateway's generated
-authorization metadata. They reject user and administrator APIs, health,
-reflection, and HTTP routes before normal request
-authentication. The operator-configured primary listener retains the full
-multiplexed API surface.
+Docker and Podman supervisors use host networking and connect through the
+gateway's primary listener. On Linux, local supervisors use the primary
+loopback endpoint. Sandbox JWT authentication and the generated sandbox RPC
+allowlist remain the authorization boundary; the gateway does not negotiate or
+bind compute-driver-specific listeners.
 
-The `rpc_auth` classification is also the source of truth for negotiated
-listener exposure: marking an RPC as `sandbox` or `dual` makes it callable on
-these listeners. Review such changes as both authorization and network-surface
-changes. Listener requirements are currently authorized only for the built-in
-Docker and Podman drivers. Operator-granted listener capabilities for external
-drivers are tracked in
-[#2539](https://github.com/NVIDIA/OpenShell/issues/2539).
+The `rpc_auth` classification is the source of truth for supervisor access.
+Marking an RPC as `sandbox` or `dual` makes it callable by an authenticated
+sandbox principal on the primary listener. Review such changes as
+authorization-surface changes.
 
 Operators can configure a gateway-wide gRPC request rate limit. The limit is
 applied only to gRPC API traffic after protocol multiplexing; health, metrics,
@@ -1059,25 +1051,16 @@ system entry instead of pretending to delete package-manager owned state.
 
 - Gateway TLS and client certificate distribution are deployment concerns owned
   by the operator or packaging layer.
-- Compute runtimes own the mechanics of starting workloads and injecting
-  callback configuration. Local Docker, Podman, and VM callback endpoints can
-  be derived from their fixed host aliases. Kubernetes requires an explicit
-  endpoint from driver placement; Helm renders it from the gateway Service
-  name and namespace rather than inferring it from sandbox placement.
-- Docker-backed local gateways use Docker's `host-gateway` callback alias on
-  macOS and Docker Desktop-style runtimes. They request IPv4 loopback callback
-  reachability and add a listener only when the primary does not cover it.
-  Native Linux Docker may expose an additional bridge-gateway listener because
-  the host can bind that bridge IP.
-- Podman-backed macOS gateways use gvproxy's host-loopback IP for sandbox host
-  aliases by default so stale Podman machine images do not need Podman's
-  `host-gateway` resolver. Linux Podman keeps the resolver unless
-  `host_gateway_ip` is configured. Rootful Podman can request its exact bridge
-  gateway listener. Rootless Podman explicitly reporting pasta requests the
-  private IPv4 source selected by the host default route rather than an
-  arbitrary private interface. Slirp4netns, other helpers, and missing helper
-  metadata fail closed for local callbacks until a rootless-network namespace
-  relay is available.
+- Compute runtimes own the mechanics of starting workloads and injecting the
+  gateway endpoint. Docker and Podman supervisors use host networking; local
+  Linux supervisors use the gateway's primary loopback endpoint. Kubernetes
+  uses the gateway Service rendered by Helm. VM supervisors use their
+  runtime-specific host route.
+- Docker Desktop requires host networking to be enabled and cannot combine it
+  with Enhanced Container Isolation. Set an explicit remote `grpc_endpoint`
+  when the gateway is not reachable on the Docker daemon host.
+- Podman Machine uses gvproxy's host-loopback route on macOS. Native Linux
+  Podman uses the primary loopback endpoint.
 - Gateway restarts recover persisted objects from storage, but live relay
   streams must be re-established by supervisors.
 - User-facing behavior changes must update published docs in `docs/`; this file

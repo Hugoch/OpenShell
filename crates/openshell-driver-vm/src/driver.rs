@@ -49,8 +49,7 @@ use openshell_core::proto::compute::v1::{
     DriverCondition as SandboxCondition, DriverPlatformEvent as PlatformEvent,
     DriverSandbox as Sandbox, DriverSandboxStatus as SandboxStatus,
     DriverSandboxTemplate as SandboxTemplate, EnsureWorkspaceRequest, EnsureWorkspaceResponse,
-    GetCapabilitiesRequest, GetCapabilitiesResponse, GetGatewayListenerRequirementsRequest,
-    GetGatewayListenerRequirementsResponse, GetSandboxRequest, GetSandboxResponse,
+    GetCapabilitiesRequest, GetCapabilitiesResponse, GetSandboxRequest, GetSandboxResponse,
     GpuResourceCapabilities, ListSandboxesRequest, ListSandboxesResponse,
     MemoryResourceCapabilities, ResourceCapabilities, StartSandboxRequest, StartSandboxResponse,
     StopSandboxRequest, StopSandboxResponse, ValidateSandboxCreateRequest,
@@ -4240,15 +4239,6 @@ impl ComputeDriver for VmDriver {
         _request: Request<GetCapabilitiesRequest>,
     ) -> Result<Response<GetCapabilitiesResponse>, Status> {
         Ok(Response::new(self.capabilities()))
-    }
-
-    async fn get_gateway_listener_requirements(
-        &self,
-        _request: Request<GetGatewayListenerRequirementsRequest>,
-    ) -> Result<Response<GetGatewayListenerRequirementsResponse>, Status> {
-        Ok(Response::new(GetGatewayListenerRequirementsResponse {
-            requirements: Vec::new(),
-        }))
     }
 
     async fn validate_sandbox_create(

@@ -48,8 +48,7 @@ pub struct PodmanComputeConfig {
     pub gateway_port: u16,
     /// Unix socket path the in-container supervisor bridges relay traffic to.
     pub ssh_socket_path: String,
-    /// Name of the Podman bridge network.
-    /// Created automatically if it does not exist.
+    /// Name of the Podman bridge network used for driver-managed resources.
     pub network_name: String,
     /// Host gateway IP used for sandbox host aliases.
     ///

@@ -162,11 +162,17 @@ impl ContainerHttpServer {
         let engine = ContainerEngine::from_env()?;
         let host_port = find_free_port();
         let network = e2e_network_name();
-        let host = network.as_ref().map_or_else(
-            || "host.openshell.internal".to_string(),
-            |_| alias.to_string(),
-        );
-        let port = if network.is_some() { 8000 } else { host_port };
+        // Docker supervisors use the daemon host network. Publish fixtures on
+        // that host and address them through the backend's reserved alias;
+        // a Docker-network alias is not visible from a host-networked
+        // supervisor. Podman keeps its shared-network fixture path.
+        let use_host_port = network.is_none() || is_e2e_driver("docker");
+        let host = if use_host_port {
+            "host.openshell.internal".to_string()
+        } else {
+            alias.to_string()
+        };
+        let port = if use_host_port { host_port } else { 8000 };
 
         let mut args = vec![
             "run".to_string(),
@@ -175,15 +181,19 @@ impl ContainerHttpServer {
             "--entrypoint".to_string(),
             "python3".to_string(),
         ];
-        if let Some(network) = network.as_deref() {
+        if use_host_port {
+            args.extend(["-p".to_string(), format!("{host_port}:8000")]);
+        } else {
+            let network = network.as_deref().ok_or_else(|| {
+                "container fixture network was not configured despite network mode selection"
+                    .to_string()
+            })?;
             args.extend([
                 "--network".to_string(),
                 network.to_string(),
                 "--network-alias".to_string(),
                 alias.to_string(),
             ]);
-        } else {
-            args.extend(["-p".to_string(), format!("{host_port}:8000")]);
         }
         args.extend([
             DEFAULT_TEST_SERVER_IMAGE.to_string(),
@@ -322,6 +332,64 @@ impl HostSupportContainer {
             engine,
         };
         fixture.wait_until_listening(container_port).await?;
+        Ok(fixture)
+    }
+
+    /// Start a Python fixture with several ports published on the test host.
+    ///
+    /// This is useful for a host-networked supervisor when one fixture must
+    /// exercise several destination ports without relying on container DNS.
+    pub async fn start_python_with_host_bindings(
+        script: &str,
+        bindings: &[(u16, u16)],
+        ready_port: u16,
+        capabilities: &[&str],
+    ) -> Result<Self, String> {
+        let published_ready_port = bindings
+            .iter()
+            .find_map(|(host_port, container_port)| {
+                (*container_port == ready_port).then_some(*host_port)
+            })
+            .ok_or_else(|| "host fixture bindings must include the readiness port".to_string())?;
+        let engine = ContainerEngine::from_env()?;
+        let mut args = vec![
+            "run".to_string(),
+            "--detach".to_string(),
+            "--entrypoint".to_string(),
+            "python3".to_string(),
+        ];
+        args.extend(bindings.iter().flat_map(|(host_port, container_port)| {
+            ["-p".to_string(), format!("{host_port}:{container_port}")]
+        }));
+        args.extend(
+            capabilities
+                .iter()
+                .map(|capability| format!("--cap-add={capability}")),
+        );
+        args.extend([
+            DEFAULT_TEST_SERVER_IMAGE.to_string(),
+            "-c".to_string(),
+            script.to_string(),
+        ]);
+        let output = engine
+            .command()
+            .args(&args)
+            .output()
+            .map_err(|err| format!("start {} host fixture: {err}", engine.name()))?;
+        if !output.status.success() {
+            return Err(format!(
+                "{} run failed (exit {:?}):\n{}",
+                engine.name(),
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let fixture = Self {
+            port: published_ready_port,
+            container_id: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            engine,
+        };
+        fixture.wait_until_listening(ready_port).await?;
         Ok(fixture)
     }
 

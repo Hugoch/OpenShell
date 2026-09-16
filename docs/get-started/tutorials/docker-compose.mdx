@@ -34,7 +34,12 @@ The Compose configuration lives at [`deploy/docker/`](https://github.com/NVIDIA/
 
 ## Port note
 
-The Docker compute driver injects `host.openshell.internal:<gateway-port>` into every sandbox container as its callback address. The gateway listens on port 8080 inside the container, so **port 8080 must be published at the same number on the Docker host**. Publishing it as a different host port (for example `18080:8080`) causes sandbox containers to call back to the wrong port and remain stuck in the `Provisioning` phase.
+The Docker supervisor uses host networking and connects to the gateway through
+the host's loopback port. The gateway listens on port 8080 inside the container,
+so **port 8080 must be published at the same number on the Docker host**.
+Publishing it as a different host port (for example `18080:8080`) leaves the
+supervisor unable to establish its gateway session and the sandbox remains in
+the `Provisioning` phase.
 
 If port 8080 is taken, change `OPENSHELL_SERVER_PORT` and update the port mapping to `<your-port>:8080`, then set `OPENSHELL_PORT=<your-port>` in an `.env` file.
 
