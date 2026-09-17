@@ -149,7 +149,15 @@ impl openshell_server::ComputeDriverFactory for MxcFactory {
         &self,
         context: openshell_server::ComputeDriverConfigContext<'_>,
     ) -> openshell_core::Result<()> {
-        let _: openshell_driver_mxc::MxcComputeConfig = context.driver_config()?;
+        let mut config: openshell_driver_mxc::MxcComputeConfig = context.driver_config()?;
+        if config.grpc_endpoint.trim().is_empty() {
+            let scheme = if context.gateway_tls_enabled() {
+                "https"
+            } else {
+                "http"
+            };
+            config.grpc_endpoint = format!("{scheme}://127.0.0.1:{}", context.gateway_port());
+        }
         Ok(())
     }
 
@@ -157,41 +165,33 @@ impl openshell_server::ComputeDriverFactory for MxcFactory {
         &self,
         context: openshell_server::ComputeDriverBuildContext<'_>,
     ) -> openshell_core::Result<openshell_server::ComputeDriverInstance> {
-        let config: openshell_driver_mxc::MxcComputeConfig = context.driver_config()?;
-        let backend = openshell_driver_mxc::MxcComputeBackend::new(config);
-        context.set_forward_sink(std::sync::Arc::new(MxcForwardSink(backend.forward_sink())));
-        let provider_credentials_sink = backend.provider_credentials_sink();
+        let mut config: openshell_driver_mxc::MxcComputeConfig = context.driver_config()?;
+        require_guest_tls_for_local_driver(&context, "mxc")?;
+        let use_internal_tls_server_name =
+            config.grpc_endpoint.trim().is_empty() && context.gateway_tls_enabled();
+        if config.grpc_endpoint.trim().is_empty() {
+            let scheme = if context.gateway_tls_enabled() {
+                "https"
+            } else {
+                "http"
+            };
+            config.grpc_endpoint = format!("{scheme}://127.0.0.1:{}", context.gateway_port());
+        }
+        let tls = context
+            .guest_tls_paths()
+            .map(|(ca, cert, key)| (ca.to_path_buf(), cert.to_path_buf(), key.to_path_buf()));
+        let endpoint = config.grpc_endpoint.clone();
+        let tls_server_name = use_internal_tls_server_name.then(|| "localhost".to_string());
+        let backend = openshell_driver_mxc::MxcComputeBackend::new_with_gateway(
+            config,
+            endpoint,
+            tls,
+            tls_server_name,
+        );
         let driver = openshell_driver_mxc::ComputeDriverService::new(backend);
-        Ok(
-            openshell_server::ComputeDriverInstance::InProcessWithProviderCredentials {
-                driver: std::sync::Arc::new(driver),
-                provider_credentials_sink,
-            },
-        )
-    }
-}
-
-/// Adapts MXC's dynamic port-forward side channel (`handle_forward_tcp`'s
-/// fallback for sandboxes with no in-sandbox supervisor) to the generic
-/// `ComputeDriverForwardSink` capability the server crate consumes, so
-/// `openshell-server` never has to depend on `openshell-driver-mxc` directly.
-#[cfg(all(target_os = "windows", feature = "compute-driver-mxc"))]
-struct MxcForwardSink(openshell_driver_mxc::ForwardSink);
-
-#[cfg(all(target_os = "windows", feature = "compute-driver-mxc"))]
-#[async_trait::async_trait]
-impl openshell_server::ComputeDriverForwardSink for MxcForwardSink {
-    async fn open_dynamic_forward(
-        &self,
-        sandbox_id: &str,
-        target_port: u16,
-    ) -> Result<(std::net::SocketAddr, Vec<u8>, Box<dyn std::any::Any + Send>), String> {
-        let (addr, nonce, handle) = self
-            .0
-            .open_dynamic_forward(sandbox_id, target_port)
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok((addr, nonce.to_vec(), Box::new(handle)))
+        Ok(openshell_server::ComputeDriverInstance::InProcess(
+            std::sync::Arc::new(driver),
+        ))
     }
 }
 
@@ -489,13 +489,16 @@ fn vm_config(
     Ok(config)
 }
 
-#[cfg(all(
-    not(target_os = "windows"),
-    any(
-        feature = "compute-driver-docker",
-        feature = "compute-driver-podman",
-        feature = "compute-driver-vm"
-    )
+#[cfg(any(
+    all(
+        not(target_os = "windows"),
+        any(
+            feature = "compute-driver-docker",
+            feature = "compute-driver-podman",
+            feature = "compute-driver-vm"
+        )
+    ),
+    all(target_os = "windows", feature = "compute-driver-mxc")
 ))]
 fn require_guest_tls_for_local_driver(
     context: &openshell_server::ComputeDriverBuildContext<'_>,
@@ -508,13 +511,16 @@ fn require_guest_tls_for_local_driver(
     )
 }
 
-#[cfg(all(
-    not(target_os = "windows"),
-    any(
-        feature = "compute-driver-docker",
-        feature = "compute-driver-podman",
-        feature = "compute-driver-vm"
-    )
+#[cfg(any(
+    all(
+        not(target_os = "windows"),
+        any(
+            feature = "compute-driver-docker",
+            feature = "compute-driver-podman",
+            feature = "compute-driver-vm"
+        )
+    ),
+    all(target_os = "windows", feature = "compute-driver-mxc")
 ))]
 fn validate_local_driver_guest_tls(
     gateway_tls_enabled: bool,

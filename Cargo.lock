@@ -4198,9 +4198,10 @@ dependencies = [
  "futures",
  "noyalib",
  "openshell-core",
+ "openshell-isolation-interface",
  "openshell-ocsf",
  "openshell-policy",
- "openshell-supervisor-network",
+ "openshell-sandbox-backend",
  "rand 0.9.4",
  "rustls",
  "serde",
@@ -4209,7 +4210,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite 0.26.2",
  "tonic",
  "tracing",
  "uuid",
@@ -4537,6 +4537,8 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "windows",
 ]
 
 [[package]]
@@ -4846,18 +4848,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
-]
-
-[[package]]
-name = "openshell-supervisor-relay"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "base64",
- "futures",
- "serde_json",
- "tokio",
- "tokio-tungstenite 0.26.2",
 ]
 
 [[package]]

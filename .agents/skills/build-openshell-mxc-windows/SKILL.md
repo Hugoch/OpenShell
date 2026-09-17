@@ -1,6 +1,6 @@
 ---
 name: build-openshell-mxc-windows
-description: Maintain and validate OpenShell's build-only Windows MSVC lane for x64 and ARM64. Use when working on Windows compilation, `windows:*` mise tasks, unsupported Windows compute-driver contracts, or Windows build reports. This skill does not implement Docker, Kubernetes, Podman, VM, MXC driver, policy translation, MSI, service, or supervisor runtime support on Windows.
+description: Maintain and validate OpenShell's native Windows MSVC and MXC runtime lane for x64 and ARM64. Use when working on Windows compilation, `windows:*` mise tasks, the MXC supervisor/sandbox pairing, unsupported Windows compute-driver contracts, or Windows build reports. This skill does not implement Docker, Kubernetes, Podman, VM, MSI, or service support on Windows.
 metadata:
   internal: true
 ---
@@ -12,12 +12,13 @@ OpenShell repository. The Windows lane is already present in `main`; do not
 treat this skill as a first-time porting recipe unless the user explicitly asks
 for a new fork or a from-scratch bring-up.
 
-The lane is build-only. It validates that OpenShell can compile and test on
-Windows MSVC for the supported deliverables:
+The lane validates that OpenShell can compile and test on Windows MSVC for the
+supported deliverables:
 
 - `openshell-gateway.exe`
 - `openshell.exe`
-- `openshell-supervisor-relay.exe` (Windows-only MXC workload relay)
+- `openshell-supervisor.exe` (host RFC 0012 isolation backend)
+- `openshell-sandbox.exe` (MXC ProcessContainer boundary)
 
 It intentionally does not make Windows a Docker, Kubernetes, Podman, or VM
 runtime host.
@@ -46,8 +47,8 @@ In scope:
 - Refreshing a local checkout to the latest upstream GitHub `main`.
 - Maintaining `tasks/windows.toml` and `tasks/scripts/windows-msvc.ps1`.
 - Running x64 and ARM64 MSVC checks.
-- Building x64 and ARM64 release binaries for `openshell-gateway` and
-  `openshell`.
+- Building x64 and ARM64 release binaries for `openshell-gateway`, `openshell`,
+  `openshell-supervisor`, and `openshell-sandbox`.
 - Running workspace tests on a native x64 or ARM64 host.
 - Running focused unsupported-driver contract tests.
 - Reporting test counts, skipped/gated areas, warnings, artifacts, and logs.
@@ -60,12 +61,9 @@ Out of scope:
 - Kubernetes support on Windows.
 - Podman, Podman machine, or Podman Desktop support on Windows.
 - VM, Hyper-V, WSL, libkrun, or VM-backed sandbox execution on Windows.
-- New MXC compute driver crate.
-- OpenShell to MXC policy translation.
 - Windows named-pipe driver IPC.
 - Windows Credential Manager or DPAPI integration.
 - MSI, WinGet, Windows service registration, or installer work.
-- Windows supervisor runtime port.
 
 ## Hard Rules
 
@@ -253,8 +251,8 @@ crypto dependency builds.
 |---|---|
 | `windows:check:x64` | `cargo check --workspace` for `x86_64-pc-windows-msvc`, excluding unsupported Windows packages as top-level workspace targets. |
 | `windows:check:arm64` | `cargo check --workspace` for `aarch64-pc-windows-msvc`, with the same top-level exclusions. |
-| `windows:build:x64` | Release-builds `openshell-gateway.exe` and `openshell.exe` for x64. |
-| `windows:build:arm64` | Release-builds `openshell-gateway.exe` and `openshell.exe` for ARM64. |
+| `windows:build:x64` | Release-builds `openshell-gateway.exe`, `openshell.exe`, `openshell-supervisor.exe`, and `openshell-sandbox.exe` for x64. |
+| `windows:build:arm64` | Release-builds the same four binaries for ARM64. |
 | `windows:test:x64` | Runs native x64 workspace tests with `--no-fail-fast`, excluding unsupported Windows packages as top-level workspace targets. |
 | `windows:test:arm64` | Runs native ARM64 workspace tests with `--no-fail-fast` and the same package exclusions. Rejects non-ARM64 hosts. |
 | `windows:test:unsupported:x64` | Re-runs focused `openshell-gateway` tests for unsupported Windows driver behavior. |

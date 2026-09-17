@@ -698,9 +698,6 @@ pub struct ComputeRuntime {
     lifecycle_gates: Arc<LifecycleGateRegistry>,
     gateway_listener_requirements: Vec<GatewayListenerRequirement>,
     replica_id: String,
-    /// Dynamic TCP forward capability contributed by the active in-process
-    /// driver, if it has one. See `forward_sink`.
-    forward_sink: Option<Arc<dyn crate::ComputeDriverForwardSink>>,
     /// Gateway-issued staging slots for rootfs tar archives. Shared across
     /// clones: `ServerState` holds `ComputeRuntime` by value, so a per-clone
     /// table would make a token minted on one clone invisible to another.
@@ -836,7 +833,6 @@ impl ComputeRuntime {
             lifecycle_gates: Arc::new(LifecycleGateRegistry::default()),
             gateway_listener_requirements,
             replica_id: lease::replica_id(),
-            forward_sink: None,
             rootfs_tar_staging,
         })
     }
@@ -887,22 +883,6 @@ impl ComputeRuntime {
             supervisor_sessions,
         )
         .await
-    }
-
-    /// Contributes a driver's dynamic TCP forward capability, if it has one.
-    /// Called at most once, right after `from_driver`, by the generic
-    /// `build_compute_runtime` construction path.
-    pub(crate) fn set_forward_sink(&mut self, sink: Arc<dyn crate::ComputeDriverForwardSink>) {
-        self.forward_sink = Some(sink);
-    }
-
-    /// A driver-owned dynamic TCP forward capability, when the active driver
-    /// has one. `handle_forward_tcp` uses this as a fallback path for
-    /// sandboxes with no live `ConnectSupervisor` session (e.g. MXC, which
-    /// has no in-sandbox supervisor at all). `None` for every other driver.
-    #[must_use]
-    pub fn forward_sink(&self) -> Option<&Arc<dyn crate::ComputeDriverForwardSink>> {
-        self.forward_sink.as_ref()
     }
 
     #[must_use]
@@ -5482,7 +5462,6 @@ pub fn new_test_runtime_with_driver(
         lifecycle_gates: Arc::new(LifecycleGateRegistry::default()),
         gateway_listener_requirements: Vec::new(),
         replica_id: "test-replica".to_string(),
-        forward_sink: None,
         rootfs_tar_staging: Arc::new(rootfs_tar::RootfsTarStagingRegistry::disabled()),
     }
 }
@@ -6421,7 +6400,6 @@ mod tests {
             lifecycle_gates: Arc::new(LifecycleGateRegistry::default()),
             gateway_listener_requirements: Vec::new(),
             replica_id: "test-replica".to_string(),
-            forward_sink: None,
             rootfs_tar_staging: Arc::new(rootfs_tar::RootfsTarStagingRegistry::disabled()),
         }
     }

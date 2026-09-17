@@ -107,6 +107,7 @@ impl DockerBoundarySpec {
                 resource_claim_files: BTreeMap::new(),
                 workload_identity: self.workload_identity.clone(),
                 outer_fence: outer_fence.clone(),
+                direct_proxy_url: None,
                 child_env: self.child_env,
             },
             runtime_descriptor: SandboxRuntimeDescriptor {
@@ -119,6 +120,7 @@ impl DockerBoundarySpec {
                 },
                 tls: self.supervisor_tls,
                 host_gateway_ip: self.host_gateway_ip,
+                direct_proxy: None,
                 resource_claims,
                 outer_fence,
             },

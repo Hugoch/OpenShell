@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_rejects_network_middleware_on_egress_proxy() {
+    fn embedded_preserves_network_middleware_for_supervisor() {
         let mapper = EmbeddedPolicyMapper;
         let mut policy = fs_policy(&["C:/work/demo"], &[]);
         policy.network_middlewares.insert(
@@ -439,12 +439,8 @@ mod tests {
             containment: "processcontainer".into(),
         };
 
-        let error = mapper.map(Some(&policy), &ctx).unwrap_err();
-        let MapError::Unsupported(loss) = error else {
-            panic!("expected unsupported middleware error");
-        };
-        assert_eq!(loss.len(), 1);
-        assert_eq!(loss[0].rule_kind, "network_middlewares");
-        assert!(loss[0].detail.contains("middleware service registry"));
+        let mapped = mapper.map(Some(&policy), &ctx).unwrap();
+        let trimmed = mapped.trimmed_policy.expect("trimmed proxy policy");
+        assert_eq!(trimmed.network_middlewares, policy.network_middlewares);
     }
 }

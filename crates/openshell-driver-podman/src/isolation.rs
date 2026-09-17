@@ -221,6 +221,7 @@ pub fn bootstrap_archives(
         resource_claim_files: BTreeMap::new(),
         workload_identity: identity.clone(),
         outer_fence: outer_fence.clone(),
+        direct_proxy_url: None,
         child_env: child_env.clone(),
     };
     let runtime_descriptor = SandboxRuntimeDescriptor {
@@ -235,6 +236,7 @@ pub fn bootstrap_archives(
             trust_anchor_pem: tls.trust_anchor_pem,
         },
         host_gateway_ip: None,
+        direct_proxy: None,
         resource_claims,
         workload_identity: identity.clone(),
         outer_fence,

@@ -902,8 +902,6 @@ async fn pc_https_egress_reads_injected_ca_bundle() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let config = MxcComputeConfig {
         wxc_exec_path: wxc.to_string_lossy().into_owned(),
-        egress_proxy: true,
-        egress_proxy_addr: "127.0.0.1:18080".to_string(),
         ..Default::default()
     };
     let backend = MxcComputeBackend::new(config);

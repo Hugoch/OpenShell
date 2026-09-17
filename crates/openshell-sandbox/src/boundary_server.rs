@@ -11,6 +11,9 @@
 
 use std::path::Path;
 
+#[cfg(target_os = "windows")]
+mod windows;
+
 #[cfg(target_os = "linux")]
 mod linux {
     use std::fs::File;
@@ -59,11 +62,12 @@ mod linux {
     use openshell_sandbox_backend::boundary_protocol::{
         AgentSpecWire, BinaryIdentityWire, BoundaryConfig, BoundaryErrorKind,
         BoundaryListener as BoundaryListenerConfig, DnsQueryResultWire, ExecSpecWire,
-        ExitStatusWire, MediationTimingWire, OpenShellSandboxAuditEvidence, OutputWindowWire,
-        ProcessKindWire, ProcessSnapshotWire, Request, RequestEnvelope, Response, ResponseEnvelope,
-        STREAM_EXIT, STREAM_NETWORK_DECISION, STREAM_STDERR, STREAM_STDIN, STREAM_STDIN_CLOSED,
-        STREAM_STDOUT, SandboxPolicyWire, SessionSnapshotWire, SignalWire, encode_frame,
-        read_frame, read_stream_frame, validate_resource_claims, write_frame, write_stream_frame,
+        ExitStatusWire, MediationTimingWire, OpenShellBoundaryAuditEvidence,
+        OpenShellSandboxAuditEvidence, OutputWindowWire, ProcessKindWire, ProcessSnapshotWire,
+        Request, RequestEnvelope, Response, ResponseEnvelope, STREAM_EXIT, STREAM_NETWORK_DECISION,
+        STREAM_STDERR, STREAM_STDIN, STREAM_STDIN_CLOSED, STREAM_STDOUT, SandboxPolicyWire,
+        SessionSnapshotWire, SignalWire, encode_frame, read_frame, read_stream_frame,
+        validate_resource_claims, write_frame, write_stream_frame,
     };
 
     const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(30);
@@ -2298,7 +2302,7 @@ mod linux {
             // Keeping that decision at the verifier also lets lifecycle tests
             // exercise the protocol without claiming host-kernel enforcement.
             let properties = audit.properties();
-            let backend_audit = serde_json::to_value(audit)
+            let backend_audit = serde_json::to_value(OpenShellBoundaryAuditEvidence::Linux(audit))
                 .map_err(|error| format!("encode OpenShell sandbox audit evidence: {error}"))?;
             Ok(BoundaryConfirmation {
                 generation: self.config.generation.clone(),
@@ -3650,6 +3654,7 @@ mod linux {
                 resource_claim_files: std::collections::BTreeMap::new(),
                 workload_identity: test_workload_identity(),
                 outer_fence: test_outer_fence(),
+                direct_proxy_url: None,
                 child_env: std::collections::HashMap::new(),
             };
             let debug = format!("{config:?}");
@@ -3801,6 +3806,7 @@ mod linux {
                         resource_claim_files: std::collections::BTreeMap::new(),
                         workload_identity: test_workload_identity(),
                         outer_fence: test_outer_fence(),
+                        direct_proxy_url: None,
                         child_env: std::collections::HashMap::new(),
                     },
                     tokio::runtime::Handle::current(),
@@ -4316,6 +4322,7 @@ mod linux {
                 resource_claim_files: std::collections::BTreeMap::new(),
                 workload_identity: test_workload_identity(),
                 outer_fence: test_outer_fence(),
+                direct_proxy_url: None,
                 child_env: std::collections::HashMap::new(),
             };
 
@@ -4351,6 +4358,7 @@ mod linux {
                 )]),
                 workload_identity: test_workload_identity(),
                 outer_fence: test_outer_fence(),
+                direct_proxy_url: None,
                 child_env: std::collections::HashMap::new(),
             };
 
@@ -4391,6 +4399,7 @@ mod linux {
                         resource_claim_files: std::collections::BTreeMap::new(),
                         workload_identity: test_workload_identity(),
                         outer_fence: test_outer_fence(),
+                        direct_proxy_url: None,
                         child_env: std::collections::HashMap::new(),
                     },
                     tokio::runtime::Handle::current(),
@@ -4566,6 +4575,7 @@ mod linux {
                         resource_claim_files: std::collections::BTreeMap::new(),
                         workload_identity: test_workload_identity(),
                         outer_fence: test_outer_fence(),
+                        direct_proxy_url: None,
                         child_env: std::collections::HashMap::new(),
                     },
                     process_runtime.handle().clone(),
@@ -4839,6 +4849,7 @@ mod linux {
                         resource_claim_files: std::collections::BTreeMap::new(),
                         workload_identity: test_workload_identity(),
                         outer_fence: test_outer_fence(),
+                        direct_proxy_url: None,
                         child_env: std::collections::HashMap::new(),
                     },
                     process_runtime.handle().clone(),
@@ -5092,10 +5103,18 @@ pub fn run_boundary(
     linux::run_boundary(config_path, qualification)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+pub fn run_boundary(
+    config_path: &Path,
+    qualification: crate::RuntimeQualification,
+) -> Result<(), String> {
+    windows::run_boundary(config_path, qualification)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn run_boundary(
     _config_path: &Path,
     _qualification: crate::RuntimeQualification,
 ) -> Result<(), String> {
-    Err("boundary mode is supported only on Linux".to_string())
+    Err("boundary mode is supported only on Linux and Windows".to_string())
 }

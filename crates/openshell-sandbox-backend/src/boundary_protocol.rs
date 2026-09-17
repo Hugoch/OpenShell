@@ -182,6 +182,92 @@ impl OpenShellSandboxAuditEvidence {
     }
 }
 
+/// Windows `ProcessContainer` evidence measured by the MXC boundary.
+///
+/// MXC supplies the outer filesystem and network fence; the in-container
+/// sandbox supplies authenticated lifecycle and process I/O.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "audit evidence preserves independently measured security results"
+)]
+pub struct MxcSandboxAuditEvidence {
+    pub process_container: bool,
+    pub appcontainer_profile: String,
+    pub default_deny_filesystem: bool,
+    pub default_deny_egress: bool,
+    pub loopback_proxy_only: bool,
+    pub authenticated_control: bool,
+    pub generation_scoped_attribution: bool,
+}
+
+impl MxcSandboxAuditEvidence {
+    pub fn validate(&self) -> Result<(), BackendError> {
+        if self.process_container
+            && !self.appcontainer_profile.trim().is_empty()
+            && self.default_deny_filesystem
+            && self.default_deny_egress
+            && self.loopback_proxy_only
+            && self.authenticated_control
+            && self.generation_scoped_attribution
+        {
+            Ok(())
+        } else {
+            Err(BackendError::Confirm(
+                "MXC sandbox audit evidence is incomplete".to_string(),
+            ))
+        }
+    }
+
+    #[must_use]
+    pub fn properties(&self) -> BoundaryProperties {
+        BoundaryProperties {
+            filesystem_confinement: EnforcedProperty::new(
+                self.default_deny_filesystem,
+                "mxc-processcontainer-appcontainer",
+            ),
+            egress_interception: EnforcedProperty::new(
+                self.default_deny_egress && self.loopback_proxy_only,
+                "mxc-wfp-loopback-proxy-fence",
+            ),
+            request_attribution: EnforcedProperty::new(
+                self.generation_scoped_attribution,
+                "mxc-generation-authenticated-proxy",
+            ),
+            privilege_floor: EnforcedProperty::new(
+                self.process_container,
+                "windows-appcontainer-token",
+            ),
+        }
+    }
+}
+
+/// Backend-owned audit formats understood by this Sandbox Protocol backend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "platform", content = "evidence", rename_all = "snake_case")]
+pub enum OpenShellBoundaryAuditEvidence {
+    Linux(OpenShellSandboxAuditEvidence),
+    WindowsMxc(MxcSandboxAuditEvidence),
+}
+
+impl OpenShellBoundaryAuditEvidence {
+    pub fn validate(&self) -> Result<(), BackendError> {
+        match self {
+            Self::Linux(evidence) => evidence.validate(),
+            Self::WindowsMxc(evidence) => evidence.validate(),
+        }
+    }
+
+    #[must_use]
+    pub fn properties(&self) -> BoundaryProperties {
+        match self {
+            Self::Linux(evidence) => evidence.properties(),
+            Self::WindowsMxc(evidence) => evidence.properties(),
+        }
+    }
+}
+
 /// Ephemeral identity of the supervisor process that owns one sandbox runtime.
 ///
 /// The supervisor generates this value in memory and presents it on every
@@ -422,6 +508,12 @@ pub struct SandboxRuntimeDescriptor {
     /// network supervisor cannot use the boundary's resolver view.
     #[serde(default)]
     pub host_gateway_ip: Option<std::net::IpAddr>,
+    /// Optional generation-scoped explicit proxy owned by the host
+    /// supervisor. Backends set this only when their outer fence routes the
+    /// workload to this listener and the boundary cannot provide staged
+    /// socket mediation.
+    #[serde(default)]
+    pub direct_proxy: Option<openshell_isolation_interface::contract::DirectProxyConfiguration>,
     /// Driver-specific immutable resource coordinates bound at attach (for
     /// example pod UID, VM generation, or container ID).
     #[serde(default)]
@@ -440,6 +532,7 @@ impl fmt::Debug for SandboxRuntimeDescriptor {
             .field("transport", &self.transport)
             .field("tls", &self.tls)
             .field("host_gateway_ip", &self.host_gateway_ip)
+            .field("direct_proxy", &self.direct_proxy)
             .field("resource_claims", &self.resource_claims)
             .field("outer_fence", &self.outer_fence)
             .finish()
@@ -496,6 +589,11 @@ pub struct BoundaryConfig {
     pub workload_identity: openshell_isolation_interface::contract::ResolvedWorkloadIdentity,
     /// Backend-neutral projection of the driver-validated outer fence.
     pub outer_fence: OuterFenceGuarantees,
+    /// Authenticated proxy URL injected into workload children. It is staged
+    /// only in this protected one-use configuration and is never inherited by
+    /// the trusted sandbox process itself.
+    #[serde(default)]
+    pub direct_proxy_url: Option<String>,
     /// Driver-resolved environment exposed only to workload processes.
     #[serde(default)]
     pub child_env: std::collections::HashMap<String, String>,
@@ -524,6 +622,10 @@ impl fmt::Debug for BoundaryConfig {
             .field("resource_claim_files", &self.resource_claim_files)
             .field("workload_identity", &self.workload_identity)
             .field("outer_fence", &self.outer_fence)
+            .field(
+                "direct_proxy_url",
+                &self.direct_proxy_url.as_ref().map(|_| "<redacted>"),
+            )
             .field("child_env_keys", &self.child_env.keys().collect::<Vec<_>>())
             .finish()
     }

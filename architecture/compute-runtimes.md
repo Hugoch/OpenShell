@@ -167,19 +167,22 @@ on a server-only API.
 
 ## Stop and Start Lifecycle
 
-On Windows, the MXC driver can wrap the workload in
-`openshell-supervisor-relay`. Its inherited stdin/stdout control channel carries
-the launch environment, shutdown requests, and multiplexed dynamic forwards.
-The gateway accepts driver-reported readiness only after the configured target
-port is reachable. Stop/delete interrupt readiness waits and await process
-termination; they must not publish success while owned processes remain.
+On Windows, the MXC driver creates the same RFC 0012 runtime pairing as the VM
+backend: `openshell-supervisor --role=isolation-backend` runs on the trusted
+host and `openshell-sandbox` runs inside the ProcessContainer. Their
+generation-scoped TLS transport and sandbox JWT carry lifecycle, exec,
+forwarding, provider refresh, and retained process I/O. The driver only
+provisions and monitors the pair; it does not define a second control or relay
+protocol.
 
-With governed egress enabled, MXC denies direct Internet access and allows
-host loopback. Proxy-aware workloads receive per-sandbox authenticated
-`HTTP_PROXY`/`HTTPS_PROXY` URLs and public CA trust material. The host CONNECT
-proxy enforces OpenShell network policy, but this configuration does not isolate
-unrelated host-loopback services. See the MXC driver README for compatibility
-settings and the remaining policy limitations.
+MXC denies direct Internet access and allows only the loopback route required
+for the authenticated Sandbox Protocol and explicit proxy. Proxy-aware
+workloads receive a per-generation authenticated proxy URL and public CA trust
+material. The host supervisor applies OpenShell network policy and provider
+injection. The loopback exception does not isolate unrelated host services, and
+the current Windows explicit-proxy path attributes descendant traffic to the
+admitted main workload binary. See the MXC driver README for these enforcement
+limits.
 
 The gateway persists lifecycle intent before mutating compute:
 

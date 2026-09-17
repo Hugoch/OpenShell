@@ -20,7 +20,7 @@ use crate::persistence::{
     ObjectLabels, ObjectListQuery, ObjectType, WriteCondition, generate_name,
 };
 use futures::future;
-use openshell_core::net::{connect_tcp_nodelay_best_effort, set_tcp_nodelay_best_effort};
+use openshell_core::net::set_tcp_nodelay_best_effort;
 use openshell_core::proto::datamodel::v1::ObjectMeta;
 use openshell_core::proto::{
     AttachSandboxProviderRequest, AttachSandboxProviderResponse, CreateSandboxRequest,
@@ -2041,67 +2041,6 @@ pub(super) async fn handle_forward_tcp(
 
     let connection_guard = acquire_forward_connection_guard(state, &init, &sandbox).await?;
     let sandbox_id = sandbox.object_id().to_string();
-
-    // Drivers with no in-sandbox supervisor at all (MXC) never have a live
-    // ConnectSupervisor session -- `open_relay_with_target` below would just
-    // burn its 15s timeout and fail. When the active driver contributes a
-    // dynamic-forward capability, bridge through that instead (see
-    // `ComputeDriverForwardSink::open_dynamic_forward`).
-    if let Some(forward_sink) = state.compute.forward_sink() {
-        let target_port = match &target {
-            relay_open::Target::Tcp(t) => u16::try_from(t.port)
-                .map_err(|_| Status::invalid_argument("tcp target port out of range"))?,
-            relay_open::Target::Ssh(_) => {
-                return Err(Status::unimplemented(
-                    "this driver has no SSH server to forward to",
-                ));
-            }
-        };
-
-        let (relay_addr, nonce, relay_handle) = forward_sink
-            .open_dynamic_forward(&sandbox_id, target_port)
-            .await
-            .map_err(|e| Status::unavailable(format!("driver dynamic forward failed: {e}")))?;
-
-        // This is a latency-sensitive request/response tunnel, including on
-        // loopback -- small agent-protocol/WS frames can otherwise stall
-        // behind delayed ACK behavior, so disable Nagle on this leg too.
-        let mut relay_stream = connect_tcp_nodelay_best_effort(&[relay_addr])
-            .await
-            .map_err(|e| {
-                Status::unavailable(format!(
-                    "failed to connect to MXC relay at {relay_addr}: {e}"
-                ))
-            })?;
-        // Prove to the relay this is the real Phase B peer before any
-        // tunneled application data -- see openshell-driver-mxc's relay.rs
-        // module docs (the relay listens on loopback, so without this any
-        // other local process racing to connect first could otherwise
-        // hijack the forward).
-        tokio::io::AsyncWriteExt::write_all(&mut relay_stream, &nonce)
-            .await
-            .map_err(|e| {
-                Status::unavailable(format!("failed to authenticate to MXC relay: {e}"))
-            })?;
-
-        let (tx, rx) = mpsc::channel::<Result<TcpForwardFrame, Status>>(256);
-        let sandbox_id_bridge = sandbox_id.clone();
-        tokio::spawn(async move {
-            let _connection_guard = connection_guard;
-            // Held for the bridge's lifetime; dropping it (bridge exits,
-            // this task ends) stops the ephemeral relay listener and closes
-            // Phase A, which is what tells the sandbox's dynamic bridge to
-            // stop too -- no separate teardown message needed.
-            let _relay_handle = relay_handle;
-            bridge_forward_tcp_stream(inbound, relay_stream, tx, &sandbox_id_bridge, "mxc-dynamic")
-                .await;
-        });
-
-        let stream: Pin<
-            Box<dyn tokio_stream::Stream<Item = Result<TcpForwardFrame, Status>> + Send + 'static>,
-        > = Box::pin(ReceiverStream::new(rx));
-        return Ok(Response::new(stream));
-    }
 
     let (channel_id, relay_rx) = state
         .supervisor_sessions

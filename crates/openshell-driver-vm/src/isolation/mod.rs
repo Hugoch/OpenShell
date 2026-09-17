@@ -100,6 +100,7 @@ impl VmBoundarySpec {
                 resource_claim_files: BTreeMap::new(),
                 workload_identity: workload_identity.clone(),
                 outer_fence: outer_fence.clone(),
+                direct_proxy_url: None,
                 child_env: self.child_env,
             },
             runtime_descriptor: SandboxRuntimeDescriptor {
@@ -113,6 +114,7 @@ impl VmBoundarySpec {
                 // reserved host aliases terminate at its loopback address
                 // after crossing the authenticated boundary channel.
                 host_gateway_ip: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                direct_proxy: None,
                 resource_claims,
                 outer_fence,
             },

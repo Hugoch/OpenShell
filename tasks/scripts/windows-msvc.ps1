@@ -50,7 +50,7 @@ if (-not [int]::TryParse($BuildJobsValue, [ref] $WindowsBuildJobs) -or $WindowsB
 }
 $WindowsCargoMutex = [System.Threading.Mutex]::new($false, "Local\OpenShellWindowsMsvcCargo")
 
-$UnsupportedDriverPackageExcludes = "--exclude openshell-driver-docker --exclude openshell-driver-kubernetes --exclude openshell-driver-kubernetes-secrets --exclude openshell-driver-podman --exclude openshell-driver-vault --exclude openshell-driver-vm --exclude openshell-sandbox --exclude openshell-supervisor --exclude openshell-supervisor-process --exclude openshell-vfio"
+$UnsupportedDriverPackageExcludes = "--exclude openshell-driver-docker --exclude openshell-driver-kubernetes --exclude openshell-driver-kubernetes-secrets --exclude openshell-driver-podman --exclude openshell-driver-vault --exclude openshell-driver-vm --exclude openshell-vfio"
 $WindowsClippyPackageExcludes = $UnsupportedDriverPackageExcludes
 $WindowsClippyLintArgs = "-D warnings -A dead-code -A unused-imports -A clippy::unused-async"
 $PrebuiltZ3WorkspaceFeatures = "--features openshell-prover/prebuilt-z3"
@@ -512,7 +512,7 @@ function Invoke-Lint([string] $RustTarget) {
 function Invoke-Build([string] $RustTarget) {
     Invoke-VsCargo `
         -RustTarget $RustTarget `
-        -CargoArgs "cargo build --release --target $RustTarget --bin openshell-gateway --bin openshell --bin openshell-supervisor-relay $Z3WorkspaceFeatures" `
+        -CargoArgs "cargo build --release --target $RustTarget --bin openshell-gateway --bin openshell --bin openshell-supervisor --bin openshell-sandbox $Z3WorkspaceFeatures" `
         -LogName "build-$RustTarget-release.log"
 }
 
@@ -581,7 +581,7 @@ function Get-Sha256([string] $Path) {
 function Show-Artifacts([string[]] $RustTargets) {
     $rows = @()
     foreach ($rustTarget in $RustTargets) {
-        foreach ($binary in @("openshell-gateway.exe", "openshell.exe", "openshell-supervisor-relay.exe")) {
+        foreach ($binary in @("openshell-gateway.exe", "openshell.exe", "openshell-supervisor.exe", "openshell-sandbox.exe")) {
             $path = Join-Path $TargetDir "$rustTarget\release\$binary"
             if (-not (Test-Path $path)) {
                 continue

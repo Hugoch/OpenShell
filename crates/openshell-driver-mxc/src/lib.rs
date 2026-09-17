@@ -4,10 +4,12 @@
 //! `OpenShell` MXC compute driver.
 //!
 //! Implements the gateway's `ComputeDriver` gRPC contract backed by Microsoft
-//! MXC (`wxc-exec`) on Windows. The driver is **in-process**, runs the agent
-//! directly (exec-in-driver), and self-reports `Ready` — there is no
-//! in-sandbox supervisor, no host-side surrogate, and no `ConnectSupervisor`
-//! relay.
+//! MXC (`wxc-exec`) on Windows. The in-process driver provisions an
+//! `openshell-sandbox` boundary inside the `ProcessContainer` and launches the
+//! standard `openshell-supervisor --role=isolation-backend` on the host. The
+//! pair communicates over the authenticated Sandbox Protocol; workload
+//! lifecycle, forwarding, credentials, and governed networking therefore use
+//! the same supervisor session as the other RFC 0012 isolation backends.
 //!
 //! This crate compiles to an **empty stub** on non-Windows targets so the
 //! Linux build stays green. All implementation code is gated on
@@ -16,11 +18,11 @@
 #![allow(clippy::result_large_err)]
 
 #[cfg(target_os = "windows")]
-mod control_channel;
-#[cfg(target_os = "windows")]
 mod driver;
 #[cfg(target_os = "windows")]
 mod grpc;
+#[cfg(target_os = "windows")]
+mod isolation;
 #[cfg(target_os = "windows")]
 mod mxc;
 #[cfg(target_os = "windows")]
@@ -34,17 +36,11 @@ mod policy_map;
 // Windows-only.
 #[cfg(target_os = "windows")]
 mod etw_consumer;
-#[cfg(target_os = "windows")]
-mod relay;
 
 #[cfg(target_os = "windows")]
-pub use driver::{
-    ForwardSink, MxcBackend, MxcComputeBackend, MxcComputeConfig, OpenDynamicForwardError,
-};
+pub use driver::{MxcBackend, MxcComputeBackend, MxcComputeConfig};
 #[cfg(target_os = "windows")]
 pub use grpc::ComputeDriverService;
-#[cfg(target_os = "windows")]
-pub use relay::RelayHandle;
 // Re-export the embedded mapper API so the windows-only example and integration
 // test can reach it without making `policy_map` a public module.
 #[cfg(target_os = "windows")]

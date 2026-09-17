@@ -370,6 +370,15 @@ pub trait BoundBoundary: Send {
     /// Retained by the supervisor before consuming `Bound`.
     fn network_mediation_source(&self) -> Arc<dyn NetworkMediationSource>;
 
+    /// Driver-provisioned direct proxy listener for backends whose outer
+    /// fence can route workload traffic to a host listener but cannot stage
+    /// individual socket opens. The supervisor owns this listener and its
+    /// policy evaluation; the generation-scoped authorization prevents other
+    /// local processes from entering the sandbox's policy context.
+    fn direct_proxy_configuration(&self) -> Option<DirectProxyConfiguration> {
+        None
+    }
+
     /// Trusted host-side dial target for the well-known host-gateway aliases.
     ///
     /// Backends return this when the mediation service runs outside the
@@ -384,6 +393,31 @@ pub trait BoundBoundary: Send {
     /// Confirm standing enforcement and return measured sandbox evidence.
     /// Confirmation fails closed and does not execute untrusted workload code.
     async fn confirm(self: Box<Self>) -> Result<ConfirmedBoundary, BackendError>;
+}
+
+/// Authenticated host listener used by an isolation backend's explicit-proxy
+/// path.
+///
+/// This is control-plane material and must be delivered through the protected
+/// runtime descriptor, never command-line arguments or logs.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectProxyConfiguration {
+    pub bind_addr: SocketAddr,
+    /// Exact HTTP `Proxy-Authorization` value required from this generation.
+    pub authorization: String,
+    /// Driver-resolved identity applied to direct-listener requests.
+    pub binary_identity: BinaryIdentity,
+}
+
+impl fmt::Debug for DirectProxyConfiguration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DirectProxyConfiguration")
+            .field("bind_addr", &self.bind_addr)
+            .field("authorization", &"<redacted>")
+            .field("binary_identity", &self.binary_identity)
+            .finish()
+    }
 }
 
 /// Backend-neutral guarantees established by the compute driver's outer fence.
@@ -808,7 +842,7 @@ pub trait BoundaryLoopbackConnector: Send + Sync {
 /// unavailable identity field cannot authorize the connection. How a backend
 /// resolves identity is private to that backend; the shape and the fail-closed
 /// semantics do not change.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BinaryIdentity {
     /// Absolute path of the executable resolved for the accepted connection.
     pub binary_path: PathBuf,

@@ -104,9 +104,10 @@ pub fn map_to_mxc(policy: &SandboxPolicy, opts: &MxcMappingOptions) -> MxcMappin
 /// The returned [`SplitPolicyResult::mxc_config`] allows only `127.0.0.1/32`
 /// egress and denies direct Internet access at the MXC layer. The driver injects
 /// `HTTP_PROXY`/`HTTPS_PROXY` for proxy-aware clients.
-/// [`SplitPolicyResult::proxy_policy`] carries the original
-/// `network_policies` verbatim. Network middleware remains rejected until the
-/// host proxy can receive the gateway middleware service registry.
+/// [`SplitPolicyResult::proxy_policy`] carries the original network policy
+/// verbatim. The RFC 0012 host supervisor receives the complete policy and the
+/// gateway middleware service registry through its ordinary session, so the
+/// MXC outer-fence mapping does not reject middleware configuration.
 ///
 /// Returns `None` if `opts.proxy_redirect` is not set. Use [`map_to_mxc`]
 /// for the standalone coarse path when no proxy is in the loop.
@@ -173,20 +174,6 @@ fn build_split_mxc_config(
             "The host proxy receives the trimmed policy and enforces network rules.",
         );
     }
-    if !policy.network_middlewares.is_empty() {
-        add_loss(
-            items,
-            "network_middlewares",
-            "error",
-            &format!(
-                "{} network middleware config(s) cannot be enforced because the MXC host proxy is not connected to the gateway middleware service registry.",
-                policy.network_middlewares.len()
-            ),
-            "network egress middleware",
-            "The MXC sandbox is rejected before launch instead of bypassing fail-open middleware or failing unrelated allowed traffic.",
-        );
-    }
-
     // Direct Internet egress is denied. Proxy-aware clients can reach only the
     // OpenShell proxy (and other host loopback listeners) through 127.0.0.1.
     if proxy_supported && proxy_addr.ip() != std::net::IpAddr::from([127, 0, 0, 1]) {
