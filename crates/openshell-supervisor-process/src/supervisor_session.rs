@@ -422,7 +422,11 @@ async fn run_single_session(
         _ => return Err("expected SessionAccepted or SessionRejected".into()),
     };
 
-    let heartbeat_secs = accepted.heartbeat_interval_secs.max(5);
+    let heartbeat_secs = accepted
+        .heartbeat_interval
+        .as_ref()
+        .and_then(|value| openshell_core::time::duration_to_std(value).ok())
+        .map_or(5, |value| value.as_secs().max(5));
     validate_gateway_protocol_revision(accepted.protocol_revision)?;
     if let Some(updates) = &config.session_id_updates {
         updates.send_replace(Some(accepted.session_id.clone()));
@@ -431,7 +435,7 @@ async fn run_single_session(
         openshell_ocsf::ctx::ctx(),
         &config.endpoint,
         &accepted.session_id,
-        heartbeat_secs,
+        u32::try_from(heartbeat_secs).unwrap_or(u32::MAX),
     );
     ocsf_emit!(event);
     if accepted.bootstrap.is_some() {
@@ -444,8 +448,7 @@ async fn run_single_session(
     config.ready_tx.send_replace(true);
 
     // Main loop: receive gateway messages + send heartbeats.
-    let mut heartbeat_interval =
-        tokio::time::interval(Duration::from_secs(u64::from(heartbeat_secs)));
+    let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(heartbeat_secs));
     heartbeat_interval.tick().await; // skip immediate tick
 
     loop {
