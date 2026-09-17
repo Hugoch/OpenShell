@@ -151,11 +151,12 @@ EOF
 
 if [[ -z "${OPENSHELL_BIND_ADDRESS:-}" && "$(uname -s)" == "Darwin" ]]; then
   # Podman Machine reserves IPv4 loopback for its callback-only listener.
-  # Keep the primary listener distinct while using a hostname that resolves
-  # to IPv6 loopback for local CLI connections. An explicit bind address
-  # overrides this platform default.
+  # Keep the primary listener distinct and register its literal IPv6 address:
+  # `localhost` can resolve to IPv4 first, which would route CLI requests to
+  # the callback-only listener. An explicit bind address overrides this
+  # platform default.
   PRIMARY_BIND_IP="::1"
-  CLI_ENDPOINT_HOST="localhost"
+  CLI_ENDPOINT_HOST="[::1]"
 fi
 
 if [[ ! "${GATEWAY_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
