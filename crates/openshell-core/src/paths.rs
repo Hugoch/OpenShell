@@ -302,6 +302,32 @@ mod windows_acl {
         Ok(())
     }
 
+    /// Test-only: explicitly set a NULL DACL on `path`, the Win32 API's own
+    /// documented "grant everyone full access" state. Used to regression-test
+    /// that [`has_foreign_trustee`] treats a NULL DACL as too open rather
+    /// than conflating it with an unreadable/invalid ACL.
+    #[cfg(test)]
+    pub(super) fn set_null_dacl_for_test(path: &Path) -> Result<()> {
+        let path_hstring = HSTRING::from(path.as_os_str());
+        // SAFETY: `path_hstring` is valid for the duration of this call;
+        // passing `None` for pdacl with `DACL_SECURITY_INFORMATION` set
+        // explicitly requests a NULL DACL, per the documented Win32 contract.
+        unsafe {
+            SetNamedSecurityInfoW(
+                PWSTR::from_raw(path_hstring.as_ptr().cast_mut()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .ok()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("failed to set a NULL DACL on {}", path.display()))
+    }
+
     /// Returns `true` if `path`'s DACL grants access to any trustee other
     /// than the current user, or `None` if the ACL could not be read.
     pub(super) fn has_foreign_trustee(path: &Path) -> Option<bool> {
@@ -329,8 +355,15 @@ mod windows_acl {
         status.ok().ok()?;
         let _sd_guard = LocalFreeGuard(security_descriptor.0);
 
-        if dacl.is_null() || unsafe { !IsValidAcl(dacl).as_bool() } {
-            return Some(false);
+        // A NULL DACL is a real, distinct state from "unreadable ACL": per
+        // the Win32 contract, it means the object grants full access to
+        // everyone -- the most permissive state possible -- so it must be
+        // flagged as too open, not treated as safe.
+        if dacl.is_null() {
+            return Some(true);
+        }
+        if unsafe { !IsValidAcl(dacl).as_bool() } {
+            return None;
         }
 
         let mut size_info = ACL_SIZE_INFORMATION::default();
@@ -538,6 +571,26 @@ mod tests {
         std::fs::write(&file, "data").unwrap();
         set_file_owner_only(&file).unwrap();
         assert!(!is_file_permissions_too_open(&file));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn is_file_permissions_too_open_detects_null_dacl() {
+        // A NULL DACL is the Win32 API's own documented "grant everyone full
+        // access" state -- the most permissive possible -- and is a distinct
+        // condition from an unreadable/invalid ACL. Regression test for a
+        // CodeRabbit-flagged bug where the two were conflated and a NULL
+        // DACL was reported as safe.
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("null-dacl-file");
+        std::fs::write(&file, "data").unwrap();
+
+        windows_acl::set_null_dacl_for_test(&file).unwrap();
+
+        assert!(
+            is_file_permissions_too_open(&file),
+            "a NULL DACL grants everyone full access and must be flagged as too open"
+        );
     }
 
     #[test]
