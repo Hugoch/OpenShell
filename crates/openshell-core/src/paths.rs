@@ -74,8 +74,8 @@ pub fn xdg_data_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".local").join("share"))
 }
 
-/// Create a directory (and parents) with owner-only permissions (`0o700`) on
-/// Unix. On non-Unix platforms, falls back to default permissions.
+/// Create a directory (and parents) with owner-only permissions (`0o700` on
+/// Unix; an owner-only DACL with inheritance disabled on Windows).
 ///
 /// This should be used for any directory that contains sensitive material
 /// (tokens, private keys, certificates).
@@ -87,9 +87,9 @@ pub fn create_dir_restricted(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Set a directory to owner-only access (`0o700`) on Unix.
-///
-/// No-op on non-Unix platforms.
+/// Restrict a directory to owner-only access: `0o700` on Unix, or an
+/// owner-only DACL (with inherited ACEs stripped, and the ACE propagated to
+/// children) on Windows.
 pub fn set_dir_owner_only(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -98,14 +98,13 @@ pub fn set_dir_owner_only(path: &Path) -> Result<()> {
             .into_diagnostic()
             .wrap_err_with(|| format!("failed to set permissions on {}", path.display()))?;
     }
-    #[cfg(not(unix))]
-    let _ = path;
+    #[cfg(windows)]
+    windows_acl::restrict_to_current_user(path, true)?;
     Ok(())
 }
 
-/// Set a file to owner-only read/write (`0o600`) on Unix.
-///
-/// No-op on non-Unix platforms.
+/// Restrict a file to owner-only read/write: `0o600` on Unix, or an
+/// owner-only DACL (with inherited ACEs stripped) on Windows.
 pub fn set_file_owner_only(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -114,8 +113,8 @@ pub fn set_file_owner_only(path: &Path) -> Result<()> {
             .into_diagnostic()
             .wrap_err_with(|| format!("failed to set permissions on {}", path.display()))?;
     }
-    #[cfg(not(unix))]
-    let _ = path;
+    #[cfg(windows)]
+    windows_acl::restrict_to_current_user(path, false)?;
     Ok(())
 }
 
@@ -130,14 +129,248 @@ pub fn ensure_parent_dir_restricted(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Check whether a file has permissions that are too open (group/other readable).
+/// Check whether a file has permissions that are too open.
 ///
-/// Returns `true` if the file has group or other read/write/execute bits set.
-/// Always returns `false` on non-Unix platforms.
+/// On Unix, returns `true` if the file has group or other read/write/execute
+/// bits set. On Windows, returns `true` if the file's DACL grants access to
+/// any trustee other than the current user. Returns `false` if the file's
+/// permissions/ACL cannot be read.
 #[cfg(unix)]
 pub fn is_file_permissions_too_open(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o077 != 0)
+}
+
+/// Check whether a file has permissions that are too open.
+///
+/// See the Unix doc comment above for the cross-platform contract.
+#[cfg(windows)]
+pub fn is_file_permissions_too_open(path: &Path) -> bool {
+    windows_acl::has_foreign_trustee(path).unwrap_or(false)
+}
+
+/// Windows ACL/DACL implementation of the owner-only permission helpers
+/// above. Confined to this submodule so the `unsafe` FFI surface stays out
+/// of the rest of the crate, matching the precedent set by
+/// `openshell-driver-mxc`'s ETW consumer.
+#[cfg(windows)]
+mod windows_acl {
+    #![allow(unsafe_code)]
+
+    use miette::{IntoDiagnostic, Result, WrapErr};
+    use std::path::Path;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
+    use windows::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, GetNamedSecurityInfoW, SE_FILE_OBJECT, SET_ACCESS, SetEntriesInAclW,
+        SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    };
+    use windows::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+        DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetTokenInformation,
+        IsValidAcl, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        PSID, SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    };
+    use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows::core::{HSTRING, PWSTR};
+
+    /// An owned, `TOKEN_USER`-aligned buffer (backed by `Vec<u64>` purely for
+    /// its alignment guarantee; the contents are opaque bytes filled in by
+    /// `GetTokenInformation`).
+    struct TokenUserBuf(Vec<u64>);
+
+    /// Fetch the current process's user token info as an aligned buffer.
+    ///
+    /// Callers get the `PSID` out via [`sid_from_token_info`], which borrows
+    /// from the returned buffer; keep it alive for as long as the `PSID` is
+    /// used.
+    fn current_user_token_info() -> Result<TokenUserBuf> {
+        unsafe {
+            let mut token = HANDLE::default();
+            OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token)
+                .into_diagnostic()
+                .wrap_err("failed to open process token")?;
+            let _guard = HandleGuard(token);
+
+            let mut needed = 0u32;
+            // First call is expected to fail with ERROR_INSUFFICIENT_BUFFER;
+            // we only want the required buffer size out of it.
+            let _ = GetTokenInformation(token, TokenUser, None, 0, &raw mut needed);
+            if needed == 0 {
+                return Err(miette::miette!("GetTokenInformation returned no size"));
+            }
+            let words = (needed as usize).div_ceil(size_of::<u64>());
+            let mut buf = TokenUserBuf(vec![0u64; words]);
+            GetTokenInformation(
+                token,
+                TokenUser,
+                Some(buf.0.as_mut_ptr().cast()),
+                needed,
+                &raw mut needed,
+            )
+            .into_diagnostic()
+            .wrap_err("failed to read current process token user")?;
+            Ok(buf)
+        }
+    }
+
+    /// Extract the `PSID` from a `TOKEN_USER` buffer produced by
+    /// [`current_user_token_info`]. The `PSID` borrows from `buf`.
+    fn sid_from_token_info(buf: &TokenUserBuf) -> PSID {
+        // SAFETY: `buf` was sized and filled by `GetTokenInformation` for
+        // `TokenUser` in `current_user_token_info`, and `Vec<u64>`'s 8-byte
+        // alignment satisfies `TOKEN_USER`'s alignment requirement.
+        let token_user = unsafe { &*buf.0.as_ptr().cast::<TOKEN_USER>() };
+        token_user.User.Sid
+    }
+
+    struct HandleGuard(HANDLE);
+    impl Drop for HandleGuard {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is a valid handle owned by this guard.
+            let _ = unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    struct LocalFreeGuard(*mut core::ffi::c_void);
+    impl Drop for LocalFreeGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: `self.0` was allocated by a Win32 API documented to
+                // return LocalAlloc-owned memory (e.g. `SetEntriesInAclW`).
+                let _ = unsafe { LocalFree(Some(HLOCAL(self.0))) };
+            }
+        }
+    }
+
+    /// Overwrite `path`'s DACL with a single, non-inherited ACE granting full
+    /// control to the current user, stripping any inherited ACEs. `is_dir`
+    /// controls whether the ACE propagates to children (directories only).
+    pub(super) fn restrict_to_current_user(path: &Path, is_dir: bool) -> Result<()> {
+        let token_info = current_user_token_info()?;
+        let sid = sid_from_token_info(&token_info);
+
+        let trustee = TRUSTEE_W {
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: PWSTR(sid.0.cast()),
+            ..Default::default()
+        };
+
+        let entry = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS.0,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: if is_dir {
+                SUB_CONTAINERS_AND_OBJECTS_INHERIT
+            } else {
+                NO_INHERITANCE
+            },
+            Trustee: trustee,
+        };
+
+        let mut new_acl: *mut ACL = core::ptr::null_mut();
+        // SAFETY: `entry` is a valid, fully-initialized EXPLICIT_ACCESS_W
+        // whose Trustee SID borrows from `token_info`, kept alive for this
+        // call. `new_acl` receives a LocalAlloc-owned pointer on success.
+        unsafe { SetEntriesInAclW(Some(&[entry]), None, &raw mut new_acl) }
+            .ok()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("failed to build ACL for {}", path.display()))?;
+        let _acl_guard = LocalFreeGuard(new_acl.cast());
+
+        let path_hstring = HSTRING::from(path.as_os_str());
+        // SAFETY: `path_hstring` is a valid, NUL-terminated wide string for
+        // the lifetime of this call; `new_acl` is a valid ACL just built
+        // above. `PROTECTED_DACL_SECURITY_INFORMATION` is the flag that
+        // strips inherited ACEs, which is the entire point of this call.
+        unsafe {
+            SetNamedSecurityInfoW(
+                PWSTR::from_raw(path_hstring.as_ptr().cast_mut()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                Some(new_acl),
+                None,
+            )
+        }
+        .ok()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("failed to set owner-only ACL on {}", path.display()))?;
+
+        Ok(())
+    }
+
+    /// Returns `true` if `path`'s DACL grants access to any trustee other
+    /// than the current user, or `None` if the ACL could not be read.
+    pub(super) fn has_foreign_trustee(path: &Path) -> Option<bool> {
+        let token_info = current_user_token_info().ok()?;
+        let owner_sid = sid_from_token_info(&token_info);
+
+        let path_hstring = HSTRING::from(path.as_os_str());
+        let mut dacl: *mut ACL = core::ptr::null_mut();
+        let mut security_descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `path_hstring` is valid for the call; the out-params are
+        // simple pointers filled in by the API on success. The security
+        // descriptor `dacl` points into is LocalAlloc-owned and freed below.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                PWSTR::from_raw(path_hstring.as_ptr().cast_mut()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                Some(&raw mut dacl),
+                None,
+                &raw mut security_descriptor,
+            )
+        };
+        status.ok().ok()?;
+        let _sd_guard = LocalFreeGuard(security_descriptor.0);
+
+        if dacl.is_null() || unsafe { !IsValidAcl(dacl).as_bool() } {
+            return Some(false);
+        }
+
+        let mut size_info = ACL_SIZE_INFORMATION::default();
+        // SAFETY: `dacl` was just validated above.
+        unsafe {
+            GetAclInformation(
+                dacl,
+                (&raw mut size_info).cast(),
+                u32::try_from(size_of::<ACL_SIZE_INFORMATION>())
+                    .expect("ACL_SIZE_INFORMATION size fits in u32"),
+                AclSizeInformation,
+            )
+        }
+        .ok()?;
+
+        for index in 0..size_info.AceCount {
+            let mut ace_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
+            // SAFETY: `dacl` is valid and `index` is within `AceCount`.
+            if unsafe { GetAce(dacl, index, &raw mut ace_ptr) }.is_err() {
+                continue;
+            }
+            // SAFETY: `GetAce` returned a pointer to a valid ACE header.
+            let header = unsafe { &*ace_ptr.cast::<ACE_HEADER>() };
+            if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
+                // Deny/other ACE types don't grant access; skip them for
+                // this "is anyone but me granted access" check.
+                continue;
+            }
+            // SAFETY: header.AceType confirms this is an ACCESS_ALLOWED_ACE.
+            let ace = unsafe { &*ace_ptr.cast::<ACCESS_ALLOWED_ACE>() };
+            let ace_sid = PSID((&raw const ace.SidStart).cast_mut().cast());
+            // SAFETY: both SIDs come from Windows APIs (`GetTokenInformation`
+            // and `GetAce`) and are valid for the duration of this call.
+            let is_owner = unsafe { EqualSid(owner_sid, ace_sid) }.is_ok();
+            if !is_owner {
+                return Some(true);
+            }
+        }
+        Some(false)
+    }
 }
 
 /// Normalize a filesystem path by collapsing redundant separators
@@ -249,6 +482,61 @@ mod tests {
         let file = tmp.path().join("restricted-file");
         std::fs::write(&file, "data").unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!is_file_permissions_too_open(&file));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn create_dir_restricted_sets_owner_only_acl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("restricted");
+        create_dir_restricted(&dir).unwrap();
+        assert!(
+            !is_file_permissions_too_open(&dir),
+            "expected owner-only ACL on {}",
+            dir.display()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn set_file_owner_only_sets_owner_only_acl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("secret");
+        std::fs::write(&file, "secret-data").unwrap();
+        set_file_owner_only(&file).unwrap();
+        assert!(
+            !is_file_permissions_too_open(&file),
+            "expected owner-only ACL on {}",
+            file.display()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn is_file_permissions_too_open_detects_world_readable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("open-file");
+        std::fs::write(&file, "data").unwrap();
+        // Grant Everyone read access, mirroring the Unix 0o644 case: an ACE
+        // for a trustee other than the current user.
+        let status = std::process::Command::new("icacls")
+            .arg(&file)
+            .arg("/grant")
+            .arg("Everyone:(R)")
+            .status()
+            .unwrap();
+        assert!(status.success(), "icacls grant failed");
+        assert!(is_file_permissions_too_open(&file));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn is_file_permissions_too_open_accepts_restricted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("restricted-file");
+        std::fs::write(&file, "data").unwrap();
+        set_file_owner_only(&file).unwrap();
         assert!(!is_file_permissions_too_open(&file));
     }
 
