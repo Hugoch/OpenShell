@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# mxc-openclaw-gateway.toml
+#
+# Runs OpenClaw's gateway inside an MXC ProcessContainer, with its port
+# reachable from the host via dynamic `openshell forward service` bridging
+# (openshell-supervisor-relay.exe + the driver's on-demand relay -- see
+# crates/openshell-driver-mxc/src/relay.rs). There is no static/always-on
+# bridge: every `forward service` call opens its own short-lived relay.
+#
+# Driven by run-openclaw-forward-test.ps1, which patches wxc_exec_path and
+# stages node.exe / openclaw-capture.mjs / openshell-supervisor-relay.exe /
+# the caller's OpenClaw install into the policy-authorized working directory
+# (the AppContainer here can only read paths granted by policy -- see the
+# script's "Stage artifacts into share_dir" step for why).
+
+[openshell.drivers.mxc]
+wxc_exec_path = "C:\\mxc-kit\\bin\\wxc-exec.exe"
+
+backend           = "process_container"
+pc_capabilities   = ["privateNetworkClientServer"]
+pc_least_privilege = false
+# UI capability is now a SandboxPolicy concern, not gateway TOML -- see
+# openclaw-gateway.yaml's `ui: { allow_graphical_ui: true, ... }`. Needed
+# because Node.js (OpenClaw's runtime) touches user32/gdi32 during its own
+# startup and dies with STATUS_DLL_INIT_FAILED under the Win32k lockdown
+# that applies when a policy has no `ui:` section, confirmed empirically
+# against mxc-release-binaries-v0.8.0, even though this target never
+# actually opens a window.
+
+# Egress proxy for outbound TCP connectivity.
+egress_proxy      = true
+egress_proxy_addr = "127.0.0.1:18080"
+
+# Do not seed from host env; the harness supplies a curated per-sandbox env.
+pc_minimal_env = true
+
+# The workload command, cwd, and verified-minimal environment are supplied per
+# sandbox by run-openclaw-forward-test.ps1 through `sandbox create`.
+
+# Launch the per-sandbox command via the generic openshell-supervisor-relay
+# binary. The driver sends the command/environment over the
+# control channel once the spawner announces readiness (the "launch"
+# handshake), and spawns OpenClaw with no relay awareness. pc_relay_target_port
+# is OpenClaw's own
+# --port above: used as an early liveness check (does the target ever bind
+# it?) and as the target port openshell-supervisor-relay bridges by default.
+# There is no static bridge -- relay bridging is entirely on-demand via
+# ForwardSink::open_dynamic_forward / the control channel's "forward" op,
+# driven by `openshell forward service --target-port 18889`.
+pc_relay_spawner_path = "C:/openshell-openclaw/openshell-supervisor-relay.exe"
+pc_relay_target_port  = 18889
+
+debug = true
