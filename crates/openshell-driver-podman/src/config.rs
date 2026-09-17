@@ -36,8 +36,8 @@ pub struct PodmanComputeConfig {
     pub image_pull_policy: ImagePullPolicy,
     /// Gateway gRPC endpoint the sandbox connects back to.
     ///
-    /// When empty, the driver auto-detects the endpoint using
-    /// `gateway_port` and `host.containers.internal`.
+    /// When empty, the driver selects loopback on Linux or
+    /// `host.containers.internal` with Podman Machine, using `gateway_port`.
     pub grpc_endpoint: String,
     /// Port the gateway server is actually listening on.
     ///

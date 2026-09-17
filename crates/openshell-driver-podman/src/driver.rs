@@ -33,6 +33,49 @@ use tracing::{Instrument as _, debug, info, warn};
 const STOP_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const STOP_COMPLETION_TIMEOUT_HEADROOM: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PodmanEndpointEnvironment {
+    LinuxHost,
+    PodmanMachine,
+}
+
+impl PodmanEndpointEnvironment {
+    const fn current() -> Self {
+        if cfg!(target_os = "linux") {
+            Self::LinuxHost
+        } else {
+            Self::PodmanMachine
+        }
+    }
+
+    const fn gateway_host(self) -> &'static str {
+        match self {
+            Self::LinuxHost => "127.0.0.1",
+            Self::PodmanMachine => "host.containers.internal",
+        }
+    }
+}
+
+fn select_grpc_endpoint(
+    config: &PodmanComputeConfig,
+    environment: PodmanEndpointEnvironment,
+) -> String {
+    if !config.grpc_endpoint.is_empty() {
+        return config.grpc_endpoint.clone();
+    }
+
+    let scheme = if config.tls_enabled() {
+        "https"
+    } else {
+        "http"
+    };
+    format!(
+        "{scheme}://{}:{}",
+        environment.gateway_host(),
+        config.gateway_port
+    )
+}
+
 fn decode_launch_authentication(
     encoded: &[u8],
 ) -> Result<openshell_core::jwt::SandboxLaunchAuthentication, ComputeDriverError> {
@@ -443,18 +486,9 @@ impl PodmanComputeDriver {
         // The supervisor shares the Podman host network. Linux supervisors can
         // therefore use gateway loopback directly; Podman Machine retains its
         // standard desktop-host alias.
-        if config.grpc_endpoint.is_empty() {
-            let scheme = if config.tls_enabled() {
-                "https"
-            } else {
-                "http"
-            };
-            let host = if cfg!(target_os = "linux") {
-                "127.0.0.1"
-            } else {
-                "host.containers.internal"
-            };
-            config.grpc_endpoint = format!("{scheme}://{host}:{}", config.gateway_port);
+        let endpoint_was_selected = config.grpc_endpoint.is_empty();
+        config.grpc_endpoint = select_grpc_endpoint(&config, PodmanEndpointEnvironment::current());
+        if endpoint_was_selected {
             info!(
                 grpc_endpoint = %config.grpc_endpoint,
                 tls = config.tls_enabled(),
@@ -2375,37 +2409,34 @@ mod tests {
 
     // ── grpc_endpoint auto-detection ───────────────────────────────────
     //
-    // PodmanComputeDriver::new() fills grpc_endpoint when it is empty.
-    // The scheme (http vs https) depends on whether TLS client certs are
-    // configured. These tests simulate the auto-detection logic.
+    // PodmanComputeDriver::new() fills grpc_endpoint through
+    // select_grpc_endpoint() when it is empty.
 
     #[test]
-    fn grpc_endpoint_http_without_tls() {
-        let mut cfg = PodmanComputeConfig {
+    fn grpc_endpoint_uses_loopback_on_linux() {
+        let cfg = PodmanComputeConfig {
             gateway_port: 8081,
             ..PodmanComputeConfig::default()
         };
-        if cfg.grpc_endpoint.is_empty() {
-            let scheme = if cfg.tls_enabled() { "https" } else { "http" };
-            cfg.grpc_endpoint = format!("{scheme}://host.containers.internal:{}", cfg.gateway_port);
-        }
-        assert_eq!(cfg.grpc_endpoint, "http://host.containers.internal:8081");
+        assert_eq!(
+            select_grpc_endpoint(&cfg, PodmanEndpointEnvironment::LinuxHost),
+            "http://127.0.0.1:8081"
+        );
     }
 
     #[test]
-    fn grpc_endpoint_https_with_tls() {
-        let mut cfg = PodmanComputeConfig {
+    fn grpc_endpoint_uses_host_alias_on_podman_machine() {
+        let cfg = PodmanComputeConfig {
             gateway_port: 8080,
             guest_tls_ca: Some(PathBuf::from("/tls/ca.crt")),
             guest_tls_cert: Some(PathBuf::from("/tls/tls.crt")),
             guest_tls_key: Some(PathBuf::from("/tls/tls.key")),
             ..PodmanComputeConfig::default()
         };
-        if cfg.grpc_endpoint.is_empty() {
-            let scheme = if cfg.tls_enabled() { "https" } else { "http" };
-            cfg.grpc_endpoint = format!("{scheme}://host.containers.internal:{}", cfg.gateway_port);
-        }
-        assert_eq!(cfg.grpc_endpoint, "https://host.containers.internal:8080");
+        assert_eq!(
+            select_grpc_endpoint(&cfg, PodmanEndpointEnvironment::PodmanMachine),
+            "https://host.containers.internal:8080"
+        );
     }
 
     #[test]
@@ -2433,16 +2464,15 @@ mod tests {
 
     #[test]
     fn explicit_grpc_endpoint_takes_precedence() {
-        let mut cfg = PodmanComputeConfig {
+        let cfg = PodmanComputeConfig {
             grpc_endpoint: "https://gateway.internal:9000".to_string(),
             gateway_port: 8081,
             ..PodmanComputeConfig::default()
         };
-        if cfg.grpc_endpoint.is_empty() {
-            let scheme = if cfg.tls_enabled() { "https" } else { "http" };
-            cfg.grpc_endpoint = format!("{scheme}://host.containers.internal:{}", cfg.gateway_port);
-        }
-        assert_eq!(cfg.grpc_endpoint, "https://gateway.internal:9000");
+        assert_eq!(
+            select_grpc_endpoint(&cfg, PodmanEndpointEnvironment::LinuxHost),
+            "https://gateway.internal:9000"
+        );
     }
 
     #[test]
