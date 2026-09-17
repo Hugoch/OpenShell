@@ -1267,7 +1267,6 @@ impl BoundaryClient {
             .map_err(|error| BackendError::Process(format!("encode control request: {error}")))
     }
 
-    #[cfg(test)]
     async fn open_exchange(
         &self,
         request: Request,
@@ -2712,6 +2711,7 @@ mod tests {
             sandbox_id: context.sandbox_id,
             mediation: Arc::new(RemoteNetworkMediation {
                 client: client.clone(),
+                adapter: SandboxRuntimeAdapter::NativeLinux,
             }),
             host_gateway_ip: None,
             ca_file_paths: Arc::new(std::sync::Mutex::new(None)),
@@ -2727,6 +2727,7 @@ mod tests {
             session_id: test_session_id(),
             resource_claims: std::collections::BTreeMap::new(),
             outer_fence,
+            adapter: SandboxRuntimeAdapter::NativeLinux,
         };
 
         assert!(matches!(
