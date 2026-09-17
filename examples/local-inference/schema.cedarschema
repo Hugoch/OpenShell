@@ -1,0 +1,55 @@
+namespace Sandbox {
+
+  // ── Principals ──────────────────────────────────────────────────────────
+
+  entity User {};
+  entity Group {};
+
+  entity Process {
+    user:     User,
+    group:    Group,
+    workdir?: FilesystemPath,   // include_workdir: true consumed here
+  };
+
+  // ── Filesystem resources ─────────────────────────────────────────────────
+  // Parent-child hierarchy: FilesystemPath::"/usr/bin" in FilesystemPath::"/usr"
+  // enables `resource in FilesystemPath::"/usr"` to match any descendant.
+
+  entity FilesystemPath in [FilesystemPath] {};
+
+  // ── Network resources ────────────────────────────────────────────────────
+
+  entity NetworkEndpoint {
+    host:     String,
+    port:     Long,
+    protocol: String,     // "rest", "grpc", etc.
+  };
+
+  // ── Actions ──────────────────────────────────────────────────────────────
+
+  action "ReadFile"
+    appliesTo {
+      principal: [Process],
+      resource:  [FilesystemPath],
+      context:   {}
+    };
+
+  action "WriteFile"
+    appliesTo {
+      principal: [Process],
+      resource:  [FilesystemPath],
+      context:   {}
+    };
+
+  // binary: the FilesystemPath of the executable making the call
+  // method: HTTP verb for REST endpoints ("GET", "POST", …)
+  action "NetworkConnect"
+    appliesTo {
+      principal: [Process],
+      resource:  [NetworkEndpoint],
+      context: {
+        binary: FilesystemPath,
+        method: String,
+      }
+    };
+}
