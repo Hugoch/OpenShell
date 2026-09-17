@@ -118,11 +118,11 @@ mod tests {
     const STORAGE_V1_SCHEMA_SHA256: &str =
         "574bf5fcff731bd6e3fd84ed3f124161035bd236ef0fb7e32b4d8a8c55ceba5e";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "18e924d6cf7580588e3409c8eac224ec62e5f6e9bb2779dff0d58b5c8c2abcba";
+        "a1c3e6e7d54d57cf686f11837a8d4fe9b0fab8c222e5f66c98de02c62e904af8";
     const DURABLE_SCHEMA_SHA256: &str =
-        "c439724f77f71b794a68a76cec4040dde9eb22cbdb6e4f1517028683399c87ef";
+        "d665d84ca16d663b312cb6c469613821375453014e43b38cbd8c656b3993b3f0";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
-        "ea546b1a1ee0ddf50ee74f2541dcf68541054c70a5ce29c93d3fd29e6af98820";
+        "b54aa96237c5e16fb5c933f5986774990d1972b232e246f47864fe495c2dedab";
     // A persisted Sandbox without endpoint status retains its lifecycle fields;
     // the absent repeated field decodes empty and needs no database rewrite.
     const SANDBOX_WITHOUT_ENDPOINT_STATUS: &str = "0a1e0a0a73616e64626f782d6964120773616e64626f783a0764656661756c741a2b0a0773616e64626f782a0d0a05526561647912045472756530023807420d73757065727669736f722d6964";
@@ -535,13 +535,13 @@ mod tests {
 
         assert_eq!(
             (public_closure.messages.len(), public_closure.enums.len()),
-            (283, 14)
+            (284, 15)
         );
         assert_eq!(
             (durable_closure.messages.len(), durable_closure.enums.len()),
-            (83, 10)
+            (84, 10)
         );
-        assert_eq!((overlap_messages.len(), overlap_enums.len()), (73, 10));
+        assert_eq!((overlap_messages.len(), overlap_enums.len()), (74, 10));
 
         assert_eq!(
             public_inventory_hash, PUBLIC_RPC_SCHEMA_SHA256,

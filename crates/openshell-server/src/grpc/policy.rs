@@ -3361,7 +3361,9 @@ pub(super) async fn resolve_sandbox_create_runtime_inputs(
             "withholding unbound static provider credential from MXC sandbox"
         );
         provider_environment.environment.remove(&key);
-        provider_environment.credential_expires_at_ms.remove(&key);
+        provider_environment
+            .credential_expiration_times
+            .remove(&key);
         provider_environment.static_credential_keys.remove(&key);
     }
     validate_create_time_provider_credential_lifetimes(sandbox_id, &provider_environment)?;
@@ -3379,7 +3381,7 @@ pub(super) async fn resolve_sandbox_create_runtime_inputs(
             openshell_core::provider_credentials::ProviderCredentialState::from_bound_environment(
                 provider_env_revision,
                 provider_environment.environment,
-                provider_environment.credential_expires_at_ms,
+                provider_environment.credential_expiration_times,
                 provider_environment.dynamic_credentials,
                 provider_environment.static_credential_bindings,
                 non_secret_environment_keys,
@@ -3407,7 +3409,7 @@ fn validate_create_time_provider_credential_lifetimes(
         .iter()
         .filter(|key| {
             provider_environment
-                .credential_expires_at_ms
+                .credential_expiration_times
                 .get(*key)
                 .is_some_and(|expires_at_ms| *expires_at_ms > 0)
         })
@@ -11995,7 +11997,7 @@ mod tests {
     #[test]
     fn create_time_provider_credentials_reject_expiring_static_values() {
         let provider_environment = ProviderEnvironment {
-            credential_expires_at_ms: HashMap::from([
+            credential_expiration_times: HashMap::from([
                 ("B_TOKEN".to_string(), 20_000),
                 ("A_TOKEN".to_string(), 10_000),
                 ("NON_SECRET".to_string(), 30_000),
@@ -12018,7 +12020,7 @@ mod tests {
     #[test]
     fn create_time_provider_credentials_allow_non_expiring_static_values() {
         let provider_environment = ProviderEnvironment {
-            credential_expires_at_ms: HashMap::from([("STATIC_TOKEN".to_string(), 0)]),
+            credential_expiration_times: HashMap::from([("STATIC_TOKEN".to_string(), 0)]),
             static_credential_keys: HashSet::from(["STATIC_TOKEN".to_string()]),
             ..Default::default()
         };

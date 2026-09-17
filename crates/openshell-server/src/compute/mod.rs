@@ -1762,8 +1762,12 @@ impl ComputeRuntime {
         workspace: &str,
         name: &str,
     ) -> Result<DeleteSandboxResult, Status> {
-        self.delete_sandbox_allow_missing(workspace, name, false)
-            .await
+        self.delete_sandbox_with_preconditions(
+            workspace,
+            name,
+            SandboxDeletePreconditions::default(),
+        )
+        .await
     }
 
     pub(crate) async fn delete_sandbox_allow_missing(
@@ -1798,6 +1802,11 @@ impl ComputeRuntime {
         allow_missing: bool,
         preconditions: SandboxDeletePreconditions,
     ) -> Result<DeleteSandboxResult, Status> {
+        if preconditions == SandboxDeletePreconditions::default() {
+            return self
+                .delete_sandbox_allow_missing(workspace, name, allow_missing)
+                .await;
+        }
         self.delete_sandbox_with_options(workspace, name, allow_missing, preconditions)
             .await
     }
@@ -9542,7 +9551,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(result.deleted);
+        assert!(result.acknowledged());
         assert_eq!(result.sandbox_id, "sb-1");
         assert_eq!(driver.delete_calls(), 1);
     }

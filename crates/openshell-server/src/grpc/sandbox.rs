@@ -3900,6 +3900,7 @@ mod tests {
         let error = handle_delete_sandbox_inner(
             &state,
             authed_request(DeleteSandboxRequest {
+                allow_missing: false,
                 name: "guarded-delete".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 expected_sandbox_id: "sb-stale".to_string(),
@@ -3930,6 +3931,7 @@ mod tests {
         let error = handle_delete_sandbox_inner(
             &state,
             authed_request(DeleteSandboxRequest {
+                allow_missing: false,
                 name: "guarded-delete".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 expected_sandbox_id: String::new(),

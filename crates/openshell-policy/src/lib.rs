@@ -2058,6 +2058,7 @@ network_policies:
     #[test]
     fn ui_unspecified_clipboard_canonicalizes_to_none_across_yaml_round_trip() {
         let raw = SandboxPolicy {
+            version: 1,
             ui: Some(UiPolicy {
                 allow_graphical_ui: true,
                 clipboard: UiClipboardAccess::Unspecified as i32,
@@ -2085,7 +2086,7 @@ network_policies:
         assert!(
             error
                 .to_string()
-                .contains("failed to parse sandbox policy YAML")
+                .contains("failed to decode sandbox policy fields")
         );
     }
 

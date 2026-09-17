@@ -694,6 +694,7 @@ fn inspect_document(root: &serde_yml::Value) -> InspectionResult {
             "filesystem_policy",
             "landlock",
             "process",
+            "ui",
             "network_policies",
             "network_middlewares",
         ],
@@ -712,6 +713,11 @@ fn inspect_document(root: &serde_yml::Value) -> InspectionResult {
         root.get("process"),
         "process",
         &["run_as_user", "run_as_group"],
+    )?;
+    inspect_named(
+        root.get("ui"),
+        "ui",
+        &["allow_graphical_ui", "clipboard", "allow_input_injection"],
     )?;
 
     for (name, rule) in open_map(root.get("network_policies")) {
@@ -1174,6 +1180,7 @@ mod tests {
         for source in [
             "version: 1\nfilesystem_policy: null\n",
             "version: 1\nprocess: null\n",
+            "version: 1\nui: null\n",
             "version: 1\nmetadata: null\n",
             "version: 1\nnetwork_policies:\n  x:\n    endpoints:\n      - host: x\n        port: 443\n        mcp: null\n",
         ] {
@@ -1210,6 +1217,7 @@ mod tests {
                 "landlock.future",
             ),
             ("version: 1\nprocess: { future: true }\n", "process.future"),
+            ("version: 1\nui: { future: true }\n", "ui.future"),
             (
                 "version: 1\nnetwork_policies: { api: { future: true } }\n",
                 "network_policies.api.future",

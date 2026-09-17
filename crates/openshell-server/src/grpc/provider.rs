@@ -10943,9 +10943,9 @@ mod tests {
             "GITHUB_TOKEN",
             "github-token",
         );
-        provider.credential_expires_at_ms.insert(
+        provider.credential_expiration_times.insert(
             "GITHUB_TOKEN".to_string(),
-            crate::persistence::current_time_ms() - 1,
+            ts(crate::persistence::current_time_ms() - 1),
         );
         create_provider_record_validating(
             &store,
