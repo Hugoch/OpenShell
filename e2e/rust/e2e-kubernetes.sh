@@ -47,7 +47,11 @@ run_conformance() {
     return 0
   fi
 
-  e2e_run_openshell_conformance "Kubernetes"
+  if [ -n "${OPENSHELL_CONFORMANCE_SCENARIO:-}" ]; then
+    e2e_run_openshell_conformance "Kubernetes" "${OPENSHELL_CONFORMANCE_SCENARIO}"
+  else
+    e2e_run_openshell_conformance "Kubernetes"
+  fi
 }
 
 run_suite() {

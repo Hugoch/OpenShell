@@ -7,6 +7,9 @@
 
 e2e_run_openshell_conformance() {
   local gateway_label=${1:-OpenShell}
+  if [ "$#" -gt 0 ]; then
+    shift
+  fi
 
   if [ -z "${OPENSHELL_BIN:-}" ]; then
     echo "ERROR: OPENSHELL_BIN must point to the openshell CLI under test" >&2
@@ -24,7 +27,7 @@ e2e_run_openshell_conformance() {
   fi
 
   echo "==> Running standalone CLI conformance against the ${gateway_label} gateway"
-  "${OPENSHELL_CONFORMANCE_BIN}" run \
+  "${OPENSHELL_CONFORMANCE_BIN}" run "$@" \
     --openshell-bin "${OPENSHELL_BIN}" \
     --output json
 }

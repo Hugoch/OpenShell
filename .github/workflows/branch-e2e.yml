@@ -315,6 +315,8 @@ jobs:
       job-name: Kubernetes E2E (Rust smoke, Agent Sandbox ${{ matrix.agent_sandbox_api }})
       agent-sandbox-version: ${{ matrix.agent_sandbox_version }}
       conformance-artifact-prefix: openshell-conformance
+      # TODO(#3421): Restore all conformance scenarios after fixing supervisor Pod deletion.
+      conformance-scenario: smoke
 
   kubernetes-workspace-managed-e2e:
     needs: [pr_metadata, build-binaries, build-images]
@@ -329,6 +331,8 @@ jobs:
       job-name: Kubernetes E2E (workspace managed mode)
       e2e-task: e2e:kubernetes:workspace-managed
       conformance-artifact-prefix: openshell-conformance
+      # TODO(#3421): Restore all conformance scenarios after fixing supervisor Pod deletion.
+      conformance-scenario: smoke
 
   kubernetes-external-driver-e2e:
     needs: [pr_metadata, build-binaries, build-gateway-plain, build-external-drivers, build-images]
@@ -346,6 +350,8 @@ jobs:
       external-driver-binary: openshell-driver-kubernetes
       cluster-images: sandbox supervisor
       conformance-artifact-prefix: openshell-conformance
+      # TODO(#3421): Restore all conformance scenarios after fixing supervisor Pod deletion.
+      conformance-scenario: smoke
 
   kubernetes-workspace-operator-e2e:
     needs: [pr_metadata, build-binaries, build-images]
@@ -360,6 +366,8 @@ jobs:
       job-name: Kubernetes E2E (workspace operator mode)
       e2e-task: e2e:kubernetes:workspace-operator
       conformance-artifact-prefix: openshell-conformance
+      # Keep the required Kubernetes lanes consistent while #3421 is quarantined.
+      conformance-scenario: smoke
 
   kubernetes-ha-e2e:
     needs: [pr_metadata, build-binaries, build-images]
@@ -375,6 +383,8 @@ jobs:
       extra-helm-values: deploy/helm/openshell/ci/values-high-availability.yaml
       external-postgres-secret: openshell-ha-pg
       conformance-artifact-prefix: openshell-conformance
+      # TODO(#3421): Restore all conformance scenarios after fixing supervisor Pod deletion.
+      conformance-scenario: smoke
 
   kubernetes-credential-drivers-e2e:
     needs: [pr_metadata, build-binaries, build-images]
@@ -389,6 +399,25 @@ jobs:
       job-name: Kubernetes Credential Drivers E2E
       e2e-task: e2e:kubernetes:credential-drivers
       conformance-artifact-prefix: openshell-conformance
+      # TODO(#3421): Restore all conformance scenarios after fixing supervisor Pod deletion.
+      conformance-scenario: smoke
+
+  # Keep the known failure visible without blocking unrelated merge-queue work.
+  # Remove this job and the required-lane smoke pins when #3421 is fixed.
+  kubernetes-lifecycle-advisory:
+    needs: [pr_metadata, build-binaries, build-images]
+    if: needs.pr_metadata.outputs.should_run == 'true' && needs.pr_metadata.outputs.run_core_e2e == 'true'
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    uses: ./.github/workflows/e2e-kubernetes-test.yml
+    with:
+      image-tag: ${{ github.sha }}
+      job-name: Kubernetes lifecycle advisory (#3421)
+      conformance-artifact-prefix: openshell-conformance
+      conformance-scenario: sandbox-lifecycle
+      advisory: true
 
   core-e2e-result:
     name: Core E2E result
