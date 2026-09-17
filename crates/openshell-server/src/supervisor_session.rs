@@ -674,7 +674,7 @@ impl SupervisorSessionRegistry {
         // configured address so a caller can still identify each endpoint.
         for endpoint in &mut status.endpoint_statuses {
             endpoint.last_result = openshell_core::proto::EndpointResult::NoObservedExchange as i32;
-            endpoint.last_reported_at.clear();
+            endpoint.last_reported_time = None;
         }
     }
 
@@ -1132,7 +1132,7 @@ fn sandbox_proto_is_terminating(sandbox: &Sandbox) -> bool {
         || sandbox
             .metadata
             .as_ref()
-            .is_some_and(|metadata| metadata.deletion_timestamp_ms != 0)
+            .is_some_and(|metadata| metadata.deletion_time.is_some())
 }
 
 async fn sandbox_is_terminating_or_gone(state: &Arc<ServerState>, sandbox_id: &str) -> bool {
@@ -1280,9 +1280,12 @@ pub async fn handle_connect_supervisor(
     let mut accepted = GatewayMessage {
         payload: Some(gateway_message::Payload::SessionAccepted(SessionAccepted {
             session_id: session_id.clone(),
-            heartbeat_interval_secs: HEARTBEAT_INTERVAL_SECS,
             bootstrap,
             protocol_revision: hello.protocol_revision,
+            heartbeat_interval: openshell_core::time::duration_from_std(Duration::from_secs(
+                u64::from(HEARTBEAT_INTERVAL_SECS),
+            ))
+            .ok(),
         })),
     };
     if accepted.encoded_len() > MAX_SUPERVISOR_CONFIG_MESSAGE_BYTES {
@@ -1921,7 +1924,7 @@ async fn record_config_component_observation(
             id: observation_id.clone(),
             name: observation_id,
             workspace: sandbox.object_workspace().to_string(),
-            created_at_ms: now_ms,
+            created_time: openshell_core::time::timestamp_from_millis(now_ms).ok(),
             ..Default::default()
         }),
         sandbox_id: sandbox.object_id().to_string(),
@@ -1972,7 +1975,10 @@ mod tests {
         let bootstrap = GatewayMessage {
             payload: Some(gateway_message::Payload::SessionAccepted(SessionAccepted {
                 session_id: "session-1".into(),
-                heartbeat_interval_secs: 15,
+                heartbeat_interval: openshell_core::time::duration_from_std(Duration::from_secs(
+                    15,
+                ))
+                .ok(),
                 bootstrap: Some(ConfigBootstrap {
                     sandbox_config: Some(SandboxConfigSnapshot::default()),
                     provider_environment: Some(ProviderEnvironmentSnapshot::default()),
@@ -2634,12 +2640,12 @@ mod tests {
             metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                 id: id.to_string(),
                 name: name.to_string(),
-                created_at_ms: 1_000_000,
+                created_time: openshell_core::time::timestamp_from_millis(1_000_000).ok(),
                 labels: HashMap::new(),
                 resource_version: 0,
                 annotations: HashMap::new(),
                 workspace: "default".to_string(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             ..Default::default()
         }
@@ -2676,7 +2682,7 @@ mod tests {
             ports: vec![443],
             path: "/mcp".to_string(),
             last_result: EndpointResult::HttpResponseReceived as i32,
-            last_reported_at: "2026-09-05T01:01:00.000Z".to_string(),
+            last_reported_time: Some("2026-09-05T01:01:00.000Z".parse().unwrap()),
         };
         let ready = SandboxCondition {
             r#type: "Ready".to_string(),
@@ -2690,7 +2696,7 @@ mod tests {
         });
         let unknown = EndpointStatus {
             last_result: EndpointResult::NoObservedExchange as i32,
-            last_reported_at: String::new(),
+            last_reported_time: None,
             ..endpoint.clone()
         };
 
@@ -3188,7 +3194,8 @@ mod tests {
     #[test]
     fn sandbox_proto_terminating_detects_deletion_timestamp() {
         let mut sandbox = sandbox_record("sbx-1", "sandbox-one");
-        sandbox.metadata.as_mut().unwrap().deletion_timestamp_ms = 1;
+        sandbox.metadata.as_mut().unwrap().deletion_time =
+            openshell_core::time::timestamp_from_millis(1).ok();
 
         assert!(sandbox_proto_is_terminating(&sandbox));
     }

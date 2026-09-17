@@ -15,8 +15,7 @@
 
 include!(concat!(env!("OUT_DIR"), "/openshell.storage.v1.rs"));
 
-#[cfg(test)]
-const STORAGE_FILE_DESCRIPTOR_SET: &[u8] =
+pub(crate) const STORAGE_FILE_DESCRIPTOR_SET: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/storage_descriptor.bin"));
 
 use openshell_core::{
@@ -66,25 +65,25 @@ impl ObjectWorkspace for StoredProviderProfile {
     }
 }
 
-impl ObjectId for StoredProviderCredentialRefreshState {
+impl ObjectId for StoredProviderCredentialRefreshStateV2 {
     fn object_id(&self) -> &str {
         self.metadata.as_ref().map_or("", |m| m.id.as_str())
     }
 }
 
-impl ObjectName for StoredProviderCredentialRefreshState {
+impl ObjectName for StoredProviderCredentialRefreshStateV2 {
     fn object_name(&self) -> &str {
         self.metadata.as_ref().map_or("", |m| m.name.as_str())
     }
 }
 
-impl ObjectLabels for StoredProviderCredentialRefreshState {
+impl ObjectLabels for StoredProviderCredentialRefreshStateV2 {
     fn object_labels(&self) -> Option<HashMap<String, String>> {
         self.metadata.as_ref().map(|m| m.labels.clone())
     }
 }
 
-impl SetResourceVersion for StoredProviderCredentialRefreshState {
+impl SetResourceVersion for StoredProviderCredentialRefreshStateV2 {
     fn set_resource_version(&mut self, version: u64) {
         if let Some(meta) = self.metadata.as_mut() {
             meta.resource_version = version;
@@ -92,13 +91,13 @@ impl SetResourceVersion for StoredProviderCredentialRefreshState {
     }
 }
 
-impl GetResourceVersion for StoredProviderCredentialRefreshState {
+impl GetResourceVersion for StoredProviderCredentialRefreshStateV2 {
     fn get_resource_version(&self) -> u64 {
         self.metadata.as_ref().map_or(0, |m| m.resource_version)
     }
 }
 
-impl ObjectWorkspace for StoredProviderCredentialRefreshState {
+impl ObjectWorkspace for StoredProviderCredentialRefreshStateV2 {
     fn object_workspace(&self) -> &str {
         self.metadata.as_ref().map_or("", |m| m.workspace.as_str())
     }
@@ -159,13 +158,13 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
     const STORAGE_V1_SCHEMA_SHA256: &str =
-        "a623124c961f3a56af58a4ab148c12985e5efaec1ad23441031f5cd5b073fe22";
+        "13d0c7eacbb928bae595c6f8e0cc2188da1a541ab5c045cb7d199d4e11005865";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "6dc4124e0e58c7768ae4d29335e66de9b3aaacdc7ee558e50d51ddb5b5865c59";
+        "01ca2ef0f1f8e8ff389ec45e7cb0337721a98936585cbc4632b1246f79954247";
     const DURABLE_SCHEMA_SHA256: &str =
-        "d860e070d9ae78741056a170290e45f617b57847a7ec7542119b6f19e1e7e856";
+        "a278a932ce48bcb1d5dd2966e1310ddb1b43ce424e7289930f80e2a696e92131";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
-        "5fc036292b1e1e3c68fe361c342a56e886926727cac35115f93579cd63898358";
+        "aba0066e854f0b3bf21fc86e627e0cf4104bdbe8d05cc044d4386ddfafd8a3c4";
     // A persisted Sandbox without endpoint status retains its lifecycle fields;
     // the absent repeated field decodes empty and needs no database rewrite.
     const SANDBOX_WITHOUT_ENDPOINT_STATUS: &str = "0a1e0a0a73616e64626f782d6964120773616e64626f783a0764656661756c741a2b0a0773616e64626f782a0d0a05526561647912045472756530023807420d73757065727669736f722d6964";
@@ -181,13 +180,14 @@ mod tests {
         "0a0472756c651a07666978747572652d0000403f3a0b6578616d706c652e636f6d40bb035002";
     const V0_0_116_POLICY_RECORD: &str = "0a09706f6c6963792d6964120a73616e64626f782d6964180222030102032a0673686132353632066c6f616465643a046e6f6e6540fa0148ac0252110a06736f75726365120766697874757265";
     const V0_0_116_DRAFT_RECORD: &str = "0a086368756e6b2d6964120a73616e64626f782d69641802220770656e64696e672a0472756c65320204053a076669787475726549000000000000e83f50de02589003620b6578616d706c652e636f6d68bb037801";
-    const STORAGE_MESSAGE_NAMES: [&str; 8] = [
+    const STORAGE_MESSAGE_NAMES: [&str; 9] = [
         "DraftChunkPayload",
         "PolicyRevisionPayload",
         "StoredConfigComponentObservation",
         "StoredDraftChunk",
         "StoredPolicyRevision",
         "StoredProviderCredentialRefreshState",
+        "StoredProviderCredentialRefreshStateV2",
         "StoredProviderProfile",
         "StoredRefreshMaterialDeletion",
     ];
@@ -198,7 +198,7 @@ mod tests {
         ".openshell.storage.v1.DraftChunkPayload",
         ".openshell.storage.v1.PolicyRevisionPayload",
         ".openshell.storage.v1.StoredConfigComponentObservation",
-        ".openshell.storage.v1.StoredProviderCredentialRefreshState",
+        ".openshell.storage.v1.StoredProviderCredentialRefreshStateV2",
         ".openshell.storage.v1.StoredProviderProfile",
         ".openshell.v1.Sandbox",
         ".openshell.v1.SandboxWorkloadTemplate",
@@ -454,6 +454,51 @@ mod tests {
     }
 
     #[test]
+    fn deletion_responses_reserve_legacy_booleans() {
+        let public = FileDescriptorSet::decode(openshell_core::FILE_DESCRIPTOR_SET).unwrap();
+        for (name, legacy) in [
+            ("DeleteSandboxTemplateResponse", "deleted"),
+            ("DeleteSandboxResponse", "deleted"),
+            ("DeleteServiceResponse", "deleted"),
+            ("DeleteProviderResponse", "deleted"),
+            ("DeleteProviderRefreshResponse", "deleted"),
+            ("DeleteProviderProfileResponse", "deleted"),
+            ("DeleteWorkspaceResponse", "deleted"),
+            ("RemoveWorkspaceMemberResponse", "removed"),
+            ("RevokeSshSessionResponse", "revoked"),
+        ] {
+            let message = public
+                .file
+                .iter()
+                .filter(|file| file.package.as_deref() == Some("openshell.v1"))
+                .flat_map(|file| &file.message_type)
+                .find(|message| message.name.as_deref() == Some(name))
+                .unwrap();
+            assert!(message.reserved_name.iter().any(|name| name == legacy));
+            assert!(
+                message
+                    .reserved_range
+                    .iter()
+                    .any(|range| range.start == Some(1) && range.end == Some(2))
+            );
+            let outcome = message
+                .field
+                .iter()
+                .find(|field| field.name.as_deref() == Some("outcome"))
+                .unwrap();
+            assert_eq!(outcome.number, Some(2));
+            assert_eq!(
+                outcome.type_name.as_deref(),
+                Some(".openshell.v1.DeletionOutcome")
+            );
+        }
+        let legacy = openshell_core::proto::DeleteSandboxResponse::decode(&[8, 1][..]).unwrap();
+        assert_eq!(legacy.outcome, 0);
+        let unknown = openshell_core::proto::DeleteSandboxResponse::decode(&[16, 99][..]).unwrap();
+        assert_eq!(unknown.outcome, 99);
+    }
+
+    #[test]
     fn public_and_durable_schema_inventories_are_complete() {
         let public = FileDescriptorSet::decode(openshell_core::FILE_DESCRIPTOR_SET)
             .expect("public descriptor set must decode");
@@ -534,13 +579,13 @@ mod tests {
 
         assert_eq!(
             (public_closure.messages.len(), public_closure.enums.len()),
-            (295, 16)
+            (296, 17)
         );
         assert_eq!(
             (durable_closure.messages.len(), durable_closure.enums.len()),
-            (85, 12)
+            (86, 12)
         );
-        assert_eq!((overlap_messages.len(), overlap_enums.len()), (74, 12));
+        assert_eq!((overlap_messages.len(), overlap_enums.len()), (75, 12));
 
         assert_eq!(
             public_inventory_hash, PUBLIC_RPC_SCHEMA_SHA256,
@@ -737,7 +782,7 @@ mod tests {
         }
 
         let refresh = current_store
-            .get_message::<StoredProviderCredentialRefreshState>("legacy-id")
+            .get_message::<StoredProviderCredentialRefreshStateV2>("legacy-id")
             .await
             .expect("decode refresh fixture")
             .expect("refresh fixture must remain present");

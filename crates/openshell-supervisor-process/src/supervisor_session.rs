@@ -601,7 +601,12 @@ async fn open_session(
         _ => return Err("expected SessionAccepted or SessionRejected".into()),
     };
 
-    let heartbeat_secs = accepted.heartbeat_interval_secs.max(5);
+    let heartbeat_secs = accepted
+        .heartbeat_interval
+        .as_ref()
+        .and_then(|value| openshell_core::time::duration_to_std(value).ok())
+        .map_or(5, |value| value.as_secs().max(5));
+    let heartbeat_secs = u32::try_from(heartbeat_secs).unwrap_or(u32::MAX);
     validate_gateway_protocol_revision(accepted.protocol_revision)?;
     let event = session_established_event(
         openshell_ocsf::ctx::ctx(),
