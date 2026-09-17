@@ -228,6 +228,11 @@ build_component_for_arch() {
     # mise.toml injects RUSTC_WRAPPER=sccache. Unset it after mise constructs
     # the environment so it cannot wrap cargo-auditable's workspace wrapper.
     cargo_env=(env -u RUSTC_WRAPPER)
+  elif [[ "${current_host_os}" == "Darwin" && -n "${RUSTC_WRAPPER:-}" ]]; then
+    # macOS host cross-compiles can hit the per-process file-descriptor limit
+    # while sccache hashes many crates. Unset the wrapper for these builds so
+    # the local gateway task can complete reliably.
+    cargo_env=(env -u RUSTC_WRAPPER)
   fi
 
   echo "Building ${binary} for linux/${arch} (${build_target}, libc: ${target_libc})..."
@@ -254,7 +259,11 @@ build_component_for_arch() {
     if [[ -n "$build_rustflags" ]]; then
       export RUSTFLAGS="$build_rustflags"
     fi
-    CARGO_INCREMENTAL=0 mise x -- "${cargo_env[@]}" "${cargo_subcommand[@]}" "${args[@]}"
+    if [[ "${#cargo_env[@]}" -gt 0 ]]; then
+      CARGO_INCREMENTAL=0 mise x -- "${cargo_env[@]}" "${cargo_subcommand[@]}" "${args[@]}"
+    else
+      CARGO_INCREMENTAL=0 mise x -- "${cargo_subcommand[@]}" "${args[@]}"
+    fi
   )
 
   binary_path="${ROOT}/target/${target}/release/${binary}"

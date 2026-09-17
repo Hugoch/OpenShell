@@ -6,15 +6,20 @@
 
 version: 1
 
-# Default sandbox filesystem and Landlock settings. Process identity is omitted
-# so the active compute driver can select it. These fields are required when
-# using `openshell policy set` because it replaces the entire policy.
+# Default sandbox filesystem, Landlock, and process settings. `openshell
+# policy set` replaces the entire policy and rejects any change to these
+# static fields on a live sandbox, so they must match the values the compute
+# driver assigned at sandbox creation (see `openshell policy get <sandbox>
+# --base`).
 filesystem_policy:
   include_workdir: true
   read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
   read_write: [/sandbox, /tmp, /dev/null]
 landlock:
   compatibility: best_effort
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
 
 network_policies:
   github_api:

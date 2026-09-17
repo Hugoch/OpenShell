@@ -87,8 +87,7 @@ step "1/7  Creating sandbox \"${SANDBOX_NAME}\" (default-deny networking)"
 run openshell sandbox create \
     --name "$SANDBOX_NAME" \
     --no-auto-providers \
-    --no-tty \
-    -- echo "sandbox ready"
+    --detach
 
 step "Connecting to sandbox"
 openshell sandbox ssh-config "$SANDBOX_NAME" > "$SSH_CONFIG"
@@ -113,7 +112,8 @@ printf "  ${BOLD}\$ openshell logs ${SANDBOX_NAME} --since 1m -n 10${RESET}\n"
 openshell logs "$SANDBOX_NAME" --since 1m -n 10 2>&1 \
     | grep -i 'connect\|forward\|deny\|allow' \
     | colorize_logs \
-    | sed 's/^/  /'
+    | sed 's/^/  /' \
+    || true
 
 # ------------------------------------------------------------------
 
@@ -153,7 +153,8 @@ printf "  ${BOLD}\$ openshell logs ${SANDBOX_NAME} --level warn --since 1m -n 10
 openshell logs "$SANDBOX_NAME" --level warn --since 1m -n 10 2>&1 \
     | grep -i 'connect\|forward\|deny\|allow\|l7\|rest' \
     | colorize_logs \
-    | sed 's/^/  /'
+    | sed 's/^/  /' \
+    || true
 
 # ------------------------------------------------------------------
 
