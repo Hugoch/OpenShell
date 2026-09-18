@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use openshell_e2e::harness::binary::openshell_cmd;
-use openshell_e2e::harness::container::{HostSupportContainer, SupportContainer, is_e2e_driver};
+use openshell_e2e::harness::container::{SupportContainer, is_e2e_driver};
+use openshell_e2e::harness::host_process::HostPythonFixture;
 use openshell_e2e::harness::port::find_free_port;
 use openshell_e2e::harness::sandbox::SandboxGuard;
 use tempfile::NamedTempFile;
@@ -254,8 +255,9 @@ async fn local_container_native_tcp_uses_policy_dns_and_fails_closed() {
         return;
     }
 
-    let fixture_script = format!(
-        r#"import socket, threading
+    let fixture_script = |fixture_port: u16, tcp_dns_port: u16, transparent_port: u16| {
+        format!(
+            r#"import socket, threading
 def listen(port):
   s = socket.socket()
   s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -270,16 +272,17 @@ def serve(s):
     c.sendall(b'native-tcp-ok:' + data)
     c.close()
 
-transparent_listener = listen({TRANSPARENT_LISTENER_PORT})
-tcp_dns_listener = listen({TCP_DNS_PORT})
-fixture_listener = listen({FIXTURE_PORT})
+transparent_listener = listen({transparent_port})
+tcp_dns_listener = listen({tcp_dns_port})
+fixture_listener = listen({fixture_port})
 threading.Thread(target=serve, args=(transparent_listener,), daemon=True).start()
 threading.Thread(target=serve, args=(tcp_dns_listener,), daemon=True).start()
 serve(fixture_listener)
 "#
-    );
+        )
+    };
     enum Fixture {
-        Host(HostSupportContainer),
+        Host(HostPythonFixture),
         Network(SupportContainer),
     }
     let (fixture, policy_host, real_ip, fixture_port, tcp_dns_port, transparent_port) =
@@ -287,18 +290,12 @@ serve(fixture_listener)
             let fixture_host_port = find_free_port();
             let tcp_dns_host_port = find_free_port();
             let transparent_host_port = find_free_port();
-            let fixture = HostSupportContainer::start_python_with_host_bindings(
-                &fixture_script,
-                &[
-                    (fixture_host_port, FIXTURE_PORT),
-                    (tcp_dns_host_port, TCP_DNS_PORT),
-                    (transparent_host_port, TRANSPARENT_LISTENER_PORT),
-                ],
-                FIXTURE_PORT,
-                &["NET_BIND_SERVICE"],
+            let fixture = HostPythonFixture::start(
+                &fixture_script(fixture_host_port, tcp_dns_host_port, transparent_host_port),
+                fixture_host_port,
             )
             .await
-            .expect("start host-published TCP fixture");
+            .expect("start host TCP fixture");
             (
                 Fixture::Host(fixture),
                 "host.openshell.internal".to_string(),
@@ -310,7 +307,7 @@ serve(fixture_listener)
         } else {
             let fixture = SupportContainer::start_python_with_capabilities(
                 FIXTURE_ALIAS,
-                &fixture_script,
+                &fixture_script(FIXTURE_PORT, TCP_DNS_PORT, TRANSPARENT_LISTENER_PORT),
                 FIXTURE_PORT,
                 &["NET_BIND_SERVICE"],
             )
