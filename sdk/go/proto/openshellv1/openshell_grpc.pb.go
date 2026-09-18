@@ -23,80 +23,85 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OpenShell_Health_FullMethodName                       = "/openshell.v1.OpenShell/Health"
-	OpenShell_GetCurrentUser_FullMethodName               = "/openshell.v1.OpenShell/GetCurrentUser"
-	OpenShell_GetGatewayInfo_FullMethodName               = "/openshell.v1.OpenShell/GetGatewayInfo"
-	OpenShell_CreateSandbox_FullMethodName                = "/openshell.v1.OpenShell/CreateSandbox"
-	OpenShell_BeginRootfsTarStaging_FullMethodName        = "/openshell.v1.OpenShell/BeginRootfsTarStaging"
-	OpenShell_GetSandbox_FullMethodName                   = "/openshell.v1.OpenShell/GetSandbox"
-	OpenShell_ListSandboxes_FullMethodName                = "/openshell.v1.OpenShell/ListSandboxes"
-	OpenShell_CreateSandboxTemplate_FullMethodName        = "/openshell.v1.OpenShell/CreateSandboxTemplate"
-	OpenShell_GetSandboxTemplate_FullMethodName           = "/openshell.v1.OpenShell/GetSandboxTemplate"
-	OpenShell_ListSandboxTemplates_FullMethodName         = "/openshell.v1.OpenShell/ListSandboxTemplates"
-	OpenShell_DeleteSandboxTemplate_FullMethodName        = "/openshell.v1.OpenShell/DeleteSandboxTemplate"
-	OpenShell_ListSandboxProviders_FullMethodName         = "/openshell.v1.OpenShell/ListSandboxProviders"
-	OpenShell_AttachSandboxProvider_FullMethodName        = "/openshell.v1.OpenShell/AttachSandboxProvider"
-	OpenShell_DetachSandboxProvider_FullMethodName        = "/openshell.v1.OpenShell/DetachSandboxProvider"
-	OpenShell_DeleteSandbox_FullMethodName                = "/openshell.v1.OpenShell/DeleteSandbox"
-	OpenShell_StopSandbox_FullMethodName                  = "/openshell.v1.OpenShell/StopSandbox"
-	OpenShell_StartSandbox_FullMethodName                 = "/openshell.v1.OpenShell/StartSandbox"
-	OpenShell_CreateSshSession_FullMethodName             = "/openshell.v1.OpenShell/CreateSshSession"
-	OpenShell_ExposeService_FullMethodName                = "/openshell.v1.OpenShell/ExposeService"
-	OpenShell_GetService_FullMethodName                   = "/openshell.v1.OpenShell/GetService"
-	OpenShell_ListServices_FullMethodName                 = "/openshell.v1.OpenShell/ListServices"
-	OpenShell_DeleteService_FullMethodName                = "/openshell.v1.OpenShell/DeleteService"
-	OpenShell_RevokeSshSession_FullMethodName             = "/openshell.v1.OpenShell/RevokeSshSession"
-	OpenShell_ExecSandbox_FullMethodName                  = "/openshell.v1.OpenShell/ExecSandbox"
-	OpenShell_ForwardTcp_FullMethodName                   = "/openshell.v1.OpenShell/ForwardTcp"
-	OpenShell_ExecSandboxInteractive_FullMethodName       = "/openshell.v1.OpenShell/ExecSandboxInteractive"
-	OpenShell_CreateProvider_FullMethodName               = "/openshell.v1.OpenShell/CreateProvider"
-	OpenShell_GetProvider_FullMethodName                  = "/openshell.v1.OpenShell/GetProvider"
-	OpenShell_ListProviders_FullMethodName                = "/openshell.v1.OpenShell/ListProviders"
-	OpenShell_ListProviderProfiles_FullMethodName         = "/openshell.v1.OpenShell/ListProviderProfiles"
-	OpenShell_GetProviderProfile_FullMethodName           = "/openshell.v1.OpenShell/GetProviderProfile"
-	OpenShell_ImportProviderProfiles_FullMethodName       = "/openshell.v1.OpenShell/ImportProviderProfiles"
-	OpenShell_UpdateProviderProfiles_FullMethodName       = "/openshell.v1.OpenShell/UpdateProviderProfiles"
-	OpenShell_LintProviderProfiles_FullMethodName         = "/openshell.v1.OpenShell/LintProviderProfiles"
-	OpenShell_UpdateProvider_FullMethodName               = "/openshell.v1.OpenShell/UpdateProvider"
-	OpenShell_GetProviderRefreshStatus_FullMethodName     = "/openshell.v1.OpenShell/GetProviderRefreshStatus"
-	OpenShell_ConfigureProviderRefresh_FullMethodName     = "/openshell.v1.OpenShell/ConfigureProviderRefresh"
-	OpenShell_RotateProviderCredential_FullMethodName     = "/openshell.v1.OpenShell/RotateProviderCredential"
-	OpenShell_DeleteProviderRefresh_FullMethodName        = "/openshell.v1.OpenShell/DeleteProviderRefresh"
-	OpenShell_DeleteProvider_FullMethodName               = "/openshell.v1.OpenShell/DeleteProvider"
-	OpenShell_DeleteProviderProfile_FullMethodName        = "/openshell.v1.OpenShell/DeleteProviderProfile"
-	OpenShell_GetSandboxConfig_FullMethodName             = "/openshell.v1.OpenShell/GetSandboxConfig"
-	OpenShell_GetGatewayConfig_FullMethodName             = "/openshell.v1.OpenShell/GetGatewayConfig"
-	OpenShell_UpdateConfig_FullMethodName                 = "/openshell.v1.OpenShell/UpdateConfig"
-	OpenShell_GetConfigUpdateOperation_FullMethodName     = "/openshell.v1.OpenShell/GetConfigUpdateOperation"
-	OpenShell_GetSandboxPolicyStatus_FullMethodName       = "/openshell.v1.OpenShell/GetSandboxPolicyStatus"
-	OpenShell_ListSandboxPolicies_FullMethodName          = "/openshell.v1.OpenShell/ListSandboxPolicies"
-	OpenShell_ReportPolicyStatus_FullMethodName           = "/openshell.v1.OpenShell/ReportPolicyStatus"
-	OpenShell_ExchangeProviderSubjectToken_FullMethodName = "/openshell.v1.OpenShell/ExchangeProviderSubjectToken"
-	OpenShell_GetSandboxLogs_FullMethodName               = "/openshell.v1.OpenShell/GetSandboxLogs"
-	OpenShell_PushSandboxLogs_FullMethodName              = "/openshell.v1.OpenShell/PushSandboxLogs"
-	OpenShell_ConnectSupervisor_FullMethodName            = "/openshell.v1.OpenShell/ConnectSupervisor"
-	OpenShell_ReportMainProcessExit_FullMethodName        = "/openshell.v1.OpenShell/ReportMainProcessExit"
-	OpenShell_FinalizeMainProcessExit_FullMethodName      = "/openshell.v1.OpenShell/FinalizeMainProcessExit"
-	OpenShell_RelayStream_FullMethodName                  = "/openshell.v1.OpenShell/RelayStream"
-	OpenShell_WatchSandbox_FullMethodName                 = "/openshell.v1.OpenShell/WatchSandbox"
-	OpenShell_SubmitPolicyAnalysis_FullMethodName         = "/openshell.v1.OpenShell/SubmitPolicyAnalysis"
-	OpenShell_GetDraftPolicy_FullMethodName               = "/openshell.v1.OpenShell/GetDraftPolicy"
-	OpenShell_ApproveDraftChunk_FullMethodName            = "/openshell.v1.OpenShell/ApproveDraftChunk"
-	OpenShell_RejectDraftChunk_FullMethodName             = "/openshell.v1.OpenShell/RejectDraftChunk"
-	OpenShell_ApproveAllDraftChunks_FullMethodName        = "/openshell.v1.OpenShell/ApproveAllDraftChunks"
-	OpenShell_EditDraftChunk_FullMethodName               = "/openshell.v1.OpenShell/EditDraftChunk"
-	OpenShell_UndoDraftChunk_FullMethodName               = "/openshell.v1.OpenShell/UndoDraftChunk"
-	OpenShell_ClearDraftChunks_FullMethodName             = "/openshell.v1.OpenShell/ClearDraftChunks"
-	OpenShell_GetDraftHistory_FullMethodName              = "/openshell.v1.OpenShell/GetDraftHistory"
-	OpenShell_IssueSandboxToken_FullMethodName            = "/openshell.v1.OpenShell/IssueSandboxToken"
-	OpenShell_RefreshSandboxToken_FullMethodName          = "/openshell.v1.OpenShell/RefreshSandboxToken"
-	OpenShell_CreateWorkspace_FullMethodName              = "/openshell.v1.OpenShell/CreateWorkspace"
-	OpenShell_GetWorkspace_FullMethodName                 = "/openshell.v1.OpenShell/GetWorkspace"
-	OpenShell_ListWorkspaces_FullMethodName               = "/openshell.v1.OpenShell/ListWorkspaces"
-	OpenShell_DeleteWorkspace_FullMethodName              = "/openshell.v1.OpenShell/DeleteWorkspace"
-	OpenShell_AddWorkspaceMember_FullMethodName           = "/openshell.v1.OpenShell/AddWorkspaceMember"
-	OpenShell_RemoveWorkspaceMember_FullMethodName        = "/openshell.v1.OpenShell/RemoveWorkspaceMember"
-	OpenShell_ListWorkspaceMembers_FullMethodName         = "/openshell.v1.OpenShell/ListWorkspaceMembers"
+	OpenShell_Health_FullMethodName                        = "/openshell.v1.OpenShell/Health"
+	OpenShell_GetCurrentUser_FullMethodName                = "/openshell.v1.OpenShell/GetCurrentUser"
+	OpenShell_GetGatewayInfo_FullMethodName                = "/openshell.v1.OpenShell/GetGatewayInfo"
+	OpenShell_CreateSandbox_FullMethodName                 = "/openshell.v1.OpenShell/CreateSandbox"
+	OpenShell_BeginRootfsTarStaging_FullMethodName         = "/openshell.v1.OpenShell/BeginRootfsTarStaging"
+	OpenShell_GetSandbox_FullMethodName                    = "/openshell.v1.OpenShell/GetSandbox"
+	OpenShell_ListSandboxes_FullMethodName                 = "/openshell.v1.OpenShell/ListSandboxes"
+	OpenShell_CreateSandboxTemplate_FullMethodName         = "/openshell.v1.OpenShell/CreateSandboxTemplate"
+	OpenShell_GetSandboxTemplate_FullMethodName            = "/openshell.v1.OpenShell/GetSandboxTemplate"
+	OpenShell_ListSandboxTemplates_FullMethodName          = "/openshell.v1.OpenShell/ListSandboxTemplates"
+	OpenShell_DeleteSandboxTemplate_FullMethodName         = "/openshell.v1.OpenShell/DeleteSandboxTemplate"
+	OpenShell_ListSandboxProviders_FullMethodName          = "/openshell.v1.OpenShell/ListSandboxProviders"
+	OpenShell_AttachSandboxProvider_FullMethodName         = "/openshell.v1.OpenShell/AttachSandboxProvider"
+	OpenShell_DetachSandboxProvider_FullMethodName         = "/openshell.v1.OpenShell/DetachSandboxProvider"
+	OpenShell_GetSandboxProviderStatus_FullMethodName      = "/openshell.v1.OpenShell/GetSandboxProviderStatus"
+	OpenShell_DeleteSandbox_FullMethodName                 = "/openshell.v1.OpenShell/DeleteSandbox"
+	OpenShell_StopSandbox_FullMethodName                   = "/openshell.v1.OpenShell/StopSandbox"
+	OpenShell_StartSandbox_FullMethodName                  = "/openshell.v1.OpenShell/StartSandbox"
+	OpenShell_CreateSshSession_FullMethodName              = "/openshell.v1.OpenShell/CreateSshSession"
+	OpenShell_ExposeService_FullMethodName                 = "/openshell.v1.OpenShell/ExposeService"
+	OpenShell_GetService_FullMethodName                    = "/openshell.v1.OpenShell/GetService"
+	OpenShell_ListServices_FullMethodName                  = "/openshell.v1.OpenShell/ListServices"
+	OpenShell_DeleteService_FullMethodName                 = "/openshell.v1.OpenShell/DeleteService"
+	OpenShell_RevokeSshSession_FullMethodName              = "/openshell.v1.OpenShell/RevokeSshSession"
+	OpenShell_ExecSandbox_FullMethodName                   = "/openshell.v1.OpenShell/ExecSandbox"
+	OpenShell_ForwardTcp_FullMethodName                    = "/openshell.v1.OpenShell/ForwardTcp"
+	OpenShell_ExecSandboxInteractive_FullMethodName        = "/openshell.v1.OpenShell/ExecSandboxInteractive"
+	OpenShell_CreateProvider_FullMethodName                = "/openshell.v1.OpenShell/CreateProvider"
+	OpenShell_GetProvider_FullMethodName                   = "/openshell.v1.OpenShell/GetProvider"
+	OpenShell_ListProviders_FullMethodName                 = "/openshell.v1.OpenShell/ListProviders"
+	OpenShell_ListProviderProfiles_FullMethodName          = "/openshell.v1.OpenShell/ListProviderProfiles"
+	OpenShell_GetProviderProfile_FullMethodName            = "/openshell.v1.OpenShell/GetProviderProfile"
+	OpenShell_ImportProviderProfiles_FullMethodName        = "/openshell.v1.OpenShell/ImportProviderProfiles"
+	OpenShell_UpdateProviderProfiles_FullMethodName        = "/openshell.v1.OpenShell/UpdateProviderProfiles"
+	OpenShell_LintProviderProfiles_FullMethodName          = "/openshell.v1.OpenShell/LintProviderProfiles"
+	OpenShell_UpdateProvider_FullMethodName                = "/openshell.v1.OpenShell/UpdateProvider"
+	OpenShell_GetProviderRefreshStatus_FullMethodName      = "/openshell.v1.OpenShell/GetProviderRefreshStatus"
+	OpenShell_ConfigureProviderRefresh_FullMethodName      = "/openshell.v1.OpenShell/ConfigureProviderRefresh"
+	OpenShell_RotateProviderCredential_FullMethodName      = "/openshell.v1.OpenShell/RotateProviderCredential"
+	OpenShell_DeleteProviderRefresh_FullMethodName         = "/openshell.v1.OpenShell/DeleteProviderRefresh"
+	OpenShell_DeleteProvider_FullMethodName                = "/openshell.v1.OpenShell/DeleteProvider"
+	OpenShell_DeleteProviderProfile_FullMethodName         = "/openshell.v1.OpenShell/DeleteProviderProfile"
+	OpenShell_GetSandboxConfig_FullMethodName              = "/openshell.v1.OpenShell/GetSandboxConfig"
+	OpenShell_GetGatewayConfig_FullMethodName              = "/openshell.v1.OpenShell/GetGatewayConfig"
+	OpenShell_UpdateConfig_FullMethodName                  = "/openshell.v1.OpenShell/UpdateConfig"
+	OpenShell_GetConfigUpdateOperation_FullMethodName      = "/openshell.v1.OpenShell/GetConfigUpdateOperation"
+	OpenShell_GetSandboxPolicyStatus_FullMethodName        = "/openshell.v1.OpenShell/GetSandboxPolicyStatus"
+	OpenShell_ListSandboxPolicies_FullMethodName           = "/openshell.v1.OpenShell/ListSandboxPolicies"
+	OpenShell_ReportPolicyStatus_FullMethodName            = "/openshell.v1.OpenShell/ReportPolicyStatus"
+	OpenShell_ReportEndpointStatus_FullMethodName          = "/openshell.v1.OpenShell/ReportEndpointStatus"
+	OpenShell_ReportProviderReadiness_FullMethodName       = "/openshell.v1.OpenShell/ReportProviderReadiness"
+	OpenShell_ReportSandboxConfiguration_FullMethodName    = "/openshell.v1.OpenShell/ReportSandboxConfiguration"
+	OpenShell_GetSandboxProviderEnvironment_FullMethodName = "/openshell.v1.OpenShell/GetSandboxProviderEnvironment"
+	OpenShell_ExchangeProviderSubjectToken_FullMethodName  = "/openshell.v1.OpenShell/ExchangeProviderSubjectToken"
+	OpenShell_GetSandboxLogs_FullMethodName                = "/openshell.v1.OpenShell/GetSandboxLogs"
+	OpenShell_PushSandboxLogs_FullMethodName               = "/openshell.v1.OpenShell/PushSandboxLogs"
+	OpenShell_ConnectSupervisor_FullMethodName             = "/openshell.v1.OpenShell/ConnectSupervisor"
+	OpenShell_ReportMainProcessExit_FullMethodName         = "/openshell.v1.OpenShell/ReportMainProcessExit"
+	OpenShell_FinalizeMainProcessExit_FullMethodName       = "/openshell.v1.OpenShell/FinalizeMainProcessExit"
+	OpenShell_RelayStream_FullMethodName                   = "/openshell.v1.OpenShell/RelayStream"
+	OpenShell_WatchSandbox_FullMethodName                  = "/openshell.v1.OpenShell/WatchSandbox"
+	OpenShell_SubmitPolicyAnalysis_FullMethodName          = "/openshell.v1.OpenShell/SubmitPolicyAnalysis"
+	OpenShell_GetDraftPolicy_FullMethodName                = "/openshell.v1.OpenShell/GetDraftPolicy"
+	OpenShell_ApproveDraftChunk_FullMethodName             = "/openshell.v1.OpenShell/ApproveDraftChunk"
+	OpenShell_RejectDraftChunk_FullMethodName              = "/openshell.v1.OpenShell/RejectDraftChunk"
+	OpenShell_ApproveAllDraftChunks_FullMethodName         = "/openshell.v1.OpenShell/ApproveAllDraftChunks"
+	OpenShell_EditDraftChunk_FullMethodName                = "/openshell.v1.OpenShell/EditDraftChunk"
+	OpenShell_UndoDraftChunk_FullMethodName                = "/openshell.v1.OpenShell/UndoDraftChunk"
+	OpenShell_ClearDraftChunks_FullMethodName              = "/openshell.v1.OpenShell/ClearDraftChunks"
+	OpenShell_GetDraftHistory_FullMethodName               = "/openshell.v1.OpenShell/GetDraftHistory"
+	OpenShell_IssueSandboxToken_FullMethodName             = "/openshell.v1.OpenShell/IssueSandboxToken"
+	OpenShell_RefreshSandboxToken_FullMethodName           = "/openshell.v1.OpenShell/RefreshSandboxToken"
+	OpenShell_CreateWorkspace_FullMethodName               = "/openshell.v1.OpenShell/CreateWorkspace"
+	OpenShell_GetWorkspace_FullMethodName                  = "/openshell.v1.OpenShell/GetWorkspace"
+	OpenShell_ListWorkspaces_FullMethodName                = "/openshell.v1.OpenShell/ListWorkspaces"
+	OpenShell_DeleteWorkspace_FullMethodName               = "/openshell.v1.OpenShell/DeleteWorkspace"
+	OpenShell_AddWorkspaceMember_FullMethodName            = "/openshell.v1.OpenShell/AddWorkspaceMember"
+	OpenShell_RemoveWorkspaceMember_FullMethodName         = "/openshell.v1.OpenShell/RemoveWorkspaceMember"
+	OpenShell_ListWorkspaceMembers_FullMethodName          = "/openshell.v1.OpenShell/ListWorkspaceMembers"
 )
 
 // OpenShellClient is the client API for OpenShell service.
@@ -147,6 +152,8 @@ type OpenShellClient interface {
 	AttachSandboxProvider(ctx context.Context, in *AttachSandboxProviderRequest, opts ...grpc.CallOption) (*AttachSandboxProviderResponse, error)
 	// Detach a provider record from an existing sandbox.
 	DetachSandboxProvider(ctx context.Context, in *DetachSandboxProviderRequest, opts ...grpc.CallOption) (*DetachSandboxProviderResponse, error)
+	// Inspect the installed authority for one sandbox provider mutation.
+	GetSandboxProviderStatus(ctx context.Context, in *GetSandboxProviderStatusRequest, opts ...grpc.CallOption) (*GetSandboxProviderStatusResponse, error)
 	// Delete a sandbox by name.
 	DeleteSandbox(ctx context.Context, in *DeleteSandboxRequest, opts ...grpc.CallOption) (*DeleteSandboxResponse, error)
 	// Stop a sandbox while retaining its persistent state.
@@ -223,6 +230,15 @@ type OpenShellClient interface {
 	ListSandboxPolicies(ctx context.Context, in *ListSandboxPoliciesRequest, opts ...grpc.CallOption) (*ListSandboxPoliciesResponse, error)
 	// Report policy load result (called by sandbox after reload attempt).
 	ReportPolicyStatus(ctx context.Context, in *ReportPolicyStatusRequest, opts ...grpc.CallOption) (*ReportPolicyStatusResponse, error)
+	// Replace the gateway's observed tool server endpoint status for one sandbox.
+	ReportEndpointStatus(ctx context.Context, in *ReportEndpointStatusRequest, opts ...grpc.CallOption) (*ReportEndpointStatusResponse, error)
+	// Report installed provider state for the current ConnectSupervisor session.
+	// Replacing or losing that session invalidates its observations.
+	ReportProviderReadiness(ctx context.Context, in *ReportProviderReadinessRequest, opts ...grpc.CallOption) (*ReportProviderReadinessResponse, error)
+	// Register startup and acknowledge an exact validated runtime configuration.
+	ReportSandboxConfiguration(ctx context.Context, in *ReportSandboxConfigurationRequest, opts ...grpc.CallOption) (*ReportSandboxConfigurationResponse, error)
+	// Get provider environment for a sandbox (called by sandbox supervisor at startup).
+	GetSandboxProviderEnvironment(ctx context.Context, in *GetSandboxProviderEnvironmentRequest, opts ...grpc.CallOption) (*GetSandboxProviderEnvironmentResponse, error)
 	// Exchange a stored provider subject token for an intermediate token scoped
 	// to the calling supervisor's SPIFFE identity.
 	ExchangeProviderSubjectToken(ctx context.Context, in *ExchangeProviderSubjectTokenRequest, opts ...grpc.CallOption) (*ExchangeProviderSubjectTokenResponse, error)
@@ -451,6 +467,16 @@ func (c *openShellClient) DetachSandboxProvider(ctx context.Context, in *DetachS
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DetachSandboxProviderResponse)
 	err := c.cc.Invoke(ctx, OpenShell_DetachSandboxProvider_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *openShellClient) GetSandboxProviderStatus(ctx context.Context, in *GetSandboxProviderStatusRequest, opts ...grpc.CallOption) (*GetSandboxProviderStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSandboxProviderStatusResponse)
+	err := c.cc.Invoke(ctx, OpenShell_GetSandboxProviderStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -812,6 +838,46 @@ func (c *openShellClient) ReportPolicyStatus(ctx context.Context, in *ReportPoli
 	return out, nil
 }
 
+func (c *openShellClient) ReportEndpointStatus(ctx context.Context, in *ReportEndpointStatusRequest, opts ...grpc.CallOption) (*ReportEndpointStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportEndpointStatusResponse)
+	err := c.cc.Invoke(ctx, OpenShell_ReportEndpointStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *openShellClient) ReportProviderReadiness(ctx context.Context, in *ReportProviderReadinessRequest, opts ...grpc.CallOption) (*ReportProviderReadinessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportProviderReadinessResponse)
+	err := c.cc.Invoke(ctx, OpenShell_ReportProviderReadiness_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *openShellClient) ReportSandboxConfiguration(ctx context.Context, in *ReportSandboxConfigurationRequest, opts ...grpc.CallOption) (*ReportSandboxConfigurationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportSandboxConfigurationResponse)
+	err := c.cc.Invoke(ctx, OpenShell_ReportSandboxConfiguration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *openShellClient) GetSandboxProviderEnvironment(ctx context.Context, in *GetSandboxProviderEnvironmentRequest, opts ...grpc.CallOption) (*GetSandboxProviderEnvironmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSandboxProviderEnvironmentResponse)
+	err := c.cc.Invoke(ctx, OpenShell_GetSandboxProviderEnvironment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *openShellClient) ExchangeProviderSubjectToken(ctx context.Context, in *ExchangeProviderSubjectTokenRequest, opts ...grpc.CallOption) (*ExchangeProviderSubjectTokenResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ExchangeProviderSubjectTokenResponse)
@@ -1138,6 +1204,8 @@ type OpenShellServer interface {
 	AttachSandboxProvider(context.Context, *AttachSandboxProviderRequest) (*AttachSandboxProviderResponse, error)
 	// Detach a provider record from an existing sandbox.
 	DetachSandboxProvider(context.Context, *DetachSandboxProviderRequest) (*DetachSandboxProviderResponse, error)
+	// Inspect the installed authority for one sandbox provider mutation.
+	GetSandboxProviderStatus(context.Context, *GetSandboxProviderStatusRequest) (*GetSandboxProviderStatusResponse, error)
 	// Delete a sandbox by name.
 	DeleteSandbox(context.Context, *DeleteSandboxRequest) (*DeleteSandboxResponse, error)
 	// Stop a sandbox while retaining its persistent state.
@@ -1214,6 +1282,15 @@ type OpenShellServer interface {
 	ListSandboxPolicies(context.Context, *ListSandboxPoliciesRequest) (*ListSandboxPoliciesResponse, error)
 	// Report policy load result (called by sandbox after reload attempt).
 	ReportPolicyStatus(context.Context, *ReportPolicyStatusRequest) (*ReportPolicyStatusResponse, error)
+	// Replace the gateway's observed tool server endpoint status for one sandbox.
+	ReportEndpointStatus(context.Context, *ReportEndpointStatusRequest) (*ReportEndpointStatusResponse, error)
+	// Report installed provider state for the current ConnectSupervisor session.
+	// Replacing or losing that session invalidates its observations.
+	ReportProviderReadiness(context.Context, *ReportProviderReadinessRequest) (*ReportProviderReadinessResponse, error)
+	// Register startup and acknowledge an exact validated runtime configuration.
+	ReportSandboxConfiguration(context.Context, *ReportSandboxConfigurationRequest) (*ReportSandboxConfigurationResponse, error)
+	// Get provider environment for a sandbox (called by sandbox supervisor at startup).
+	GetSandboxProviderEnvironment(context.Context, *GetSandboxProviderEnvironmentRequest) (*GetSandboxProviderEnvironmentResponse, error)
 	// Exchange a stored provider subject token for an intermediate token scoped
 	// to the calling supervisor's SPIFFE identity.
 	ExchangeProviderSubjectToken(context.Context, *ExchangeProviderSubjectTokenRequest) (*ExchangeProviderSubjectTokenResponse, error)
@@ -1350,6 +1427,9 @@ func (UnimplementedOpenShellServer) AttachSandboxProvider(context.Context, *Atta
 func (UnimplementedOpenShellServer) DetachSandboxProvider(context.Context, *DetachSandboxProviderRequest) (*DetachSandboxProviderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DetachSandboxProvider not implemented")
 }
+func (UnimplementedOpenShellServer) GetSandboxProviderStatus(context.Context, *GetSandboxProviderStatusRequest) (*GetSandboxProviderStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSandboxProviderStatus not implemented")
+}
 func (UnimplementedOpenShellServer) DeleteSandbox(context.Context, *DeleteSandboxRequest) (*DeleteSandboxResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteSandbox not implemented")
 }
@@ -1451,6 +1531,18 @@ func (UnimplementedOpenShellServer) ListSandboxPolicies(context.Context, *ListSa
 }
 func (UnimplementedOpenShellServer) ReportPolicyStatus(context.Context, *ReportPolicyStatusRequest) (*ReportPolicyStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportPolicyStatus not implemented")
+}
+func (UnimplementedOpenShellServer) ReportEndpointStatus(context.Context, *ReportEndpointStatusRequest) (*ReportEndpointStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportEndpointStatus not implemented")
+}
+func (UnimplementedOpenShellServer) ReportProviderReadiness(context.Context, *ReportProviderReadinessRequest) (*ReportProviderReadinessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportProviderReadiness not implemented")
+}
+func (UnimplementedOpenShellServer) ReportSandboxConfiguration(context.Context, *ReportSandboxConfigurationRequest) (*ReportSandboxConfigurationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportSandboxConfiguration not implemented")
+}
+func (UnimplementedOpenShellServer) GetSandboxProviderEnvironment(context.Context, *GetSandboxProviderEnvironmentRequest) (*GetSandboxProviderEnvironmentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSandboxProviderEnvironment not implemented")
 }
 func (UnimplementedOpenShellServer) ExchangeProviderSubjectToken(context.Context, *ExchangeProviderSubjectTokenRequest) (*ExchangeProviderSubjectTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExchangeProviderSubjectToken not implemented")
@@ -1799,6 +1891,24 @@ func _OpenShell_DetachSandboxProvider_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(OpenShellServer).DetachSandboxProvider(ctx, req.(*DetachSandboxProviderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OpenShell_GetSandboxProviderStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSandboxProviderStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OpenShellServer).GetSandboxProviderStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OpenShell_GetSandboxProviderStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OpenShellServer).GetSandboxProviderStatus(ctx, req.(*GetSandboxProviderStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2386,6 +2496,78 @@ func _OpenShell_ReportPolicyStatus_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OpenShell_ReportEndpointStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportEndpointStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OpenShellServer).ReportEndpointStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OpenShell_ReportEndpointStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OpenShellServer).ReportEndpointStatus(ctx, req.(*ReportEndpointStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OpenShell_ReportProviderReadiness_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportProviderReadinessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OpenShellServer).ReportProviderReadiness(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OpenShell_ReportProviderReadiness_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OpenShellServer).ReportProviderReadiness(ctx, req.(*ReportProviderReadinessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OpenShell_ReportSandboxConfiguration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportSandboxConfigurationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OpenShellServer).ReportSandboxConfiguration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OpenShell_ReportSandboxConfiguration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OpenShellServer).ReportSandboxConfiguration(ctx, req.(*ReportSandboxConfigurationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OpenShell_GetSandboxProviderEnvironment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSandboxProviderEnvironmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OpenShellServer).GetSandboxProviderEnvironment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OpenShell_GetSandboxProviderEnvironment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OpenShellServer).GetSandboxProviderEnvironment(ctx, req.(*GetSandboxProviderEnvironmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _OpenShell_ExchangeProviderSubjectToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ExchangeProviderSubjectTokenRequest)
 	if err := dec(in); err != nil {
@@ -2878,6 +3060,10 @@ var OpenShell_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _OpenShell_DetachSandboxProvider_Handler,
 		},
 		{
+			MethodName: "GetSandboxProviderStatus",
+			Handler:    _OpenShell_GetSandboxProviderStatus_Handler,
+		},
+		{
 			MethodName: "DeleteSandbox",
 			Handler:    _OpenShell_DeleteSandbox_Handler,
 		},
@@ -3000,6 +3186,22 @@ var OpenShell_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportPolicyStatus",
 			Handler:    _OpenShell_ReportPolicyStatus_Handler,
+		},
+		{
+			MethodName: "ReportEndpointStatus",
+			Handler:    _OpenShell_ReportEndpointStatus_Handler,
+		},
+		{
+			MethodName: "ReportProviderReadiness",
+			Handler:    _OpenShell_ReportProviderReadiness_Handler,
+		},
+		{
+			MethodName: "ReportSandboxConfiguration",
+			Handler:    _OpenShell_ReportSandboxConfiguration_Handler,
+		},
+		{
+			MethodName: "GetSandboxProviderEnvironment",
+			Handler:    _OpenShell_GetSandboxProviderEnvironment_Handler,
 		},
 		{
 			MethodName: "ExchangeProviderSubjectToken",

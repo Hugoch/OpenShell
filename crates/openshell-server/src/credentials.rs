@@ -341,7 +341,7 @@ impl CredentialRuntime {
                     .cloned();
                 let mut handle = driver
                     .store_credential(StoreCredentialRequest {
-                        provider_name: provider_name.to_string(),
+                        provider: provider_name.to_string(),
                         credential_key: credential_key.clone(),
                         value: value.clone(),
                         existing_handle,
@@ -614,7 +614,7 @@ impl CredentialRuntime {
         let driver = self.connected_driver(&driver_name)?;
         driver
             .delete_credential(DeleteCredentialRequest {
-                provider_name: provider_name.to_string(),
+                provider: provider_name.to_string(),
                 credential_key: credential_key.to_string(),
                 handle: Some(handle),
                 workspace: workspace.to_string(),
@@ -664,7 +664,7 @@ impl CredentialRuntime {
                 .or_default()
                 .push(ResolveCredentialRequest {
                     request_id,
-                    provider_name: provider_name.clone(),
+                    provider: provider_name.clone(),
                     credential_key: credential_key.clone(),
                     handle: Some(selected_handle),
                     workspace: workspace.clone(),
@@ -709,31 +709,36 @@ impl CredentialRuntime {
 
                 // Check provider-level expiration
                 let provider_expires_at_ms = provider
-                    .credential_expires_at_ms
+                    .credential_expiration_times
                     .get(&credential_key)
-                    .copied()
-                    .unwrap_or(0);
+                    .map(openshell_core::time::timestamp_to_millis)
+                    .transpose()
+                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                let driver_expires_at_ms = response
+                    .expiration_time
+                    .as_ref()
+                    .map(openshell_core::time::timestamp_to_millis)
+                    .transpose()
+                    .map_err(|error| Status::internal(error.to_string()))?;
 
-                // Compute effective expiration (earliest non-zero timestamp)
-                let effective_expires_at_ms = match (provider_expires_at_ms, response.expires_at_ms)
-                {
-                    (0, driver) => driver,
-                    (provider, 0) => provider,
-                    (provider, driver) => provider.min(driver),
-                };
+                // Compute effective expiration (earliest present timestamp).
+                let effective_expires_at_ms = effective_credential_expiration_ms(
+                    provider_expires_at_ms,
+                    driver_expires_at_ms,
+                );
 
-                if effective_expires_at_ms > 0 && effective_expires_at_ms <= now_ms {
-                    warn!(
-                        provider_name = %provider_name,
-                        credential_key = %credential_key,
-                        provider_expires_at_ms,
-                        driver_expires_at_ms = response.expires_at_ms,
-                        effective_expires_at_ms,
-                        "skipping expired handle-backed credential"
-                    );
-                    continue;
-                }
-                if effective_expires_at_ms > 0 {
+                if let Some(effective_expires_at_ms) = effective_expires_at_ms {
+                    if effective_expires_at_ms <= now_ms {
+                        warn!(
+                            provider_name = %provider_name,
+                            credential_key = %credential_key,
+                            ?provider_expires_at_ms,
+                            ?driver_expires_at_ms,
+                            effective_expires_at_ms,
+                            "skipping expired handle-backed credential"
+                        );
+                        continue;
+                    }
                     resolved
                         .expires_at_ms
                         .insert(credential_key.clone(), effective_expires_at_ms);
@@ -759,6 +764,18 @@ impl CredentialRuntime {
                 "credential driver '{driver_name}' is enabled but not connected"
             ))
         })
+    }
+}
+
+fn effective_credential_expiration_ms(
+    provider_expiration_ms: Option<i64>,
+    driver_expiration_ms: Option<i64>,
+) -> Option<i64> {
+    match (provider_expiration_ms, driver_expiration_ms) {
+        (Some(provider), Some(driver)) => Some(provider.min(driver)),
+        (Some(provider), None) => Some(provider),
+        (None, Some(driver)) => Some(driver),
+        (None, None) => None,
     }
 }
 
@@ -1806,7 +1823,7 @@ impl CredentialDriver for TestStaticCredentialDriver {
             .unwrap_or_else(|| {
                 format!(
                     "{}:{}:{}",
-                    request.provider_name, request.credential_key, request.object_id
+                    request.provider, request.credential_key, request.object_id
                 )
             });
         self.values
@@ -1863,7 +1880,7 @@ impl CredentialDriver for TestStaticCredentialDriver {
             responses.push(ResolvedCredential {
                 request_id: request.request_id,
                 value,
-                expires_at_ms: 0,
+                expiration_time: None,
             });
         }
 
@@ -1939,6 +1956,17 @@ mod tests {
             )]),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn effective_expiration_preserves_timestamp_presence() {
+        assert_eq!(effective_credential_expiration_ms(None, None), None);
+        assert_eq!(effective_credential_expiration_ms(Some(0), None), Some(0));
+        assert_eq!(effective_credential_expiration_ms(None, Some(0)), Some(0));
+        assert_eq!(
+            effective_credential_expiration_ms(Some(2_000), Some(1_000)),
+            Some(1_000)
+        );
     }
 
     fn config_file(toml: &str) -> crate::config_file::ConfigFile {
@@ -2100,6 +2128,16 @@ mod tests {
             resolved.values.get("OPENAI_API_KEY").map(String::as_str),
             Some("sk-test")
         );
+
+        provider.credential_expiration_times.insert(
+            "OPENAI_API_KEY".to_string(),
+            openshell_core::time::timestamp_from_millis(0).unwrap(),
+        );
+        let expired = runtime
+            .resolve_provider_handles(&provider, 1_000)
+            .await
+            .unwrap();
+        assert!(!expired.values.contains_key("OPENAI_API_KEY"));
     }
 
     #[tokio::test]

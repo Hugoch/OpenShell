@@ -104,11 +104,11 @@ type ConfigUpdate struct {
 	ExpectedResourceVersion uint64
 	// Annotations is caller-provided metadata for sandbox-scoped updates.
 	Annotations map[string]string
-	// Consistency controls whether Update returns after commit or terminal apply.
+	// Consistency controls whether Update returns after commit or completion.
 	Consistency ConfigUpdateConsistency
 	// IdempotencyKey maps retries to the original durable operation.
 	IdempotencyKey string
-	// WaitTimeoutSeconds bounds WaitForApply on the server. Zero uses the server default.
+	// WaitTimeoutSeconds bounds WaitForCompletion on the server. Zero uses the server default.
 	WaitTimeoutSeconds uint32
 }
 
@@ -118,11 +118,11 @@ type ConfigUpdateConsistency string
 const (
 	// ConfigUpdateCommitOnly returns after desired state and its operation commit.
 	ConfigUpdateCommitOnly ConfigUpdateConsistency = "commit_only"
-	// ConfigUpdateWaitForApply waits for a durable terminal apply result.
-	ConfigUpdateWaitForApply ConfigUpdateConsistency = "wait_for_apply"
+	// ConfigUpdateWaitForCompletion waits for a durable terminal result, including failure.
+	ConfigUpdateWaitForCompletion ConfigUpdateConsistency = "wait_for_completion"
 )
 
-// ConfigUpdateOperation is the durable terminal state for a sandbox update.
+// ConfigUpdateOperation records the durable state and outcome of a sandbox update.
 type ConfigUpdateOperation struct {
 	OperationID    string
 	SandboxID      string
@@ -144,6 +144,6 @@ type ConfigUpdateResult struct {
 	Deleted bool
 	// Annotations contains sandbox metadata annotations after the update.
 	Annotations map[string]string
-	// Operation is present for changed sandbox-scoped mutations.
+	// Operation is present for sandbox-scoped requests, including unchanged values.
 	Operation *ConfigUpdateOperation
 }

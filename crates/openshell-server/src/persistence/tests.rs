@@ -1100,7 +1100,7 @@ fn policy_test_sandbox(id: &str, name: &str) -> Sandbox {
         metadata: Some(ProtoObjectMeta {
             id: id.to_string(),
             name: name.to_string(),
-            created_at_ms: 1,
+            created_time: openshell_core::time::timestamp_from_millis(1).ok(),
             workspace: "default".to_string(),
             ..Default::default()
         }),
@@ -1255,10 +1255,10 @@ async fn pending_operation_queries_are_scoped_bounded_and_due_ordered() {
     store.put_message(&second_sandbox).await.unwrap();
 
     let mut first = config_operation_for(&first_sandbox, 0, 1);
-    first.next_attempt_at_ms = 10;
+    first.next_attempt_time = Some(openshell_core::time::timestamp_from_millis(10).unwrap());
     let first_id = first.operation.as_ref().unwrap().operation_id.clone();
     let mut second = config_operation_for(&second_sandbox, 0, 1);
-    second.next_attempt_at_ms = 10;
+    second.next_attempt_time = Some(openshell_core::time::timestamp_from_millis(10).unwrap());
     let second_id = second.operation.as_ref().unwrap().operation_id.clone();
     for (index, (sandbox, operation)) in [(&first_sandbox, &first), (&second_sandbox, &second)]
         .into_iter()
@@ -1646,6 +1646,42 @@ async fn postgres_policy_and_settings_operations_allocate_serial_targets() {
     ];
     assert!(targets.contains(&(1, 1)), "committed targets: {targets:?}");
     assert_ne!(targets, [(0, 1), (1, 0)]);
+
+    for policy_request in [false, true] {
+        let mut unchanged = if policy_request {
+            config_operation_for(&sandbox, 1, 0)
+        } else {
+            config_operation_for(&sandbox, 0, 1)
+        };
+        unchanged.response_policy_version = u32::from(policy_request);
+        first
+            .insert_existing_config_operation(&unchanged, "default", sandbox.object_name())
+            .await
+            .unwrap();
+        let stored = first
+            .get_message::<crate::storage_proto::StoredConfigUpdateOperation>(
+                &unchanged.operation.as_ref().unwrap().operation_id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                stored.target_policy_version,
+                stored.target_settings_revision
+            ),
+            (1, 1)
+        );
+        assert!(
+            first
+                .list_pending_config_operations_for_scope(&sandbox_id)
+                .await
+                .unwrap()
+                .iter()
+                .any(|record| record.metadata.as_ref().unwrap().id
+                    == stored.metadata.as_ref().unwrap().id)
+        );
+    }
 }
 
 #[tokio::test]
@@ -2593,12 +2629,12 @@ async fn cas_update_message_cas_succeeds() {
         metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
             id: "test-id".to_string(),
             name: "test-sandbox".to_string(),
-            created_at_ms: 1000,
+            created_time: openshell_core::time::timestamp_from_millis(1000).ok(),
             labels: std::collections::HashMap::new(),
             resource_version: 0,
             annotations: std::collections::HashMap::new(),
             workspace: "default".to_string(),
-            deletion_timestamp_ms: 0,
+            deletion_time: None,
         }),
         spec: None,
         status: None,
@@ -2636,12 +2672,12 @@ async fn cas_update_message_cas_conflicts_on_concurrent_updates() {
         metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
             id: "test-id".to_string(),
             name: "test-sandbox".to_string(),
-            created_at_ms: 1000,
+            created_time: openshell_core::time::timestamp_from_millis(1000).ok(),
             labels: std::collections::HashMap::new(),
             resource_version: 0,
             annotations: std::collections::HashMap::new(),
             workspace: "default".to_string(),
-            deletion_timestamp_ms: 0,
+            deletion_time: None,
         }),
         spec: None,
         status: None,
@@ -2707,12 +2743,12 @@ async fn cas_update_message_cas_rejects_workspace_change() {
         metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
             id: "ws-immutable".to_string(),
             name: "test-sandbox".to_string(),
-            created_at_ms: 1000,
+            created_time: openshell_core::time::timestamp_from_millis(1000).ok(),
             labels: std::collections::HashMap::new(),
             annotations: std::collections::HashMap::new(),
             resource_version: 0,
             workspace: "alpha".to_string(),
-            deletion_timestamp_ms: 0,
+            deletion_time: None,
         }),
         spec: None,
         status: None,
@@ -2750,12 +2786,12 @@ async fn cas_update_message_cas_rejects_name_change() {
         metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
             id: "name-immutable".to_string(),
             name: "original".to_string(),
-            created_at_ms: 1000,
+            created_time: openshell_core::time::timestamp_from_millis(1000).ok(),
             labels: std::collections::HashMap::new(),
             annotations: std::collections::HashMap::new(),
             resource_version: 0,
             workspace: "default".to_string(),
-            deletion_timestamp_ms: 0,
+            deletion_time: None,
         }),
         spec: None,
         status: None,

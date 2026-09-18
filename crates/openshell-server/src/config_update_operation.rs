@@ -23,6 +23,14 @@ use crate::ServerState;
 use crate::persistence::{KnownVersionUpdate, ObjectType, current_time_ms};
 use crate::storage_proto::StoredConfigUpdateOperation;
 
+pub use crate::provider_config_operation::{
+    get_provider_operation, observe_provider_status, record_provider_operation,
+};
+
+fn timestamp(ms: i64) -> prost_types::Timestamp {
+    openshell_core::time::timestamp_from_millis(ms).expect("system clock fits protobuf timestamp")
+}
+
 pub const CONFIG_UPDATE_OPERATION_OBJECT_TYPE: &str = "config_update_operation";
 const OPERATION_SCAN_PAGE_SIZE: u32 = 250;
 const MAX_TRANSITION_RETRIES: usize = 8;
@@ -133,12 +141,12 @@ pub fn new_record(
     let now = current_time_ms();
     let phase = sandbox_phase(sandbox);
     let state = initial_state(phase);
-    let completed_at_ms = if terminal(state) { now } else { 0 };
+    let completed_time = terminal(state).then(|| timestamp(now));
     StoredConfigUpdateOperation {
         metadata: Some(ObjectMeta {
             id: operation_id.clone(),
             name: operation_name(sandbox.object_id(), idempotency_key, &operation_id),
-            created_at_ms: now,
+            created_time: Some(timestamp(now)),
             workspace: workspace.to_string(),
             ..Default::default()
         }),
@@ -150,21 +158,22 @@ pub fn new_record(
             state: state.into(),
             outcome: ConfigApplyOutcome::Unspecified.into(),
             sanitized_error: String::new(),
-            created_at_ms: now,
-            updated_at_ms: now,
-            completed_at_ms,
+            created_time: Some(timestamp(now)),
+            updated_time: Some(timestamp(now)),
+            completed_time,
         }),
         target_policy_version: target.policy_version,
         target_settings_revision: target.settings_revision,
         initial_phase: phase.into(),
         idempotency_key: idempotency_key.to_string(),
         attempt_count: 0,
-        next_attempt_at_ms: now,
+        next_attempt_time: Some(timestamp(now)),
         response_policy_version: response.policy_version,
         response_policy_hash: response.policy_hash,
         response_settings_revision: response.settings_revision,
         response_deleted: response.deleted,
         response_annotations: response.annotations,
+        ..Default::default()
     }
 }
 
@@ -213,6 +222,9 @@ pub async fn repair_query_projections(state: &ServerState) -> Result<(), Status>
             })?;
         let page_len = records.len();
         for mut record in records {
+            if record.provider_receipt.is_some() {
+                continue;
+            }
             for _ in 0..MAX_TRANSITION_RETRIES {
                 let Some(metadata) = record.metadata.as_ref() else {
                     return Err(Status::internal("update operation metadata missing"));
@@ -353,8 +365,8 @@ async fn finish(
         operation.state = terminal_state.into();
         operation.outcome = outcome.into();
         operation.sanitized_error = sanitize_error(error);
-        operation.updated_at_ms = now;
-        operation.completed_at_ms = now;
+        operation.updated_time = Some(timestamp(now));
+        operation.completed_time = Some(timestamp(now));
         true
     })
     .await?;
@@ -384,8 +396,8 @@ async fn finish_if_target_matches(
         operation.state = terminal_state.into();
         operation.outcome = outcome.into();
         operation.sanitized_error = sanitize_error(error);
-        operation.updated_at_ms = now;
-        operation.completed_at_ms = now;
+        operation.updated_time = Some(timestamp(now));
+        operation.completed_time = Some(timestamp(now));
         true
     })
     .await?;
@@ -529,20 +541,21 @@ async fn reconcile_records_for_sandbox(
             continue;
         }
         let claimed = mutate_record(state, &operation.operation_id, |stored| {
+            let next_attempt_at_ms = stored.next_attempt_at_ms();
             let Some(operation) = stored.operation.as_mut() else {
                 return false;
             };
             if ConfigUpdateOperationState::try_from(operation.state)
                 != Ok(ConfigUpdateOperationState::Pending)
-                || stored.next_attempt_at_ms > now
+                || next_attempt_at_ms > now
             {
                 return false;
             }
-            operation.updated_at_ms = now;
+            operation.updated_time = Some(timestamp(now));
             stored.attempt_count = stored.attempt_count.saturating_add(1);
             let exponent = stored.attempt_count.min(8);
             let delay_ms = 250_i64.saturating_mul(1_i64 << exponent).min(30_000);
-            stored.next_attempt_at_ms = now.saturating_add(delay_ms);
+            stored.next_attempt_time = Some(timestamp(now.saturating_add(delay_ms)));
             true
         })
         .await?;
@@ -576,7 +589,7 @@ pub async fn associate_pending_with_snapshot(
     state: &Arc<ServerState>,
     sandbox_id: &str,
     snapshot: &openshell_core::proto::SandboxConfigSnapshot,
-) -> Result<(), Status> {
+) -> Result<bool, Status> {
     let records = state
         .store
         .list_pending_config_operations_for_scope(sandbox_id)
@@ -584,6 +597,7 @@ pub async fn associate_pending_with_snapshot(
         .map_err(|error| Status::internal(format!("list update operations failed: {error}")))?;
     let target_revision = snapshot_revision(snapshot);
     let now = current_time_ms();
+    let mut requires_acknowledgement = false;
     for record in records {
         let operation = public_operation(&record)?;
         match target_relation(&record, snapshot) {
@@ -604,6 +618,7 @@ pub async fn associate_pending_with_snapshot(
                 );
             }
             std::cmp::Ordering::Equal => {
+                requires_acknowledgement = true;
                 let _ = mutate_record(state, &operation.operation_id, |stored| {
                     let Some(operation) = stored.operation.as_mut() else {
                         return false;
@@ -614,15 +629,15 @@ pub async fn associate_pending_with_snapshot(
                     {
                         return false;
                     }
-                    operation.target_revision = Some(target_revision);
-                    operation.updated_at_ms = now;
+                    operation.target_revision = Some(target_revision.clone());
+                    operation.updated_time = Some(timestamp(now));
                     true
                 })
                 .await?;
             }
         }
     }
-    Ok(())
+    Ok(requires_acknowledgement)
 }
 
 pub async fn complete_from_apply_results(
@@ -698,12 +713,12 @@ pub async fn complete_from_apply_result(
 pub async fn wait_for_terminal(
     state: &Arc<ServerState>,
     operation_id: &str,
-    timeout_secs: u32,
+    timeout: Duration,
 ) -> Result<ConfigUpdateOperation, Status> {
-    let timeout = if timeout_secs == 0 {
+    let timeout = if timeout.is_zero() {
         DEFAULT_WAIT_TIMEOUT
     } else {
-        Duration::from_secs(u64::from(timeout_secs)).min(MAX_WAIT_TIMEOUT)
+        timeout.min(MAX_WAIT_TIMEOUT)
     };
     let started = std::time::Instant::now();
     let deadline = tokio::time::Instant::now() + timeout;
@@ -949,12 +964,12 @@ mod tests {
         let now = current_time_ms();
         let claim = || async {
             mutate_record(&state, &operation_id, |stored| {
-                if stored.next_attempt_at_ms > now {
+                if stored.next_attempt_at_ms() > now {
                     return false;
                 }
                 stored.attempt_count = stored.attempt_count.saturating_add(1);
-                stored.next_attempt_at_ms = now.saturating_add(1_000);
-                stored.operation.as_mut().unwrap().updated_at_ms = now;
+                stored.next_attempt_time = Some(timestamp(now.saturating_add(1_000)));
+                stored.operation.as_mut().unwrap().updated_time = Some(timestamp(now));
                 true
             })
             .await
@@ -1000,7 +1015,7 @@ mod tests {
             )),
         };
         mutate_record(&state, &operation_id, |stored| {
-            stored.operation.as_mut().unwrap().target_revision = Some(expected);
+            stored.operation.as_mut().unwrap().target_revision = Some(expected.clone());
             true
         })
         .await

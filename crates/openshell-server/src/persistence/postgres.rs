@@ -62,7 +62,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, '{}'::jsonb, 1, $10)
     .bind(state.as_str_name())
     .bind(record.encode_to_vec())
     .bind(now_ms)
-    .bind(record.next_attempt_at_ms)
+    .bind(record.next_attempt_at_ms())
     .execute(&mut **tx)
     .await
     .map_err(|error| map_db_error(&error))?;
@@ -165,7 +165,44 @@ impl PostgresStore {
         POSTGRES_MIGRATOR
             .run(&self.pool)
             .await
-            .map_err(|e| map_migrate_error(&e))
+            .map_err(|e| map_migrate_error(&e))?;
+        self.migrate_legacy_time_payloads().await
+    }
+
+    async fn migrate_legacy_time_payloads(&self) -> PersistenceResult<()> {
+        let mut transaction = self.pool.begin().await.map_err(|e| map_db_error(&e))?;
+        // Serialize this application-level data migration across gateway replicas.
+        sqlx::query("SELECT pg_advisory_xact_lock(3052)")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| map_db_error(&e))?;
+        let rows =
+            sqlx::query("SELECT id, object_type, payload FROM objects ORDER BY id FOR UPDATE")
+                .fetch_all(&mut *transaction)
+                .await
+                .map_err(|e| map_db_error(&e))?;
+
+        for row in rows {
+            let id: String = row.try_get("id").map_err(|e| map_db_error(&e))?;
+            let object_type: String = row.try_get("object_type").map_err(|e| map_db_error(&e))?;
+            let payload: Vec<u8> = row.try_get("payload").map_err(|e| map_db_error(&e))?;
+            let migrated =
+                super::legacy_time_wire::migrate(&object_type, &payload).map_err(|error| {
+                    PersistenceError::Migration(format!(
+                        "failed to migrate {object_type} record {id}: {error}"
+                    ))
+                })?;
+            if migrated != payload {
+                sqlx::query("UPDATE objects SET payload = $1 WHERE id = $2")
+                    .bind(migrated)
+                    .bind(id)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|e| map_db_error(&e))?;
+            }
+        }
+
+        transaction.commit().await.map_err(|e| map_db_error(&e))
     }
 
     /// Verify the database is reachable by acquiring a pooled connection
@@ -443,6 +480,38 @@ WHERE object_type = 'sandbox' AND id = $1 AND resource_version = $4
         })
     }
 
+    /// Track an unchanged request without allocating a new desired-state revision.
+    pub async fn insert_existing_config_operation(
+        &self,
+        record: &crate::storage_proto::StoredConfigUpdateOperation,
+        workspace: &str,
+        sandbox_name: &str,
+    ) -> PersistenceResult<()> {
+        let sandbox_id = &record
+            .operation
+            .as_ref()
+            .ok_or_else(|| {
+                PersistenceError::Encode("update operation payload missing".to_string())
+            })?
+            .sandbox_id;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| map_db_error(&error))?;
+        lock_sandbox_config_fence(&mut tx, sandbox_id).await?;
+        // Keep the dimension observed by the request. If it changed meanwhile,
+        // reconciliation supersedes this operation instead of claiming success.
+        let record = if record.response_policy_version != 0 {
+            operation_with_current_settings_target(&mut tx, record, workspace, sandbox_name).await?
+        } else {
+            operation_with_current_policy_target(&mut tx, record).await?
+        };
+        insert_update_operation_postgres(&mut tx, &record, current_time_ms()).await?;
+        tx.commit().await.map_err(|error| map_db_error(&error))?;
+        Ok(())
+    }
+
     pub async fn update_config_operation_cas(
         &self,
         record: &crate::storage_proto::StoredConfigUpdateOperation,
@@ -470,7 +539,7 @@ RETURNING resource_version
         .bind(i64::try_from(expected_resource_version).unwrap_or(i64::MAX))
         .bind(record.encode_to_vec())
         .bind(state.as_str_name())
-        .bind(record.next_attempt_at_ms)
+        .bind(record.next_attempt_at_ms())
         .bind(current_time_ms())
         .fetch_optional(&self.pool)
         .await
@@ -506,7 +575,7 @@ WHERE object_type = $1 AND id = $2 AND resource_version = $3
         .bind(i64::try_from(expected_resource_version).unwrap_or(i64::MAX))
         .bind(&operation.sandbox_id)
         .bind(state.as_str_name())
-        .bind(record.next_attempt_at_ms)
+        .bind(record.next_attempt_at_ms())
         .execute(&self.pool)
         .await
         .map_err(|error| map_db_error(&error))?;

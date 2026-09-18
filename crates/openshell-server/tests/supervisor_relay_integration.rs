@@ -48,6 +48,15 @@ struct RelayGateway {
 
 #[tonic::async_trait]
 impl OpenShell for RelayGateway {
+    async fn report_endpoint_status(
+        &self,
+        _request: tonic::Request<openshell_core::proto::ReportEndpointStatusRequest>,
+    ) -> Result<Response<openshell_core::proto::ReportEndpointStatusResponse>, Status> {
+        Ok(Response::new(
+            openshell_core::proto::ReportEndpointStatusResponse {},
+        ))
+    }
+
     async fn begin_rootfs_tar_staging(
         &self,
         _request: tonic::Request<openshell_core::proto::BeginRootfsTarStagingRequest>,
@@ -239,6 +248,29 @@ impl OpenShell for RelayGateway {
     ) -> Result<Response<openshell_core::proto::GetGatewayConfigResponse>, Status> {
         Err(Status::unimplemented("unused"))
     }
+    async fn get_sandbox_provider_status(
+        &self,
+        _request: tonic::Request<openshell_core::proto::GetSandboxProviderStatusRequest>,
+    ) -> Result<Response<openshell_core::proto::GetSandboxProviderStatusResponse>, Status> {
+        Err(Status::unimplemented(
+            "provider readiness is not exercised by this mock",
+        ))
+    }
+
+    async fn report_provider_readiness(
+        &self,
+        _request: tonic::Request<openshell_core::proto::ReportProviderReadinessRequest>,
+    ) -> Result<Response<openshell_core::proto::ReportProviderReadinessResponse>, Status> {
+        Err(Status::unimplemented("provider readiness"))
+    }
+
+    async fn get_sandbox_provider_environment(
+        &self,
+        _: tonic::Request<openshell_core::proto::GetSandboxProviderEnvironmentRequest>,
+    ) -> Result<Response<openshell_core::proto::GetSandboxProviderEnvironmentResponse>, Status>
+    {
+        Err(Status::unimplemented("unused"))
+    }
     async fn create_ssh_session(
         &self,
         _: tonic::Request<openshell_core::proto::CreateSshSessionRequest>,
@@ -413,6 +445,13 @@ impl OpenShell for RelayGateway {
     ) -> Result<Response<openshell_core::proto::ListSandboxPoliciesResponse>, Status> {
         Err(Status::unimplemented("unused"))
     }
+    async fn report_sandbox_configuration(
+        &self,
+        _: tonic::Request<openshell_core::proto::ReportSandboxConfigurationRequest>,
+    ) -> Result<Response<openshell_core::proto::ReportSandboxConfigurationResponse>, Status> {
+        Err(Status::unimplemented("not implemented in test"))
+    }
+
     async fn report_policy_status(
         &self,
         _: tonic::Request<openshell_core::proto::ReportPolicyStatusRequest>,

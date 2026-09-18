@@ -46,6 +46,17 @@ captures the command result, and deletes the sandbox after the command exits:
 openshell sandbox create --no-keep -- sh -c 'echo done; exit 0'
 ```
 
+Combine `--detach` and `--no-keep` for a background workload whose lifecycle
+belongs entirely to the gateway:
+
+```shell
+openshell sandbox create --detach --no-keep -- ./worker
+```
+
+The create command returns after the workload is ready. The gateway keeps the
+canonical process running without a host-side attachment and deletes the
+sandbox after that process exits.
+
 `--upload` cannot yet be combined with a trailing main command because uploads
 finish after the canonical process starts. Create a scratch sandbox, upload the
 files, then launch the workload with `sandbox exec`, or build the files into the
@@ -360,7 +371,7 @@ Inject environment variables into the sandbox at creation time:
 openshell sandbox create --env API_KEY=sk-test --env DEBUG=1 -- my-agent
 ```
 
-Variables set with `--env` are available to all processes in the sandbox, including interactive shells and exec commands.
+Variables set with `--env` are available to all processes in the sandbox, including the initial command, interactive shells, and exec commands.
 
 When an `--env` key looks like a credential — a known provider variable, or a name whose underscore-separated segments include a credential word such as `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, `API_KEY`, `ACCESS_KEY`, or `SECRET_KEY` (for example `DB_TOKEN` or `MY_ACCESS_KEY`) — `sandbox create` prints a non-blocking warning. Matching is on whole segments, so unrelated names like `TOKENIZERS_PARALLELISM` or `PASSWORDLESS_LOGIN` do not warn. The agent inside the sandbox can read plain environment values directly, so to hide a secret from the agent, attach it through a [profile-backed provider](/providers/profiles) with `--provider` instead. Suppress the warning with `--no-credential-warnings`. Detection uses the key name only; values are never inspected or printed.
 
@@ -423,7 +434,7 @@ with SandboxClient.from_active_cluster() as client:
         image="ghcr.io/nvidia/openshell-community/sandboxes/python:latest",
     )
 
-    sandbox = client.create_from_template(workspace="default", template_name="python")
+    sandbox = client.create_from_template(workspace="default", workload_template="python")
 ```
 
 For non-interactive automation, pass a renewable client-credentials provider.
@@ -532,11 +543,48 @@ For automation, use `--output json` or `--output yaml` to get machine-readable s
 openshell sandbox get my-sandbox --output json
 ```
 
-Print only that policy YAML for scripting (same effective policy, no metadata):
+Print only the policy YAML for scripting (same effective policy, no metadata):
 
 ```shell
 openshell sandbox get my-sandbox --policy-only
 ```
+
+### Diagnose Failed Calls to Tool Servers
+
+A sandbox can be `Ready` while an agent's call to an external tool server fails with `fetch failed`. Run `openshell sandbox get my-sandbox` and look under `Tool server connections` for the server's address, `Last result`, and `Reported at`. This information is available for configured endpoints that use MCP over HTTP. It helps you find where the call failed without changing sandbox readiness.
+
+JSON and YAML output include an `endpoint_statuses` list with `last_reported_at`. The protobuf API exposes the corresponding timestamp as `Sandbox.status.endpoint_statuses[].last_reported_time`; SDKs render it using their native or curated time representation. Select the endpoint by its address to read the result directly. Treat `endpoint_id` as opaque.
+
+For example, use `jq` to select the tool server at `tools.example.com`, path `/mcp`, and port `443`:
+
+```shell
+openshell sandbox get my-sandbox --output json | jq -e \
+  --arg host tools.example.com --arg path /mcp --argjson ports '[443]' '
+  .endpoint_statuses[]
+  | select(.host == $host and .path == $path and .ports == $ports)
+  '
+```
+
+Read `last_result` to choose the next check:
+
+- `NoObservedExchange`: no result has been reported for the current configuration and supervisor session. Try the operation and inspect its logs if no result appears.
+- `HttpResponseReceived`: the server returned a final HTTP status below 400, including a protocol upgrade. Informational responses alone do not establish success. Check the client's response for protocol or tool errors; an HTTP 200 response can still contain an error.
+- `PolicyDenied`: OpenShell denied the request, including MCP protocol-version or request-body policy checks. Check the sandbox policy and denial logs.
+- `CredentialUnavailable`: required credentials were unavailable. Check the endpoint's attached provider.
+- `TlsFailed`: TLS setup or the handshake failed. Check certificates and TLS configuration.
+- `TransportFailed`: the network exchange failed. Check name resolution, connectivity, and the server process.
+- `UpstreamRejected`: the server returned an HTTP status of 400 or higher. Check the server's response and logs.
+- `Unspecified`: the result is unrecognized or absent. Do not infer success from it.
+
+For example, a stopped server can produce `TransportFailed` while the sandbox stays `Ready`. After the server recovers, an HTTP response below 400 updates the result to `HttpResponseReceived`.
+
+Results come from actual traffic and do not expire. A result can remain unchanged after the server stops until another observed exchange or configuration/session reset. Reports combine recent observations and can drop them when full, so this list is not a request history. The address remains available when a result resets to `NoObservedExchange`. To verify current tool availability, run the actual operation.
+
+`last_reported_at` is the RFC 3339 rendering of the protobuf `last_reported_time` when the gateway accepted the result. It is empty until a result is reported. New accepted observations advance it, including repeated results; identical report retries do not. If a configuration reset supersedes a report whose acknowledgement was lost, the gateway can accept still-valid pending evidence again and advance this timestamp without another exchange.
+
+Addresses use lowercase hosts, canonical paths, and sorted distinct effective ports. Equivalent addresses share one record that combines observations from all callers and ports; it does not establish that every caller or port works. A failure before the HTTP path is known, such as a TLS failure during CONNECT, updates status only when the host and port identify one distinct endpoint. If several configured paths share that host and port, inspect the logs for the failure.
+
+### Inspect Logs and Activity
 
 Stream sandbox logs to monitor agent activity and diagnose policy decisions:
 
@@ -560,6 +608,8 @@ openshell term
 Use the terminal to spot blocked connections marked `action=deny` and provider-related proxy activity. If a connection is blocked unexpectedly, add the host to your network policy or update the attached provider profile. Refer to [Policies](/sandboxes/policies) for the workflow.
 
 The dashboard has three panels stacked vertically: Gateways, Providers (or Global Settings), and Sandboxes. Navigate within a panel with `Up`/`Down` or `j`/`k`. At a list boundary the cursor overflows into the adjacent panel, skipping empty panels. Use `Tab`/`Shift+Tab` to cycle panels directly. Press `h`/`l` or `Left`/`Right` in the middle panel to switch between the Providers and Global Settings tabs.
+
+The sandbox table’s NOTES column shows `Invalid config` when policy or provider configuration blocks provisioning. Open the sandbox detail view for the full rejection reason, or run `openshell sandbox get <name> -o json`. The note clears after the configuration is repaired; active port forwards remain listed.
 
 ## Port Forwarding
 
@@ -586,10 +636,11 @@ openshell forward list --output json
 openshell forward list --output yaml
 ```
 
-Structured output includes `sandbox`, `bind_address`, `port`, `pid`, and
-`alive`. The `alive` boolean reports whether the tracked PID still matches the
-expected OpenShell SSH forward; it does not probe the forwarded socket. When no
-forwards are tracked, structured output returns an empty collection.
+Structured output includes `workspace`, `sandbox`, `bind_address`, `port`,
+`pid`, and `alive`. The `alive` boolean reports whether the tracked PID still
+matches the expected workspace-scoped OpenShell SSH forward and immutable
+sandbox identity; it does not probe the forwarded socket. When no forwards are
+tracked, structured output returns an empty collection.
 
 The default table colorizes the `STATUS` column only when both standard output and standard error are capable ANSI terminals; piping or redirecting either stream, or running under `TERM=dumb`, gives a plain-text table. Other styled output—including `-v` log lines, progress spinners, prompts, and error messages—is decided per stream, so redirecting one stream leaves the other styled. Prefer `--output json` for automation rather than matching on the table. Set `NO_COLOR` to any non-empty value or pass `--color never` to suppress ANSI formatting, and `--color always` to force it when piping into a pager. `--color` applies to every `openshell` command.
 
@@ -688,6 +739,12 @@ longer need its retained state.
 
 Deleting a sandbox stops all processes, releases resources, and purges injected credentials.
 
+The command can return while cleanup is pending. `deletion accepted` means the
+gateway started deletion; inspect the sandbox until it disappears if your next
+step requires completion. An already-absent sandbox is a successful no-op, but
+missing workspaces and authorization failures remain errors. SDK callers can
+inspect [typed deletion outcomes](/reference/api-errors#deletion-outcomes).
+
 ```shell
 openshell sandbox delete my-sandbox
 ```
@@ -705,6 +762,39 @@ after it attempts every requested deletion if any entry failed.
 ## Sandbox Lifecycle
 
 Every sandbox moves through a defined set of phases:
+
+Before workload activation, OpenShell validates the effective policy and matching
+provider configuration. A rejection keeps the workload unstarted and exposes a
+`ConfigurationInvalid` condition in `Provisioning`. Use `openshell sandbox get`
+to inspect the diagnostic, then [repair the policy or provider configuration](/sandboxes/policies#validation-failures).
+Management operations remain available while startup is blocked. After repair,
+the supervisor completes startup without recreating the sandbox. Starting a
+stopped sandbox repeats configuration admission before launching its workload.
+
+The gateway enforces a 300-second provisioning repair window, independently of
+the CLI wait timeout. An effective policy, settings, provider, profile, or
+attachment change resets the window from its stored change time. The first
+failed configuration load for that change grants another full window. Repeated
+failures and reconnects do not extend it; reaching `Ready` clears it.
+
+When the window expires, the sandbox enters `Error` with reason
+`ProvisioningTimedOut`. The gateway stops its workload and supervisor compute,
+retaining the sandbox record, diagnostic, and restartable storage. Cleanup can
+remain pending if the backend is unavailable; the gateway retries it. Inspect
+`provisioning` in JSON output for the deadline, timeout, and cleanup timestamps.
+TUI NOTES distinguishes pending cleanup from reclaimed compute.
+
+Repair the configuration, wait for cleanup to complete, then explicitly restart:
+
+```shell
+openshell sandbox get my-sandbox --output json
+openshell sandbox start my-sandbox
+```
+
+Editing configuration after expiry does not restart compute. A retry gets a new
+300-second window, while static-policy restrictions from any previous activation
+remain in force. Timed-out records are retained even for ephemeral creates; use
+`sandbox delete` when you no longer need the diagnostic or stored state.
 
 | Phase        | Description                                                                                                                                                    |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |

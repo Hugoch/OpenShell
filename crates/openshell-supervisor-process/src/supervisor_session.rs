@@ -11,8 +11,6 @@
 //! selection — it has no protocol awareness of the bytes flowing through.
 
 use std::net::IpAddr;
-#[cfg(target_os = "linux")]
-use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -22,31 +20,37 @@ use openshell_core::proto::open_shell_client::OpenShellClient;
 use openshell_core::proto::{
     ConfigApplyFailure, ConfigApplyOutcome, ConfigBootstrap, ConfigBootstrapResult,
     ConfigComponent, ConfigComponentApplyResult, ConfigSnapshotRevision, ConfigUpdate,
-    ConfigUpdateResult, FinalizeMainProcessExitRequest, GatewayMessage, RelayFrame, RelayInit,
-    RelayOpen, RelayOpenResult, ReportMainProcessExitRequest, SupervisorHeartbeat, SupervisorHello,
-    SupervisorMessage, TcpRelayTarget, config_snapshot_revision, config_update, gateway_message,
-    relay_open, supervisor_message,
+    ConfigUpdateResult, FinalizeMainProcessExitRequest, GatewayMessage, ImagePolicyDiscovery,
+    RelayFrame, RelayInit, RelayOpen, RelayOpenResult, ReportMainProcessExitRequest, SandboxPolicy,
+    StartupConfigPrepared, SupervisorHeartbeat, SupervisorHello, SupervisorMessage, TcpRelayTarget,
+    config_snapshot_revision, config_update, gateway_message, relay_open, startup_config_prepared,
+    supervisor_message,
 };
+use openshell_isolation_interface::contract::{BoundaryLoopbackConnector, LoopbackTarget};
 use openshell_ocsf::{
     ActivityId, ConnectionInfo, Endpoint, EventContext, NetworkActivityBuilder, OcsfEvent,
     SeverityId, StatusId, ocsf_emit,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_stream::StreamExt;
 use tracing::{debug, warn};
 
 use openshell_core::grpc_client;
-use openshell_core::net::set_tcp_nodelay_best_effort;
 use openshell_core::transport_errors::is_expected_transport_close_status;
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const CONFIG_APPLY_TIMEOUT: Duration = Duration::from_mins(1);
-const SESSION_PREPARE_TIMEOUT: Duration = Duration::from_mins(2);
+// The gateway may hold the initial stream open while an operator repairs an
+// invalid image policy. Keep this above the five-minute provisioning window.
+pub const SESSION_PREPARE_TIMEOUT: Duration = Duration::from_mins(6);
+
+type StartupPolicyPreparer =
+    Box<dyn FnOnce(SandboxPolicy) -> Result<Option<SandboxPolicy>, String> + Send>;
 
 /// A stream-delivered desired-state payload awaiting application by the
-/// sandbox runtime. The response travels back over `ConnectSupervisor`.
+/// supervisor runtime. The response travels back over `ConnectSupervisor`.
 pub enum ConfigApplyRequest {
     Bootstrap {
         bootstrap: ConfigBootstrap,
@@ -61,7 +65,7 @@ pub enum ConfigApplyRequest {
 /// A revision-2 supervisor session that has received its required bootstrap.
 ///
 /// It has not yet reported runtime initialization. Holding the stream open
-/// across sandbox construction makes the bootstrap the source of initial
+/// across supervisor construction makes the bootstrap the source of initial
 /// gateway-owned state rather than a later reconciliation input.
 pub struct PreparedSupervisorSession {
     endpoint: String,
@@ -71,6 +75,7 @@ pub struct PreparedSupervisorSession {
     tx: mpsc::Sender<SupervisorMessage>,
     inbound: tonic::Streaming<GatewayMessage>,
     heartbeat_secs: u32,
+    session_id: String,
     protocol_revision: u32,
     bootstrap: Option<ConfigBootstrap>,
 }
@@ -139,6 +144,16 @@ fn update_component_and_revision(
         ),
         None => (ConfigComponent::Unspecified, None),
     }
+}
+
+/// Runtime identity and status channel shared with a supervisor session task.
+pub struct SessionRuntimeContext {
+    /// Identifies the local supervisor process across gateway reconnects.
+    pub instance_id: String,
+    /// Publishes the currently accepted gateway session to sibling reporters.
+    pub session_id_updates: Option<watch::Sender<Option<String>>>,
+    /// Applies streamed configuration updates to the running supervisor.
+    pub config_apply_tx: Option<mpsc::Sender<ConfigApplyRequest>>,
 }
 
 /// Parse a gRPC endpoint URI into an OCSF `Endpoint` (host + port). Falls back
@@ -377,35 +392,67 @@ pub fn spawn(
     endpoint: String,
     sandbox_id: String,
     ssh_socket_path: std::path::PathBuf,
-    netns_fd: Option<i32>,
+    port_forward: Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
-    instance_id: String,
-    config_apply_tx: Option<mpsc::Sender<ConfigApplyRequest>>,
+    runtime: SessionRuntimeContext,
 ) -> tokio::task::JoinHandle<()> {
+    spawn_with_readiness(
+        endpoint,
+        sandbox_id,
+        ssh_socket_path,
+        port_forward,
+        expected_ssh_peer_pid,
+        terminating,
+        runtime,
+    )
+    .0
+}
+
+/// Spawn the supervisor session and expose when the gateway has accepted it.
+pub fn spawn_with_readiness(
+    endpoint: String,
+    sandbox_id: String,
+    ssh_socket_path: std::path::PathBuf,
+    port_forward: Arc<dyn BoundaryLoopbackConnector>,
+    expected_ssh_peer_pid: Option<u32>,
+    terminating: Arc<AtomicBool>,
+    runtime: SessionRuntimeContext,
+) -> (tokio::task::JoinHandle<()>, watch::Receiver<bool>) {
+    let (ready_tx, ready_rx) = watch::channel(false);
     let config = SessionConfig {
         endpoint,
         sandbox_id,
         ssh_socket_path,
-        netns_fd,
+        port_forward,
         expected_ssh_peer_pid,
         terminating,
-        instance_id,
-        config_apply_tx,
+        instance_id: runtime.instance_id,
+        session_id_updates: runtime.session_id_updates,
+        config_apply_tx: runtime.config_apply_tx,
+        ready_tx,
     };
-    tokio::spawn(run_session_loop(config, None))
+    (tokio::spawn(run_session_loop(config, None)), ready_rx)
 }
 
-/// Establish the revision-2 control stream and receive its required bootstrap
+/// Establish the control stream and receive the required revision-2 bootstrap
 /// before gateway-owned runtime initialization begins.
 pub async fn prepare(
     endpoint: String,
     sandbox_id: String,
     instance_id: String,
+    image_policy_discovery: ImagePolicyDiscovery,
+    prepare_policy: impl FnOnce(SandboxPolicy) -> Result<Option<SandboxPolicy>, String> + Send + 'static,
 ) -> Result<PreparedSupervisorSession, Box<dyn std::error::Error + Send + Sync>> {
     let prepared = tokio::time::timeout(
         SESSION_PREPARE_TIMEOUT,
-        open_session(endpoint, sandbox_id, instance_id),
+        open_session(
+            endpoint,
+            sandbox_id,
+            instance_id,
+            Some(image_policy_discovery),
+            Some(Box::new(prepare_policy)),
+        ),
     )
     .await
     .map_err(|_| "timed out waiting for supervisor session bootstrap")??;
@@ -415,40 +462,50 @@ pub async fn prepare(
     Ok(prepared)
 }
 
-/// Resume a prepared startup session after the sandbox has installed the
-/// bootstrap and made its runtime endpoints ready.
+/// Resume a prepared startup session after the supervisor runtime and relay
+/// endpoints are ready.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_prepared(
     prepared: PreparedSupervisorSession,
     bootstrap_result: Option<ConfigBootstrapResult>,
     ssh_socket_path: std::path::PathBuf,
-    netns_fd: Option<i32>,
+    port_forward: Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
     config_apply_tx: mpsc::Sender<ConfigApplyRequest>,
-) -> tokio::task::JoinHandle<()> {
+    session_id_updates: Option<watch::Sender<Option<String>>>,
+) -> (tokio::task::JoinHandle<()>, watch::Receiver<bool>) {
+    let (ready_tx, ready_rx) = watch::channel(false);
     let config = SessionConfig {
         endpoint: prepared.endpoint.clone(),
         sandbox_id: prepared.sandbox_id.clone(),
         ssh_socket_path,
-        netns_fd,
+        port_forward,
         expected_ssh_peer_pid,
         terminating,
         instance_id: prepared.instance_id.clone(),
         config_apply_tx: Some(config_apply_tx),
+        session_id_updates,
+        ready_tx,
     };
-    tokio::spawn(run_session_loop(config, Some((prepared, bootstrap_result))))
+    (
+        tokio::spawn(run_session_loop(config, Some((prepared, bootstrap_result)))),
+        ready_rx,
+    )
 }
 
 struct SessionConfig {
     endpoint: String,
     sandbox_id: String,
     ssh_socket_path: std::path::PathBuf,
-    netns_fd: Option<i32>,
+    port_forward: Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
     instance_id: String,
     config_apply_tx: Option<mpsc::Sender<ConfigApplyRequest>>,
+    /// Publishes the currently accepted session to sibling control-plane reporters.
+    session_id_updates: Option<watch::Sender<Option<String>>>,
+    ready_tx: watch::Sender<bool>,
 }
 
 async fn run_session_loop(
@@ -466,8 +523,12 @@ async fn run_session_loop(
         } else {
             run_single_session(&config).await
         };
+        if let Some(updates) = &config.session_id_updates {
+            updates.send_replace(None);
+        }
         match result {
             Ok(()) => {
+                config.ready_tx.send_replace(false);
                 let event = session_closed_event(
                     openshell_ocsf::ctx::ctx(),
                     &config.endpoint,
@@ -477,6 +538,7 @@ async fn run_session_loop(
                 break;
             }
             Err(e) => {
+                config.ready_tx.send_replace(false);
                 let event = session_failed_event(
                     openshell_ocsf::ctx::ctx(),
                     &config.endpoint,
@@ -498,6 +560,8 @@ async fn run_single_session(
         config.endpoint.clone(),
         config.sandbox_id.clone(),
         config.instance_id.clone(),
+        None,
+        None,
     )
     .await?;
     run_prepared_session(config, prepared, None).await
@@ -507,6 +571,8 @@ async fn open_session(
     endpoint: String,
     sandbox_id: String,
     instance_id: String,
+    image_policy_discovery: Option<ImagePolicyDiscovery>,
+    mut prepare_policy: Option<StartupPolicyPreparer>,
 ) -> Result<PreparedSupervisorSession, Box<dyn std::error::Error + Send + Sync>> {
     // The same authenticated channel carries the long-lived control stream
     // and all data-plane RelayStream calls.
@@ -520,11 +586,22 @@ async fn open_session(
     let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
 
     // Send hello as the first message.
+    let image_policy = image_policy_discovery.as_ref().and_then(|discovery| {
+        let openshell_core::proto::image_policy_discovery::Result::Policy(policy) =
+            discovery.result.as_ref()?
+        else {
+            return None;
+        };
+        Some(policy.clone())
+    });
     tx.send(SupervisorMessage {
         payload: Some(supervisor_message::Payload::Hello(SupervisorHello {
             sandbox_id: sandbox_id.clone(),
             instance_id: instance_id.clone(),
             protocol_revision: SUPERVISOR_PROTOCOL_REVISION,
+            image_policy,
+            image_policy_discovery,
+            supports_provider_readiness: true,
         })),
     })
     .await
@@ -537,21 +614,69 @@ async fn open_session(
         .map_err(|e| format!("connect_supervisor RPC failed: {e}"))?;
     let mut inbound = response.into_inner();
 
-    // Wait for SessionAccepted.
-    let accepted = match map_stream_message(
-        inbound.message().await,
-        "stream closed before session accepted",
-    )?
-    .payload
-    {
-        Some(gateway_message::Payload::SessionAccepted(a)) => a,
-        Some(gateway_message::Payload::SessionRejected(r)) => {
-            return Err(format!("session rejected: {}", r.reason).into());
+    // The gateway may ask the initial supervisor to prepare its selected
+    // policy against the local image before it sends the authoritative
+    // bootstrap. Reconnects do not repeat this startup-only exchange.
+    let accepted = loop {
+        match map_stream_message(
+            inbound.message().await,
+            "stream closed before session accepted",
+        )?
+        .payload
+        {
+            Some(gateway_message::Payload::StartupConfigCandidate(candidate)) => {
+                let preparer = prepare_policy
+                    .take()
+                    .ok_or("gateway requested startup preparation on a reconnect")?;
+                let result = candidate.policy.map_or_else(
+                    || {
+                        startup_config_prepared::Result::Failure(ConfigApplyFailure {
+                            code: "startup_policy_candidate_missing".to_string(),
+                            message: "gateway startup candidate omitted its policy".to_string(),
+                            retryable: false,
+                        })
+                    },
+                    |policy| match preparer(policy) {
+                        Ok(Some(policy)) => startup_config_prepared::Result::PreparedPolicy(policy),
+                        Ok(None) => startup_config_prepared::Result::Unchanged(()),
+                        Err(message) => {
+                            startup_config_prepared::Result::Failure(ConfigApplyFailure {
+                                code: "startup_policy_preparation_failed".to_string(),
+                                message: message.chars().take(1024).collect(),
+                                retryable: false,
+                            })
+                        }
+                    },
+                );
+                tx.send(SupervisorMessage {
+                    payload: Some(supervisor_message::Payload::StartupConfigPrepared(
+                        StartupConfigPrepared {
+                            candidate_id: candidate.candidate_id,
+                            result: Some(result),
+                        },
+                    )),
+                })
+                .await
+                .map_err(|_| "failed to send startup configuration result")?;
+            }
+            Some(gateway_message::Payload::SessionAccepted(accepted)) => break accepted,
+            Some(gateway_message::Payload::SessionRejected(rejected)) => {
+                return Err(format!("session rejected: {}", rejected.reason).into());
+            }
+            _ => {
+                return Err(
+                    "expected StartupConfigCandidate, SessionAccepted, or SessionRejected".into(),
+                );
+            }
         }
-        _ => return Err("expected SessionAccepted or SessionRejected".into()),
     };
 
-    let heartbeat_secs = accepted.heartbeat_interval_secs.max(5);
+    let heartbeat_secs = accepted
+        .heartbeat_interval
+        .as_ref()
+        .and_then(|value| openshell_core::time::duration_to_std(value).ok())
+        .map_or(5, |value| value.as_secs().max(5));
+    let heartbeat_secs = u32::try_from(heartbeat_secs).unwrap_or(u32::MAX);
     validate_gateway_protocol_revision(accepted.protocol_revision)?;
     let event = session_established_event(
         openshell_ocsf::ctx::ctx(),
@@ -570,6 +695,7 @@ async fn open_session(
         tx,
         inbound,
         heartbeat_secs,
+        session_id: accepted.session_id,
         protocol_revision,
         bootstrap: (protocol_revision == SUPERVISOR_PROTOCOL_REVISION)
             .then_some(accepted.bootstrap)
@@ -582,6 +708,9 @@ async fn run_prepared_session(
     mut prepared: PreparedSupervisorSession,
     startup_result: Option<ConfigBootstrapResult>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(updates) = &config.session_id_updates {
+        updates.send_replace(Some(prepared.session_id.clone()));
+    }
     let heartbeat_secs = prepared.heartbeat_secs;
     let channel = prepared.channel;
     let tx = prepared.tx;
@@ -602,6 +731,9 @@ async fn run_prepared_session(
         .map_err(|_| "failed to queue configuration bootstrap result")?;
     }
     let config_sequences = Arc::new(Mutex::new(ConfigSequenceWatermarks::default()));
+    if prepared.protocol_revision != SUPERVISOR_PROTOCOL_REVISION {
+        config.ready_tx.send_replace(true);
+    }
 
     // Main loop: receive gateway messages + send heartbeats.
     let mut heartbeat_interval =
@@ -622,13 +754,14 @@ async fn run_prepared_session(
                 let context = GatewayMessageContext {
                     sandbox_id: &config.sandbox_id,
                     ssh_socket_path: &config.ssh_socket_path,
-                    netns_fd: config.netns_fd,
+                    port_forward: &config.port_forward,
                     expected_ssh_peer_pid: config.expected_ssh_peer_pid,
                     channel: &channel,
                     tx: &tx,
                     terminating: &config.terminating,
                     config_apply_tx: config.config_apply_tx.as_ref(),
                     config_sequences: &config_sequences,
+                    ready_tx: &config.ready_tx,
                 };
                 handle_gateway_message(
                     &msg,
@@ -679,6 +812,7 @@ async fn apply_bootstrap(
                     )
                 })
                 .collect(),
+            admission: None,
         };
     };
     let (response, receiver) = tokio::sync::oneshot::channel();
@@ -692,12 +826,14 @@ async fn apply_bootstrap(
     {
         return ConfigBootstrapResult {
             results: Vec::new(),
+            admission: None,
         };
     }
     match tokio::time::timeout(CONFIG_APPLY_TIMEOUT, receiver).await {
         Ok(Ok(result)) => result,
         _ => ConfigBootstrapResult {
             results: Vec::new(),
+            admission: None,
         },
     }
 }
@@ -778,19 +914,25 @@ pub async fn finalize_main_process_exit(
 struct GatewayMessageContext<'a> {
     sandbox_id: &'a str,
     ssh_socket_path: &'a std::path::Path,
-    netns_fd: Option<i32>,
+    port_forward: &'a Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
     channel: &'a grpc_client::AuthedChannel,
     tx: &'a mpsc::Sender<SupervisorMessage>,
     terminating: &'a Arc<AtomicBool>,
     config_apply_tx: Option<&'a mpsc::Sender<ConfigApplyRequest>>,
     config_sequences: &'a Arc<Mutex<ConfigSequenceWatermarks>>,
+    ready_tx: &'a watch::Sender<bool>,
 }
 
 fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<'_>) {
     match &msg.payload {
         Some(gateway_message::Payload::Heartbeat(_)) => {
             // Gateway heartbeat — nothing to do.
+        }
+        Some(gateway_message::Payload::ConfigurationAdmission(admission)) => {
+            let accepted = admission.state
+                == i32::from(openshell_core::proto::ConfigurationAdmissionState::Accepted);
+            context.ready_tx.send_replace(accepted);
         }
         Some(gateway_message::Payload::ConfigUpdate(update)) => {
             let update = update.clone();
@@ -826,6 +968,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
                     result: Some(failed_component_result(
                         component, revision, outcome, code, message,
                     )),
+                    admission: None,
                 };
                 let result = if invalid_update {
                     fallback(
@@ -892,7 +1035,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
             let channel = context.channel.clone();
             let ssh_socket_path = context.ssh_socket_path.to_path_buf();
             let tx = context.tx.clone();
-            let netns_fd = context.netns_fd;
+            let port_forward = context.port_forward.clone();
             let expected_ssh_peer_pid = context.expected_ssh_peer_pid;
             let terminating = Arc::clone(context.terminating);
 
@@ -904,7 +1047,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
                 match handle_relay_open(
                     relay_open,
                     &ssh_socket_path,
-                    netns_fd,
+                    port_forward,
                     expected_ssh_peer_pid,
                     channel,
                     tx,
@@ -961,7 +1104,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
 async fn handle_relay_open(
     relay_open: RelayOpen,
     ssh_socket_path: &std::path::Path,
-    netns_fd: Option<i32>,
+    port_forward: Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
     channel: grpc_client::AuthedChannel,
     tx: mpsc::Sender<SupervisorMessage>,
@@ -971,7 +1114,7 @@ async fn handle_relay_open(
     let target = match open_target(
         &relay_open,
         ssh_socket_path,
-        netns_fd,
+        &port_forward,
         expected_ssh_peer_pid,
     )
     .await
@@ -1116,11 +1259,11 @@ async fn send_relay_open_result(
 async fn open_target(
     relay_open: &RelayOpen,
     ssh_socket_path: &std::path::Path,
-    netns_fd: Option<i32>,
+    port_forward: &Arc<dyn BoundaryLoopbackConnector>,
     expected_ssh_peer_pid: Option<u32>,
 ) -> Result<Box<dyn TargetStream>, Box<dyn std::error::Error + Send + Sync>> {
     match relay_open.target.as_ref() {
-        Some(relay_open::Target::Tcp(target)) => open_tcp_target(target, netns_fd).await,
+        Some(relay_open::Target::Tcp(target)) => open_tcp_target(target, port_forward).await,
         Some(relay_open::Target::Ssh(_)) | None => {
             let runtime_path = crate::unix_socket::runtime_path(ssh_socket_path);
             let stream = tokio::net::UnixStream::connect(runtime_path.as_ref()).await?;
@@ -1141,57 +1284,24 @@ async fn open_target(
 
 async fn open_tcp_target(
     target: &TcpRelayTarget,
-    netns_fd: Option<i32>,
+    port_forward: &Arc<dyn BoundaryLoopbackConnector>,
 ) -> Result<Box<dyn TargetStream>, Box<dyn std::error::Error + Send + Sync>> {
     let host = normalize_tcp_target_host(target)?;
     let port = u16::try_from(target.port).map_err(|_| "tcp target port must fit in u16")?;
-    let stream = connect_tcp_target(host, port, netns_fd).await?;
+    // `normalize_tcp_target_host` returns a loopback IP string; parse it and let
+    // `LoopbackTarget::new` re-validate before connecting.
+    let ip: IpAddr = host
+        .parse()
+        .map_err(|_| "tcp target host must be a loopback IP")?;
+    let target = LoopbackTarget::new(ip, port)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+    // Connect through the sandbox-owned loopback-forward interface. The
+    // supervisor session remains independent of the driver's transport.
+    let stream = port_forward
+        .connect(target)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
     Ok(Box::new(stream))
-}
-
-#[cfg(target_os = "linux")]
-async fn connect_tcp_target(
-    host: String,
-    port: u16,
-    netns_fd: Option<RawFd>,
-) -> Result<tokio::net::TcpStream, Box<dyn std::error::Error + Send + Sync>> {
-    if let Some(fd) = netns_fd {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            let result = (|| -> std::io::Result<std::net::TcpStream> {
-                #[allow(unsafe_code)]
-                let rc = unsafe { libc::setns(fd, libc::CLONE_NEWNET) };
-                if rc != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                std::net::TcpStream::connect((host.as_str(), port))
-            })();
-            let _ = tx.send(result);
-        });
-
-        let stream = rx
-            .await
-            .map_err(|_| "netns tcp connect thread panicked")??;
-        stream.set_nonblocking(true)?;
-        let stream = tokio::net::TcpStream::from_std(stream)?;
-        set_tcp_nodelay_best_effort(&stream);
-        return Ok(stream);
-    }
-
-    let stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
-    set_tcp_nodelay_best_effort(&stream);
-    Ok(stream)
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn connect_tcp_target(
-    host: String,
-    port: u16,
-    _netns_fd: Option<i32>,
-) -> Result<tokio::net::TcpStream, Box<dyn std::error::Error + Send + Sync>> {
-    let stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
-    set_tcp_nodelay_best_effort(&stream);
-    Ok(stream)
 }
 
 #[cfg(test)]
@@ -1246,20 +1356,6 @@ mod target_tests {
         }
     }
 
-    /// Regression test: the TCP relay connect path sets `TCP_NODELAY`.
-    #[tokio::test]
-    async fn connect_tcp_target_sets_tcp_nodelay() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind listener");
-        let addr = listener.local_addr().expect("local addr");
-
-        let stream = connect_tcp_target(addr.ip().to_string(), addr.port(), None)
-            .await
-            .expect("connect");
-        assert!(stream.nodelay().expect("query TCP_NODELAY"));
-    }
-
     #[test]
     fn tcp_target_allows_loopback_hosts() {
         validate_tcp_target(&tcp("127.0.0.1", 8080)).expect("ipv4 loopback");
@@ -1301,6 +1397,23 @@ mod target_tests {
 #[cfg(test)]
 mod ocsf_event_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    struct UnusedLoopbackConnector;
+
+    #[cfg(target_os = "linux")]
+    #[async_trait::async_trait]
+    impl BoundaryLoopbackConnector for UnusedLoopbackConnector {
+        async fn connect(
+            &self,
+            _target: LoopbackTarget,
+        ) -> Result<
+            openshell_isolation_interface::contract::BoundaryDuplexStream,
+            openshell_isolation_interface::contract::BackendError,
+        > {
+            unreachable!("SSH relay does not use loopback port forwarding")
+        }
+    }
 
     fn ctx() -> EventContext {
         EventContext {
@@ -1542,7 +1655,11 @@ mod ocsf_event_tests {
         });
         let relay = ssh_relay_open("peer-check");
 
-        let trusted = open_target(&relay, &socket, None, Some(std::process::id()))
+        // The SSH relay path does not use the port-forward (that is the TCP
+        // target path); connect from the supervisor's own namespace.
+        let port_forward: Arc<dyn BoundaryLoopbackConnector> = Arc::new(UnusedLoopbackConnector);
+
+        let trusted = open_target(&relay, &socket, &port_forward, Some(std::process::id()))
             .await
             .expect("matching peer PID should be accepted");
         drop(trusted);
@@ -1550,7 +1667,7 @@ mod ocsf_event_tests {
         let Err(err) = open_target(
             &relay,
             &socket,
-            None,
+            &port_forward,
             Some(std::process::id().saturating_add(1)),
         )
         .await

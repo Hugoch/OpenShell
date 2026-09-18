@@ -17,7 +17,7 @@ inputs:
   cargo-version:
     description: Cargo package version embedded in the binary
     required: true
-  image-tag:
+  supervisor-image-tag:
     description: Default supervisor image tag embedded in the binary
     required: false
     default: ""
@@ -29,7 +29,6 @@ inputs:
     description: Additional flags passed to cargo build
     required: false
     default: ""
-
 runs:
   using: composite
   steps:
@@ -59,7 +58,7 @@ runs:
       shell: nix develop -c bash -euo pipefail {0}
       env:
         GIT_DIR: /nonexistent
-        OPENSHELL_IMAGE_TAG: ${{ inputs.image-tag }}
+        OPENSHELL_IMAGE_TAG: ${{ inputs.supervisor-image-tag }}
         INPUTS_PACKAGE: ${{ inputs.package }}
         INPUTS_BINARY: ${{ inputs.binary }}
         INPUTS_TRIPLE: ${{ inputs.triple }}
@@ -72,10 +71,11 @@ runs:
         INPUTS_BINARY: ${{ inputs.binary }}
         INPUTS_TRIPLE: ${{ inputs.triple }}
       run: |
+        binary="target/${INPUTS_TRIPLE}/release/${INPUTS_BINARY}"
         # Confirm the binary runs and reports the expected name.
-        target/${INPUTS_TRIPLE}/release/${INPUTS_BINARY} --version | grep -q "^${INPUTS_BINARY} "
+        "$binary" --version | grep -q "^${INPUTS_BINARY} "
         # Confirm Syft can decode the embedded cargo-auditable metadata.
-        SYFT_CHECK_FOR_APP_UPDATE=false syft file:target/${INPUTS_TRIPLE}/release/${INPUTS_BINARY} -o cyclonedx-json | grep 'pkg:cargo/' > /dev/null
+        SYFT_CHECK_FOR_APP_UPDATE=false syft "file:${binary}" -o cyclonedx-json | grep 'pkg:cargo/' > /dev/null
 
     - name: Upload ${{ inputs.binary }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

@@ -18,15 +18,17 @@ use openshell_core::proto::{
     DetachSandboxProviderResponse, ExchangeProviderSubjectTokenRequest,
     ExchangeProviderSubjectTokenResponse, ExecSandboxEvent, ExecSandboxInput, ExecSandboxRequest,
     GatewayMessage, GetGatewayConfigRequest, GetGatewayConfigResponse, GetProviderRequest,
-    GetSandboxConfigRequest, GetSandboxConfigResponse, GetSandboxRequest,
-    GetSandboxTemplateRequest, GpuResourceRequirements, HealthRequest, HealthResponse,
-    ListProvidersRequest, ListProvidersResponse, ListSandboxProvidersRequest,
-    ListSandboxProvidersResponse, ListSandboxTemplatesRequest, ListSandboxTemplatesResponse,
-    ListSandboxesRequest, ListSandboxesResponse, PlatformEvent, Provider, ProviderResponse,
-    RevokeSshSessionRequest, RevokeSshSessionResponse, Sandbox, SandboxCondition, SandboxLogLine,
-    SandboxPhase, SandboxResponse, SandboxStatus, SandboxStreamEvent, SandboxTemplateResponse,
-    SandboxWorkloadTemplate, ServiceStatus, SettingValue, SupervisorMessage, UpdateProviderRequest,
-    WatchSandboxRequest, sandbox_stream_event,
+    GetSandboxConfigRequest, GetSandboxConfigResponse, GetSandboxProviderEnvironmentRequest,
+    GetSandboxProviderEnvironmentResponse, GetSandboxRequest, GetSandboxTemplateRequest,
+    GpuResourceRequirements, HealthRequest, HealthResponse, ListProvidersRequest,
+    ListProvidersResponse, ListSandboxProvidersRequest, ListSandboxProvidersResponse,
+    ListSandboxTemplatesRequest, ListSandboxTemplatesResponse, ListSandboxesRequest,
+    ListSandboxesResponse, PlatformEvent, Provider, ProviderResponse, ReportEndpointStatusRequest,
+    ReportEndpointStatusResponse, RevokeSshSessionRequest, RevokeSshSessionResponse, Sandbox,
+    SandboxCondition, SandboxLogLine, SandboxPhase, SandboxResponse, SandboxStatus,
+    SandboxStreamEvent, SandboxTemplateResponse, SandboxWorkloadTemplate, ServiceStatus,
+    SettingValue, SupervisorMessage, UpdateProviderRequest, WatchSandboxRequest,
+    sandbox_stream_event,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -57,6 +59,9 @@ fn selected_workspace(
 
 #[derive(Clone, Default)]
 struct SandboxState {
+    /// Make `ListProviderProfiles` fail while every other RPC keeps working,
+    /// so a catalog lookup failure can be told apart from an empty catalog.
+    fail_list_provider_profiles: Arc<AtomicBool>,
     deleted_names: Arc<Mutex<Vec<Vec<String>>>>,
     create_requests: Arc<Mutex<Vec<CreateSandboxRequest>>>,
     fail_delete_sandbox_message: Arc<Mutex<Option<String>>>,
@@ -148,12 +153,12 @@ impl OpenShell for TestOpenShell {
             metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                 id: format!("id-{sandbox_name}"),
                 name: sandbox_name,
-                created_at_ms: 0,
+                created_time: None,
                 labels: HashMap::new(),
                 resource_version: 0,
                 annotations: HashMap::new(),
                 workspace: String::new(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             ..Sandbox::default()
         };
@@ -181,17 +186,18 @@ impl OpenShell for TestOpenShell {
         &self,
         request: tonic::Request<GetSandboxRequest>,
     ) -> Result<Response<SandboxResponse>, Status> {
-        let name = request.into_inner().name;
+        let request = request.into_inner();
+        let name = request.name;
         let mut sandbox = Sandbox {
             metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                 id: format!("id-{name}"),
                 name,
-                created_at_ms: 0,
+                created_time: None,
                 labels: HashMap::new(),
                 resource_version: 0,
                 annotations: HashMap::new(),
                 workspace: String::new(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             ..Sandbox::default()
         };
@@ -221,7 +227,7 @@ impl OpenShell for TestOpenShell {
         template.metadata = Some(openshell_core::proto::datamodel::v1::ObjectMeta {
             id: format!("template-{name}"),
             name,
-            created_at_ms: 0,
+            created_time: openshell_core::time::timestamp_from_millis(0).ok(),
             labels: template
                 .metadata
                 .as_ref()
@@ -230,9 +236,9 @@ impl OpenShell for TestOpenShell {
             resource_version: 1,
             annotations: HashMap::new(),
             workspace: selected_workspace(&request.workspace_scope)
-                .unwrap_or("default")
+                .unwrap_or_default()
                 .to_string(),
-            deletion_timestamp_ms: 0,
+            deletion_time: None,
         });
         self.state
             .template_create_requests
@@ -259,14 +265,14 @@ impl OpenShell for TestOpenShell {
                 metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                     id: format!("template-{}", request.name),
                     name: request.name,
-                    created_at_ms: 0,
+                    created_time: openshell_core::time::timestamp_from_millis(0).ok(),
                     labels: HashMap::new(),
                     resource_version: 1,
                     annotations: HashMap::new(),
                     workspace: selected_workspace(&request.workspace_scope)
-                        .unwrap_or("default")
+                        .unwrap_or_default()
                         .to_string(),
-                    deletion_timestamp_ms: 0,
+                    deletion_time: None,
                 }),
                 spec: None,
             }),
@@ -298,7 +304,9 @@ impl OpenShell for TestOpenShell {
             .await
             .push(request.into_inner());
         Ok(Response::new(
-            openshell_core::proto::DeleteSandboxTemplateResponse { deleted: true },
+            openshell_core::proto::DeleteSandboxTemplateResponse {
+                outcome: openshell_core::proto::DeletionOutcome::Completed.into(),
+            },
         ))
     }
 
@@ -337,7 +345,10 @@ impl OpenShell for TestOpenShell {
         if let Some(message) = delete_failure {
             return Err(Status::internal(message));
         }
-        Ok(Response::new(DeleteSandboxResponse { deleted: true }))
+        Ok(Response::new(DeleteSandboxResponse {
+            sandbox_id: String::new(),
+            outcome: openshell_core::proto::DeletionOutcome::Completed.into(),
+        }))
     }
 
     async fn get_sandbox_config(
@@ -360,6 +371,33 @@ impl OpenShell for TestOpenShell {
         }))
     }
 
+    async fn get_sandbox_provider_status(
+        &self,
+        _request: tonic::Request<openshell_core::proto::GetSandboxProviderStatusRequest>,
+    ) -> Result<Response<openshell_core::proto::GetSandboxProviderStatusResponse>, Status> {
+        Err(Status::unimplemented(
+            "provider readiness is not exercised by this mock",
+        ))
+    }
+
+    async fn report_provider_readiness(
+        &self,
+        _request: tonic::Request<openshell_core::proto::ReportProviderReadinessRequest>,
+    ) -> Result<Response<openshell_core::proto::ReportProviderReadinessResponse>, Status> {
+        Err(Status::unimplemented(
+            "provider installation reports are not exercised by this mock",
+        ))
+    }
+
+    async fn get_sandbox_provider_environment(
+        &self,
+        _request: tonic::Request<GetSandboxProviderEnvironmentRequest>,
+    ) -> Result<Response<GetSandboxProviderEnvironmentResponse>, Status> {
+        Ok(Response::new(
+            GetSandboxProviderEnvironmentResponse::default(),
+        ))
+    }
+
     async fn create_ssh_session(
         &self,
         request: tonic::Request<CreateSshSessionRequest>,
@@ -377,7 +415,8 @@ impl OpenShell for TestOpenShell {
         {
             return Err(Status::failed_precondition("sandbox is not ready"));
         }
-        let sandbox_id = request.into_inner().sandbox_id;
+        let request = request.into_inner();
+        let sandbox_id = format!("id-{}", request.sandbox);
         Ok(Response::new(CreateSshSessionResponse {
             sandbox_id,
             token: "test-token".to_string(),
@@ -460,7 +499,14 @@ impl OpenShell for TestOpenShell {
         &self,
         _request: tonic::Request<openshell_core::proto::ListProviderProfilesRequest>,
     ) -> Result<Response<openshell_core::proto::ListProviderProfilesResponse>, Status> {
-        let profiles = openshell_providers::builtin_profiles()
+        if self
+            .state
+            .fail_list_provider_profiles
+            .load(Ordering::SeqCst)
+        {
+            return Err(Status::unavailable("profile catalog is unavailable"));
+        }
+        let profiles = helpers::example_profiles()
             .iter()
             .map(openshell_providers::ProviderTypeProfile::to_proto)
             .collect();
@@ -477,7 +523,7 @@ impl OpenShell for TestOpenShell {
         request: tonic::Request<openshell_core::proto::GetProviderProfileRequest>,
     ) -> Result<Response<openshell_core::proto::ProviderProfileResponse>, Status> {
         let id = request.into_inner().id;
-        let profile = openshell_providers::builtin_profiles()
+        let profile = helpers::example_profiles()
             .iter()
             .find(|profile| profile.id == id)
             .ok_or_else(|| Status::not_found("provider profile not found"))?
@@ -555,7 +601,9 @@ impl OpenShell for TestOpenShell {
         &self,
         _request: tonic::Request<DeleteProviderRequest>,
     ) -> Result<Response<DeleteProviderResponse>, Status> {
-        Ok(Response::new(DeleteProviderResponse { deleted: true }))
+        Ok(Response::new(DeleteProviderResponse {
+            outcome: openshell_core::proto::DeletionOutcome::Completed.into(),
+        }))
     }
 
     type WatchSandboxStream =
@@ -569,7 +617,8 @@ impl OpenShell for TestOpenShell {
         &self,
         request: tonic::Request<WatchSandboxRequest>,
     ) -> Result<Response<Self::WatchSandboxStream>, Status> {
-        let sandbox_id = request.into_inner().id;
+        let request = request.into_inner();
+        let sandbox_id = format!("id-{}", request.sandbox);
         let (tx, rx) = mpsc::channel(4);
         let vm_error_after_started = self.state.vm_error_after_started.load(Ordering::SeqCst);
         let vm_error_with_observed_exit = self
@@ -598,25 +647,24 @@ impl OpenShell for TestOpenShell {
                 metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                     id: sandbox_id.clone(),
                     name: sandbox_id.trim_start_matches("id-").to_string(),
-                    created_at_ms: 0,
+                    created_time: None,
                     labels: HashMap::new(),
                     resource_version: 0,
                     annotations: HashMap::new(),
                     workspace: String::new(),
-                    deletion_timestamp_ms: 0,
+                    deletion_time: None,
                 }),
                 ..Sandbox::default()
             };
             provisioning.set_phase(SandboxPhase::Provisioning as i32);
             let mut error = Sandbox {
                 status: Some(SandboxStatus {
-                    sandbox_name: sandbox_id.trim_start_matches("id-").to_string(),
                     conditions: vec![SandboxCondition {
                         r#type: "Ready".to_string(),
                         status: "False".to_string(),
                         reason: "ProcessExited".to_string(),
                         message: "VM process exited with status 0".to_string(),
-                        last_transition_time: String::new(),
+                        transition_time: None,
                     }],
                     ..Default::default()
                 }),
@@ -699,7 +747,7 @@ impl OpenShell for TestOpenShell {
                         .send(Ok(SandboxStreamEvent {
                             payload: Some(sandbox_stream_event::Payload::Log(SandboxLogLine {
                                 sandbox_id: sandbox_id.clone(),
-                                timestamp_ms: 0,
+                                event_time: None,
                                 level: "INFO".to_string(),
                                 target: "test".to_string(),
                                 message: message.to_string(),
@@ -827,10 +875,24 @@ impl OpenShell for TestOpenShell {
         Err(Status::unimplemented("not implemented in test"))
     }
 
+    async fn report_sandbox_configuration(
+        &self,
+        _request: tonic::Request<openshell_core::proto::ReportSandboxConfigurationRequest>,
+    ) -> Result<Response<openshell_core::proto::ReportSandboxConfigurationResponse>, Status> {
+        Err(Status::unimplemented("not implemented in test"))
+    }
+
     async fn report_policy_status(
         &self,
         _request: tonic::Request<openshell_core::proto::ReportPolicyStatusRequest>,
     ) -> Result<Response<openshell_core::proto::ReportPolicyStatusResponse>, Status> {
+        Err(Status::unimplemented("not implemented in test"))
+    }
+
+    async fn report_endpoint_status(
+        &self,
+        _request: tonic::Request<ReportEndpointStatusRequest>,
+    ) -> Result<Response<ReportEndpointStatusResponse>, Status> {
         Err(Status::unimplemented("not implemented in test"))
     }
 
@@ -1198,7 +1260,9 @@ fn install_fake_forwarding_ssh(dir: &TempDir) -> std::path::PathBuf {
 set -eu
 
 forward=""
-sandbox_id=""
+sandbox_name=""
+workspace=""
+immutable_id=""
 saw_no_command=0
 last_arg=""
 previous=""
@@ -1214,7 +1278,11 @@ for arg in "$@"; do
   if [ "$previous" = "-o" ]; then
     case "$arg" in
       ProxyCommand=*)
-        sandbox_id="$(printf '%s\n' "$arg" | sed -n 's/.*--sandbox-id \([^ ]*\).*/\1/p')"
+        sandbox_name="$(printf '%s\n' "$arg" | sed -n 's/.*--sandbox \([^ ]*\).*/\1/p')"
+        workspace="$(printf '%s\n' "$arg" | sed -n 's/.*--workspace \([^ ]*\).*/\1/p')"
+        ;;
+      SetEnv=OPENSHELL_FORWARD_SANDBOX_ID=*)
+        immutable_id="${arg#SetEnv=OPENSHELL_FORWARD_SANDBOX_ID=}"
         ;;
     esac
     previous=""
@@ -1252,14 +1320,14 @@ case "$first" in
     ;;
 esac
 
-if [ -z "$port" ] || [ -z "$sandbox_id" ]; then
+if [ -z "$port" ] || [ -z "$sandbox_name" ] || [ -z "$workspace" ] || [ -z "$immutable_id" ]; then
   exit 1
 fi
 
 helper='@HELPER_PATH@'
 echo "$$" > '@PID_PATH@'
-printf '%s\n' "ssh -N -o ProxyCommand=/tmp/openshell ssh-proxy --gateway https://127.0.0.1:9443 --sandbox-id $sandbox_id --token test-token --gateway-name test-gateway -o ExitOnForwardFailure=yes -L $forward sandbox" > '@COMMAND_PATH@'
-exec env OPENSHELL_FAKE_FORWARD_MODE=listen "$helper" -N -o "ProxyCommand=/tmp/openshell ssh-proxy --gateway https://127.0.0.1:9443 --sandbox-id $sandbox_id --token test-token --gateway-name test-gateway" -o ExitOnForwardFailure=yes -L "$forward" sandbox
+printf '%s\n' "ssh -N -o ProxyCommand=/tmp/openshell ssh-proxy --gateway https://127.0.0.1:9443 --sandbox $sandbox_name --workspace $workspace --token test-token --gateway-name test-gateway -o ExitOnForwardFailure=yes -o SetEnv=OPENSHELL_FORWARD_SANDBOX_ID=$immutable_id -L $forward sandbox" > '@COMMAND_PATH@'
+exec env OPENSHELL_FAKE_FORWARD_MODE=listen "$helper" -N -o "ProxyCommand=/tmp/openshell ssh-proxy --gateway https://127.0.0.1:9443 --sandbox $sandbox_name --workspace $workspace --token test-token --gateway-name test-gateway" -o ExitOnForwardFailure=yes -o "SetEnv=OPENSHELL_FORWARD_SANDBOX_ID=$immutable_id" -L "$forward" sandbox
 "#
         .replace("@PID_PATH@", &pid_path.display().to_string())
         .replace("@COMMAND_PATH@", &command_path.display().to_string())
@@ -1303,7 +1371,7 @@ for arg in "$@"; do
   if [ "$previous" = "-o" ]; then
     case "$arg" in
       ProxyCommand=*)
-        sandbox_id="$(printf '%s\n' "$arg" | sed -n 's/.*--sandbox-id \([^ ]*\).*/\1/p')"
+        sandbox_id="$(printf '%s\n' "$arg" | sed -n 's/.*--sandbox \([^ ]*\).*/\1/p')"
         ;;
     esac
     previous=""
@@ -1332,7 +1400,7 @@ fi
 
 helper='@HELPER_PATH@'
 echo "$$" > '@PID_PATH@'
-exec env OPENSHELL_FAKE_FORWARD_MODE=sleep "$helper" -N -o "ProxyCommand=/tmp/openshell ssh-proxy --gateway https://127.0.0.1:9443 --sandbox-id $sandbox_id --token test-token --gateway-name test-gateway" -o ExitOnForwardFailure=yes -L "$forward" sandbox >'@LOG_PATH@' 2>&1
+exec env OPENSHELL_FAKE_FORWARD_MODE=sleep "$helper" -N -o "ProxyCommand=/tmp/openshell ssh-proxy --gateway https://127.0.0.1:9443 --sandbox $sandbox_id --token test-token --gateway-name test-gateway" -o ExitOnForwardFailure=yes -L "$forward" sandbox >'@LOG_PATH@' 2>&1
 "#
         .replace("@LOG_PATH@", &log_path.display().to_string())
         .replace("@PID_PATH@", &pid_path.display().to_string())
@@ -1421,17 +1489,17 @@ async fn add_provider(server: &TestServer, name: &str, provider_type: &str) {
             metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                 id: format!("provider-{name}"),
                 name: name.to_string(),
-                created_at_ms: 0,
+                created_time: openshell_core::time::timestamp_from_millis(0).ok(),
                 labels: HashMap::new(),
                 resource_version: 0,
                 annotations: HashMap::new(),
                 workspace: "default".to_string(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             r#type: provider_type.to_string(),
             credentials: HashMap::new(),
             config: HashMap::new(),
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             profile_workspace: "default".to_string(),
             credential_handles: HashMap::new(),
         });
@@ -1491,6 +1559,50 @@ async fn sandbox_delete_continues_after_entry_failure() {
             vec!["failing-sandbox".to_string()],
             vec!["later-sandbox".to_string()]
         ]
+    );
+}
+
+#[tokio::test]
+async fn sandbox_create_tolerates_an_unreachable_profile_catalog() {
+    // The catalog's only consumer is the advisory credential warning, so a
+    // failed lookup degrades that warning instead of blocking creation.
+    // Nothing derives provider authority from it: a provider is attached only
+    // when the user names one.
+    let server = run_server().await;
+    let fake_ssh_dir = tempfile::tempdir().unwrap();
+    let xdg_dir = tempfile::tempdir().unwrap();
+    let _env = test_env(&fake_ssh_dir, &xdg_dir);
+    let tls = test_tls(&server);
+    install_fake_ssh(&fake_ssh_dir);
+
+    server
+        .openshell
+        .state
+        .fail_list_provider_profiles
+        .store(true, Ordering::SeqCst);
+
+    run::sandbox_create(
+        &server.endpoint,
+        "openshell",
+        run::SandboxCreateConfig {
+            name: Some("catalog-unavailable"),
+            command: &["claude".into()],
+            ..test_config()
+        },
+        "default",
+        &tls,
+    )
+    .await
+    .expect("an unreachable catalog must not block sandbox creation");
+
+    let requests = server.openshell.state.create_requests.lock().await;
+    assert_eq!(requests.len(), 1, "the sandbox should still be created");
+    assert!(
+        requests[0]
+            .spec
+            .as_ref()
+            .is_none_or(|spec| spec.providers.is_empty()),
+        "no provider should be attached without an explicit --provider"
     );
 }
 
@@ -1694,6 +1806,46 @@ async fn detached_command_does_not_declare_main_process_attachment() {
 }
 
 #[tokio::test]
+async fn detached_ephemeral_command_delegates_cleanup_to_gateway() {
+    let server = run_server().await;
+    let fake_ssh_dir = tempfile::tempdir().unwrap();
+    let xdg_dir = tempfile::tempdir().unwrap();
+    let _env = test_env(&fake_ssh_dir, &xdg_dir);
+    let tls = test_tls(&server);
+    install_fake_ssh(&fake_ssh_dir);
+
+    run::sandbox_create(
+        &server.endpoint,
+        "openshell",
+        run::SandboxCreateConfig {
+            name: Some("detached-ephemeral-main"),
+            keep: false,
+            command: &["worker".into()],
+            detach: true,
+            ..test_config()
+        },
+        "default",
+        &tls,
+    )
+    .await
+    .expect("detached ephemeral sandbox create should succeed");
+
+    let requests = create_requests(&server).await;
+    assert!(!requests[0].await_main_process_attachment);
+    assert_eq!(
+        requests[0]
+            .annotations
+            .get("openshell.nvidia.com/retention")
+            .map(String::as_str),
+        Some("ephemeral")
+    );
+    assert!(
+        deleted_names(&server).await.is_empty(),
+        "the gateway owns cleanup after a detached canonical process exits"
+    );
+}
+
+#[tokio::test]
 async fn sandbox_create_sends_driver_config_json() {
     let server = run_server().await;
     let fake_ssh_dir = tempfile::tempdir().unwrap();
@@ -1785,7 +1937,7 @@ async fn sandbox_create_with_template_sends_workload_template_name() {
 
     let requests = create_requests(&server).await;
     let request = requests.first().expect("create request should be recorded");
-    assert_eq!(request.workload_template_name, "gpu-kata");
+    assert_eq!(request.workload_template, "gpu-kata");
     let spec = request
         .spec
         .as_ref()
@@ -1820,6 +1972,7 @@ async fn sandbox_template_create_sends_non_default_workspace_in_scope_and_metada
         "table",
         "team-a",
         &tls,
+        true,
     )
     .await
     .expect("template create should succeed");
@@ -1941,6 +2094,7 @@ async fn sandbox_template_create_allows_omitted_image() {
         "table",
         "default",
         &tls,
+        true,
     )
     .await
     .expect("template create without image should succeed");
@@ -2535,8 +2689,9 @@ async fn sandbox_create_keeps_sandbox_with_forwarding() {
     .expect("sandbox create with forward should succeed");
 
     assert!(deleted_names(&server).await.is_empty());
-    let record = openshell_core::forward::read_forward_pid("persistent-forward", forward_port)
-        .expect("fake forward should be tracked");
+    let record =
+        openshell_core::forward::read_forward_pid("default", "persistent-forward", forward_port)
+            .expect("fake forward should be tracked");
     let _ = std::process::Command::new("kill")
         .arg(record.pid.to_string())
         .status();
@@ -2566,11 +2721,12 @@ async fn sandbox_forward_background_tracks_owned_child_when_pid_discovery_fails(
     )
     .await
     .expect("background forward should track the owned SSH child without PID discovery");
-    let record = openshell_core::forward::read_forward_pid("owned-forward", forward_port)
-        .expect("owned background forward should write a PID file");
+    let record =
+        openshell_core::forward::read_forward_pid("default", "owned-forward", forward_port)
+            .expect("owned background forward should write a PID file");
 
     assert!(
-        openshell_core::forward::stop_forward("owned-forward", forward_port)
+        openshell_core::forward::stop_forward("default", "owned-forward", forward_port)
             .expect("tracked fake forward should stop"),
         "tracked fake forward should be recognized as alive and stopped",
     );
@@ -2641,7 +2797,8 @@ async fn sandbox_forward_background_terminates_owned_child_when_listener_never_o
         "error should preserve listener startup context, got: {msg}",
     );
     assert!(
-        openshell_core::forward::read_forward_pid("unreachable-forward", forward_port).is_none(),
+        openshell_core::forward::read_forward_pid("default", "unreachable-forward", forward_port)
+            .is_none(),
         "unreachable background forwards must not write a PID file",
     );
     let pid = fs::read_to_string(&fake_forward.pid_path)

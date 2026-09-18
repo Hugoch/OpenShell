@@ -12,7 +12,7 @@
 use crate::ServerState;
 use crate::auth::workspace_authz::{
     AuthorizedWorkspaceScope, MinWorkspaceRole, authorize_list_workspace_selector,
-    authorize_sandbox_workspace, authorize_workspace_selector,
+    authorize_sandbox_workspace, authorize_workspace,
 };
 use crate::pagination::Pagination;
 use crate::persistence::{
@@ -29,12 +29,12 @@ use openshell_core::proto::{
     ExecSandboxEvent, ExecSandboxExit, ExecSandboxInput, ExecSandboxRequest, ExecSandboxStderr,
     ExecSandboxStdout, GetSandboxRequest, GetSandboxTemplateRequest, ListSandboxProvidersRequest,
     ListSandboxProvidersResponse, ListSandboxTemplatesRequest, ListSandboxTemplatesResponse,
-    ListSandboxesRequest, ListSandboxesResponse, Provider, ResourceRequirements,
-    RevokeSshSessionRequest, RevokeSshSessionResponse, SandboxResources, SandboxResponse,
-    SandboxSpec, SandboxStreamEvent, SandboxTemplateResponse, SandboxWorkloadTemplate,
-    SandboxWorkloadTemplateProvenance, SshRelayTarget, StartSandboxRequest, StopSandboxRequest,
-    TcpForwardFrame, TcpForwardInit, TcpRelayTarget, WatchSandboxRequest, relay_open,
-    tcp_forward_init,
+    ListSandboxesRequest, ListSandboxesResponse, Provider, ProviderMutationKind,
+    ResourceRequirements, RevokeSshSessionRequest, RevokeSshSessionResponse, SandboxResources,
+    SandboxResponse, SandboxSpec, SandboxStreamEvent, SandboxTemplateResponse,
+    SandboxWorkloadTemplate, SandboxWorkloadTemplateProvenance, SshRelayTarget,
+    StartSandboxRequest, StopSandboxRequest, TcpForwardFrame, TcpForwardInit, TcpRelayTarget,
+    WatchSandboxRequest, relay_open, tcp_forward_init,
 };
 use openshell_core::proto::{
     BeginRootfsTarStagingRequest, BeginRootfsTarStagingResponse, Sandbox, SandboxPhase,
@@ -124,33 +124,81 @@ impl Drop for WatchSandboxStream {
     }
 }
 
-/// Fetch a sandbox by ID and authorize the caller in one step, returning
-/// `NOT_FOUND` for both missing and unauthorized sandboxes so that callers
-/// cannot distinguish the two cases (CWE-203).
-pub(super) async fn fetch_and_authorize_sandbox(
+/// Resolve a public sandbox name and authorize its persisted workspace.
+/// Missing and unauthorized objects deliberately share one response so names
+/// cannot be used as an existence oracle.
+pub(super) async fn resolve_and_authorize_sandbox_name(
     state: &Arc<ServerState>,
     principal: &crate::auth::principal::Principal,
-    sandbox_id: &str,
+    sandbox_name: &str,
+    workspace: &str,
+    min_role: MinWorkspaceRole,
 ) -> Result<Sandbox, Status> {
+    if sandbox_name.is_empty() {
+        return Err(Status::invalid_argument("sandbox is required"));
+    }
+    let crate::auth::principal::Principal::Sandbox(sandbox_principal) = principal else {
+        authorize_sandbox_workspace(
+            &state.store,
+            &state.admin_role,
+            principal,
+            workspace,
+            min_role,
+        )
+        .await
+        .map_err(|error| {
+            if error.code() == tonic::Code::PermissionDenied {
+                Status::not_found("sandbox not found")
+            } else {
+                error
+            }
+        })?;
+
+        return state
+            .store
+            .get_message_by_name::<Sandbox>(workspace, sandbox_name)
+            .await
+            .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
+            .ok_or_else(|| Status::not_found("sandbox not found"));
+    };
+
     let sandbox = state
         .store
-        .get_message::<Sandbox>(sandbox_id)
+        .get_message::<Sandbox>(&sandbox_principal.sandbox_id)
         .await
         .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
+        .filter(|sandbox| {
+            sandbox.metadata.as_ref().is_some_and(|metadata| {
+                metadata.name == sandbox_name
+                    && (workspace.is_empty() || workspace == sandbox.object_workspace())
+            })
+        });
+    let Some(sandbox) = sandbox else {
+        return Err(Status::permission_denied(
+            "sandbox not found or not owned by caller",
+        ));
+    };
+
     authorize_sandbox_workspace(
         &state.store,
         &state.admin_role,
         principal,
         sandbox.object_workspace(),
-        MinWorkspaceRole::User,
+        min_role,
     )
     .await
-    .map_err(|e| {
-        if e.code() == tonic::Code::PermissionDenied {
+    .map_err(|error| {
+        if error.code() == tonic::Code::PermissionDenied {
             Status::not_found("sandbox not found")
         } else {
-            e
+            error
+        }
+    })?;
+    crate::auth::guard::ensure_sandbox_scope(principal, sandbox.object_id()).map_err(|error| {
+        if error.code() == tonic::Code::PermissionDenied {
+            Status::permission_denied("sandbox not found or not owned by caller")
+        } else {
+            error
         }
     })?;
     Ok(sandbox)
@@ -172,7 +220,9 @@ pub(super) async fn handle_create_sandbox(
     request: Request<CreateSandboxRequest>,
 ) -> Result<Response<SandboxResponse>, Status> {
     let create_request = request.get_ref().clone();
-    let result = handle_create_sandbox_inner(state, request).await;
+    // Sandbox creation retains large configuration values across awaits.
+    // Box the inner future to keep this wrapper small for every caller.
+    let result = Box::pin(handle_create_sandbox_inner(state, request)).await;
     let created_sandbox = result
         .as_ref()
         .ok()
@@ -197,11 +247,11 @@ pub(super) async fn handle_begin_rootfs_tar_staging(
     let principal = super::extract_principal(&request)?;
     let request = request.into_inner();
 
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        request.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
@@ -221,7 +271,9 @@ pub(super) async fn handle_begin_rootfs_tar_staging(
         staging_token: slot.token,
         upload_path: slot.upload_path.to_string_lossy().into_owned(),
         max_bytes: slot.max_bytes,
-        expires_at_ms: slot.expires_at_ms,
+        expiration_time: openshell_core::time::timestamp_from_millis(slot.expires_at_ms)
+            .map(Some)
+            .map_err(|error| Status::internal(error.to_string()))?,
     }))
 }
 
@@ -283,7 +335,7 @@ fn sandbox_create_telemetry_attrs(
     request: &CreateSandboxRequest,
     created_sandbox: Option<&Sandbox>,
 ) -> SandboxCreateTelemetryAttrs {
-    if !request.workload_template_name.trim().is_empty() {
+    if !request.workload_template.trim().is_empty() {
         let spec = created_sandbox
             .and_then(|sandbox| sandbox.spec.as_ref())
             .or(request.spec.as_ref());
@@ -330,15 +382,15 @@ async fn handle_create_sandbox_inner(
     let principal = super::extract_principal(&request)?;
     let request = request.into_inner();
     let await_main_process_attachment = request.await_main_process_attachment;
-    let workload_template_name = request.workload_template_name.trim().to_string();
+    let workload_template_name = request.workload_template.trim().to_string();
 
     validate_create_sandbox_request_pre_io(&request, &workload_template_name)?;
 
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        request.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
@@ -371,8 +423,12 @@ async fn handle_create_sandbox_inner(
         (resolved, Some(provenance))
     };
 
+    // Attachment identity belongs to the gateway. Accepting an epoch from a
+    // create request or workload template could revive stale installation proof.
+    spec.provider_attachment_epoch = uuid::Uuid::new_v4().to_string();
+
     // Leave an omitted command empty rather than persisting a concrete shell:
-    // the supervisor resolves the default login shell against the sandbox image
+    // the sandbox boundary resolves the default login shell against the agent image
     // (bash when present, otherwise /bin/sh on minimal images like Alpine),
     // which the gateway cannot do since it does not see the sandbox filesystem.
     // The default is an interactive login shell, so request a TTY.
@@ -412,6 +468,13 @@ async fn handle_create_sandbox_inner(
         .provider_profile_sources
         .snapshot_catalog(state.store.as_ref(), &workspace)
         .await?;
+    super::provider::validate_provider_profiles_present(
+        state.store.as_ref(),
+        &provider_profile_catalog,
+        &workspace,
+        &spec.providers,
+    )
+    .await?;
     validate_provider_environment_keys_unique_with_catalog(
         state.store.as_ref(),
         &provider_profile_catalog,
@@ -463,18 +526,43 @@ async fn handle_create_sandbox_inner(
         metadata: Some(ObjectMeta {
             id: id.clone(),
             name: name.clone(),
-            created_at_ms: now_ms,
+            created_time: openshell_core::time::timestamp_from_millis(now_ms).ok(),
             labels: request.labels.clone(),
             resource_version: 0,
             annotations: request.annotations.clone(),
             workspace,
-            deletion_timestamp_ms: 0,
+            deletion_time: None,
         }),
         spec: Some(spec),
         status: None,
         created_from_workload_template,
     };
     sandbox.set_phase(SandboxPhase::Provisioning as i32);
+    sandbox
+        .status
+        .get_or_insert_with(Default::default)
+        .configuration_admission = Some(openshell_core::proto::SandboxConfigurationAdmission {
+        state: openshell_core::proto::ConfigurationAdmissionState::Pending.into(),
+        ..Default::default()
+    });
+    sandbox
+        .status
+        .as_mut()
+        .expect("status initialized")
+        .configuration_activated = Some(false);
+    sandbox
+        .status
+        .as_mut()
+        .expect("status initialized")
+        .provisioning = Some(crate::compute::provisioning_deadline::new_record(now_ms));
+    crate::compute::provisioning_deadline::refresh_configuration(
+        &state.store,
+        &mut sandbox,
+        now_ms,
+    )
+    .await
+    .map_err(Status::internal)?;
+    crate::compute::apply_configuration_readiness(&mut sandbox);
 
     // Ensure metadata is valid (defense in depth - should always be true for server-constructed metadata)
     super::validation::validate_object_metadata(sandbox.metadata.as_ref(), "sandbox")?;
@@ -499,26 +587,44 @@ async fn handle_create_sandbox_inner(
             status
         })?;
 
-    // Mint a gateway JWT whenever the issuer is configured. Compute runtimes
-    // that bootstrap through another authentication mechanism may ignore it.
-    let sandbox_token = state.sandbox_jwt_issuer.as_ref().map(|issuer| {
-        issuer.mint(&id).map(|minted| {
-            tracing::info!(
-                sandbox_id = %id,
-                "minted sandbox JWT"
-            );
-            minted.token
-        })
-    });
-    let sandbox_token = match sandbox_token {
-        Some(Ok(token)) => Some(token),
-        Some(Err(status)) => return Err(status),
-        None => None,
+    let runtime_identity = crate::auth::sandbox_session::PersistedSandboxIdentity::new()
+        .map_err(|error| Status::internal(error.to_string()))?;
+    if let Some(metadata) = sandbox.metadata.as_mut() {
+        runtime_identity.write(&mut metadata.annotations);
+    }
+    let launch_authentication = if let Some(authority) = &state.sandbox_session_jwt_authority {
+        Some(authority.mint_persisted_launch(&id, &runtime_identity)?)
+    } else {
+        None
     };
+    let sandbox_token = if let Some(authentication) = &launch_authentication {
+        Some(
+            authentication
+                .supervisor
+                .gateway_token
+                .expose_secret()
+                .to_string(),
+        )
+    } else if let Some(issuer) = &state.sandbox_jwt_issuer {
+        Some(issuer.mint(&id)?.token)
+    } else {
+        None
+    };
+    let launch_authentication = launch_authentication
+        .map(|authentication| {
+            serde_json::to_vec(&authentication)
+                .map_err(|error| Status::internal(format!("encode launch authentication: {error}")))
+        })
+        .transpose()?;
 
     let sandbox = state
         .compute
-        .create_sandbox(sandbox, sandbox_token, await_main_process_attachment)
+        .create_sandbox_authenticated(
+            sandbox,
+            sandbox_token,
+            launch_authentication,
+            await_main_process_attachment,
+        )
         .await?;
 
     info!(
@@ -666,28 +772,14 @@ pub(super) async fn handle_get_sandbox(
 ) -> Result<Response<SandboxResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.name,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &req.name)
-        .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?;
-
-    let sandbox = sandbox.ok_or_else(|| Status::not_found("sandbox not found"))?;
     Ok(Response::new(SandboxResponse {
         sandbox: Some(sandbox),
     }))
@@ -760,11 +852,11 @@ pub(super) async fn handle_create_sandbox_template(
         .template
         .ok_or_else(|| Status::invalid_argument("template is required"))?;
     let metadata = template.metadata.clone().unwrap_or_default();
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        req.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -786,12 +878,12 @@ pub(super) async fn handle_create_sandbox_template(
     resolved.metadata = Some(ObjectMeta {
         id: uuid::Uuid::new_v4().to_string(),
         name: metadata.name,
-        created_at_ms: current_time_ms(),
+        created_time: openshell_core::time::timestamp_from_millis(current_time_ms()).ok(),
         labels: metadata.labels,
         resource_version: 0,
         annotations: metadata.annotations,
         workspace: workspace.clone(),
-        deletion_timestamp_ms: 0,
+        deletion_time: None,
     });
     validate_sandbox_workload_template(&resolved)?;
 
@@ -850,11 +942,11 @@ pub(super) async fn handle_get_sandbox_template(
     if req.name.is_empty() {
         return Err(Status::invalid_argument("name is required"));
     }
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        req.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
@@ -938,11 +1030,11 @@ pub(super) async fn handle_delete_sandbox_template(
     if req.name.is_empty() {
         return Err(Status::invalid_argument("name is required"));
     }
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        req.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -958,7 +1050,9 @@ pub(super) async fn handle_delete_sandbox_template(
         )
         .await
         .map_err(|e| Status::internal(format!("delete sandbox template failed: {e}")))?;
-    Ok(Response::new(DeleteSandboxTemplateResponse { deleted }))
+    Ok(Response::new(DeleteSandboxTemplateResponse {
+        outcome: super::deletion_outcome(deleted, req.allow_missing, "sandbox template")?,
+    }))
 }
 
 fn validate_sandbox_workload_template(template: &SandboxWorkloadTemplate) -> Result<(), Status> {
@@ -1024,18 +1118,15 @@ pub(super) async fn handle_list_sandbox_providers(
 ) -> Result<Response<ListSandboxProvidersResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    let sandbox = sandbox_by_name(state, &workspace, &req.sandbox_name).await?;
+    let workspace = sandbox.object_workspace().to_string();
     let providers = providers_for_sandbox(state, &sandbox, &workspace).await?;
     Ok(Response::new(ListSandboxProvidersResponse { providers }))
 }
@@ -1045,47 +1136,55 @@ pub(super) async fn handle_attach_sandbox_provider(
     request: Request<AttachSandboxProviderRequest>,
 ) -> Result<Response<AttachSandboxProviderResponse>, Status> {
     let principal = super::extract_principal(&request)?;
+    #[cfg(test)]
+    let attach_wait_probe = request
+        .extensions()
+        .get::<Arc<tokio::sync::Notify>>()
+        .cloned();
     let request = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        request.workspace_scope.as_ref(),
+        &request.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .ensure_active()?;
-    if request.provider_name.is_empty() {
+    let workspace =
+        super::workspace::resolve_workspace(state.store.as_ref(), sandbox.object_workspace())
+            .await?
+            .ensure_active()?;
+    if request.provider.is_empty() {
         return Err(Status::invalid_argument("provider_name is required"));
     }
 
     // Validate provider name would not violate sandbox spec constraints if added
     // (pre-validation ensures CAS mutations preserve invariants)
-    if request.provider_name.len() > super::MAX_NAME_LEN {
+    if request.provider.len() > super::MAX_NAME_LEN {
         return Err(Status::invalid_argument(format!(
             "provider_name exceeds maximum length ({} > {})",
-            request.provider_name.len(),
+            request.provider.len(),
             super::MAX_NAME_LEN
         )));
     }
 
-    get_provider_record(state.store.as_ref(), &workspace, &request.provider_name)
+    // The receipt must capture the provider revision selected by this
+    // serialized mutation, after any preceding credential update has finished.
+    #[cfg(test)]
+    if let Some(probe) = attach_wait_probe {
+        probe.notify_one();
+    }
+    let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await;
+    let provider_record = get_provider_record(state.store.as_ref(), &workspace, &request.provider)
         .await
         .map_err(|err| {
             if err.code() == tonic::Code::NotFound {
-                Status::failed_precondition(format!(
-                    "provider '{}' not found",
-                    request.provider_name
-                ))
+                Status::failed_precondition(format!("provider '{}' not found", request.provider))
             } else {
                 err
             }
         })?;
-
-    let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await;
-    let sandbox = sandbox_by_name(state, &workspace, &request.sandbox_name).await?;
+    let sandbox_name = sandbox.object_name().to_string();
     let sandbox_id = sandbox
         .metadata
         .as_ref()
@@ -1102,10 +1201,7 @@ pub(super) async fn handle_attach_sandbox_provider(
     // Pre-check: fail fast if already at MAX_PROVIDERS limit (avoid spurious CAS conflicts)
     // Note: This is an optimization; the CAS closure rechecks after dedupe in case of races
     if spec.providers.len() >= MAX_PROVIDERS
-        && !spec
-            .providers
-            .iter()
-            .any(|name| name == &request.provider_name)
+        && !spec.providers.iter().any(|name| name == &request.provider)
     {
         return Err(Status::invalid_argument(format!(
             "providers list exceeds maximum ({MAX_PROVIDERS})"
@@ -1116,15 +1212,22 @@ pub(super) async fn handle_attach_sandbox_provider(
     if !candidate_spec
         .providers
         .iter()
-        .any(|name| name == &request.provider_name)
+        .any(|name| name == &request.provider)
     {
-        candidate_spec.providers.push(request.provider_name.clone());
+        candidate_spec.providers.push(request.provider.clone());
     }
-    validate_sandbox_spec(&request.sandbox_name, &candidate_spec)?;
+    validate_sandbox_spec(&sandbox_name, &candidate_spec)?;
     let provider_profile_catalog = state
         .provider_profile_sources
         .snapshot_catalog(state.store.as_ref(), &workspace)
         .await?;
+    super::provider::validate_provider_profiles_present(
+        state.store.as_ref(),
+        &provider_profile_catalog,
+        &workspace,
+        &candidate_spec.providers,
+    )
+    .await?;
     validate_provider_environment_keys_unique_with_catalog(
         state.store.as_ref(),
         &provider_profile_catalog,
@@ -1147,9 +1250,10 @@ pub(super) async fn handle_attach_sandbox_provider(
     )
     .await?;
 
-    let provider_name = request.provider_name.clone();
+    let provider_name = request.provider.clone();
     let attached = Arc::new(AtomicBool::new(false));
     let attached_clone = attached.clone();
+    let mutation_id = uuid::Uuid::new_v4().to_string();
 
     let sandbox = state
         .store
@@ -1157,17 +1261,27 @@ pub(super) async fn handle_attach_sandbox_provider(
             &sandbox_id,
             request.expected_resource_version,
             |sandbox| {
+                attached_clone.store(false, Ordering::Relaxed);
                 let Some(ref mut spec) = sandbox.spec else {
                     // Spec should always exist post-creation; if missing, fail CAS to surface error
                     return;
                 };
+
+                if spec.provider_attachment_epoch.is_empty() {
+                    spec.provider_attachment_epoch.clone_from(&mutation_id);
+                }
 
                 dedupe_provider_names(&mut spec.providers);
                 if !spec.providers.iter().any(|name| name == &provider_name)
                     && spec.providers.len() < MAX_PROVIDERS
                 {
                     spec.providers.push(provider_name.clone());
+                    spec.provider_attachment_epoch.clone_from(&mutation_id);
                     attached_clone.store(true, Ordering::Relaxed);
+                    crate::compute::provisioning_deadline::attachments_changed(
+                        sandbox,
+                        current_time_ms(),
+                    );
                 }
             },
         )
@@ -1183,10 +1297,22 @@ pub(super) async fn handle_attach_sandbox_provider(
         );
         state.sandbox_watch_bus.notify(&sandbox_id);
     }
+    let receipt = super::provider_readiness::record_provider_mutation(
+        state,
+        &sandbox,
+        &request.provider,
+        ProviderMutationKind::Attach,
+        Some((
+            provider_record.object_id(),
+            provider_record.get_resource_version(),
+        )),
+        &mutation_id,
+    )
+    .await?;
 
     info!(
-        sandbox_name = %request.sandbox_name,
-        provider_name = %request.provider_name,
+        sandbox_name = %sandbox_name,
+        provider_name = %request.provider,
         attached,
         "AttachSandboxProvider request completed successfully"
     );
@@ -1194,6 +1320,7 @@ pub(super) async fn handle_attach_sandbox_provider(
     Ok(Response::new(AttachSandboxProviderResponse {
         sandbox: Some(sandbox),
         attached,
+        receipt: Some(receipt),
     }))
 }
 
@@ -1203,32 +1330,30 @@ pub(super) async fn handle_detach_sandbox_provider(
 ) -> Result<Response<DetachSandboxProviderResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let request = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        request.workspace_scope.as_ref(),
+        &request.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    if request.provider_name.is_empty() {
+    let workspace = sandbox.object_workspace().to_string();
+    if request.provider.is_empty() {
         return Err(Status::invalid_argument("provider_name is required"));
     }
 
     // Validate provider name (pre-validation ensures CAS mutations preserve invariants)
-    if request.provider_name.len() > super::MAX_NAME_LEN {
+    if request.provider.len() > super::MAX_NAME_LEN {
         return Err(Status::invalid_argument(format!(
             "provider_name exceeds maximum length ({} > {})",
-            request.provider_name.len(),
+            request.provider.len(),
             super::MAX_NAME_LEN
         )));
     }
 
     let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await;
-    let sandbox = sandbox_by_name(state, &workspace, &request.sandbox_name).await?;
+    let sandbox_name = sandbox.object_name().to_string();
     let sandbox_id = sandbox
         .metadata
         .as_ref()
@@ -1244,7 +1369,7 @@ pub(super) async fn handle_detach_sandbox_provider(
     let mut candidate_spec = spec.clone();
     candidate_spec
         .providers
-        .retain(|name| name != &request.provider_name);
+        .retain(|name| name != &request.provider);
     dedupe_provider_names(&mut candidate_spec.providers);
     super::policy::validate_candidate_provider_attachments(
         state,
@@ -1254,9 +1379,10 @@ pub(super) async fn handle_detach_sandbox_provider(
     )
     .await?;
 
-    let provider_name = request.provider_name.clone();
+    let provider_name = request.provider.clone();
     let detached = Arc::new(AtomicBool::new(false));
     let detached_clone = detached.clone();
+    let mutation_id = uuid::Uuid::new_v4().to_string();
 
     let sandbox = state
         .store
@@ -1264,17 +1390,27 @@ pub(super) async fn handle_detach_sandbox_provider(
             &sandbox_id,
             request.expected_resource_version,
             |sandbox| {
+                detached_clone.store(false, Ordering::Relaxed);
                 let Some(ref mut spec) = sandbox.spec else {
                     // Spec should always exist post-creation; if missing, fail CAS to surface error
                     return;
                 };
 
+                if spec.provider_attachment_epoch.is_empty() {
+                    spec.provider_attachment_epoch.clone_from(&mutation_id);
+                }
+
                 let before_len = spec.providers.len();
                 spec.providers.retain(|name| name != &provider_name);
                 if spec.providers.len() != before_len {
+                    spec.provider_attachment_epoch.clone_from(&mutation_id);
                     detached_clone.store(true, Ordering::Relaxed);
                     // Only dedupe after making a change
                     dedupe_provider_names(&mut spec.providers);
+                    crate::compute::provisioning_deadline::attachments_changed(
+                        sandbox,
+                        current_time_ms(),
+                    );
                 }
             },
         )
@@ -1290,10 +1426,19 @@ pub(super) async fn handle_detach_sandbox_provider(
         );
         state.sandbox_watch_bus.notify(&sandbox_id);
     }
+    let receipt = super::provider_readiness::record_provider_mutation(
+        state,
+        &sandbox,
+        &request.provider,
+        ProviderMutationKind::Detach,
+        None,
+        &mutation_id,
+    )
+    .await?;
 
     info!(
-        sandbox_name = %request.sandbox_name,
-        provider_name = %request.provider_name,
+        sandbox_name = %sandbox_name,
+        provider_name = %request.provider,
         detached,
         "DetachSandboxProvider request completed successfully"
     );
@@ -1301,6 +1446,7 @@ pub(super) async fn handle_detach_sandbox_provider(
     Ok(Response::new(DetachSandboxProviderResponse {
         sandbox: Some(sandbox),
         detached,
+        receipt: Some(receipt),
     }))
 }
 
@@ -1310,7 +1456,7 @@ pub(super) async fn handle_delete_sandbox(
 ) -> Result<Response<DeleteSandboxResponse>, Status> {
     let result = handle_delete_sandbox_inner(state, request).await;
     let outcome = match &result {
-        Ok(response) if response.get_ref().deleted => TelemetryOutcome::Success,
+        Ok(_) => TelemetryOutcome::Success,
         _ => TelemetryOutcome::Failure,
     };
     openshell_core::telemetry::emit_lifecycle(
@@ -1329,27 +1475,38 @@ async fn handle_delete_sandbox_inner(
     let req = request.into_inner();
     let name = req.name;
     if name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
+        return Err(Status::invalid_argument("sandbox is required"));
     }
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        req.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
-    .await?;
+    .await
+    .map_err(|status| {
+        if status.code() == tonic::Code::PermissionDenied {
+            Status::not_found("sandbox not found")
+        } else {
+            status
+        }
+    })?;
     let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
         .await?
         .name;
 
-    let result = state.compute.delete_sandbox(&workspace, &name).await?;
-    if result.deleted {
+    let result = state
+        .compute
+        .delete_sandbox_allow_missing(&workspace, &name, req.allow_missing)
+        .await?;
+    if !result.sandbox_id.is_empty() {
         state.telemetry.end_sandbox_session(&result.sandbox_id);
     }
     info!(sandbox_name = %name, "DeleteSandbox request completed successfully");
     Ok(Response::new(DeleteSandboxResponse {
-        deleted: result.deleted,
+        outcome: result.outcome.into(),
+        sandbox_id: result.sandbox_id,
     }))
 }
 
@@ -1376,22 +1533,18 @@ async fn handle_stop_sandbox_inner(
 ) -> Result<Response<SandboxResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let resolved = resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.name,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    let sandbox = state.compute.stop_sandbox(&workspace, &req.name).await?;
-    info!(sandbox_name = %req.name, "StopSandbox request completed successfully");
+    let workspace = resolved.object_workspace();
+    let name = resolved.object_name();
+    let sandbox = state.compute.stop_sandbox(workspace, name).await?;
+    info!(sandbox_name = %name, "StopSandbox request completed successfully");
     Ok(Response::new(SandboxResponse {
         sandbox: Some(sandbox),
     }))
@@ -1420,42 +1573,107 @@ async fn handle_start_sandbox_inner(
 ) -> Result<Response<SandboxResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let resolved = resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.name,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    let sandbox = state.compute.start_sandbox(&workspace, &req.name).await?;
-    info!(sandbox_name = %req.name, "StartSandbox request completed successfully");
+    let workspace = resolved.object_workspace().to_string();
+    let name = resolved.object_name().to_string();
+    let current = resolved;
+    let current_phase = SandboxPhase::try_from(current.phase()).unwrap_or(SandboxPhase::Unknown);
+    let launch_authentication = if current_phase == SandboxPhase::Ready {
+        Vec::new()
+    } else if state.sandbox_session_jwt_authority.is_some() {
+        let authentication = if matches!(
+            current_phase,
+            SandboxPhase::Stopped | SandboxPhase::Completed
+        ) {
+            mint_next_runtime_authentication(state, &current).await?
+        } else {
+            mint_persisted_authentication(state, &current)?
+        };
+        serde_json::to_vec(&authentication)
+            .map_err(|error| Status::internal(format!("encode launch authentication: {error}")))?
+    } else {
+        Vec::new()
+    };
+    let mut sandbox = state
+        .compute
+        .start_sandbox_authenticated(&workspace, &name, launch_authentication)
+        .await?;
+    state
+        .supervisor_sessions
+        .project_endpoint_status(&mut sandbox);
+    info!(sandbox_name = %name, "StartSandbox request completed successfully");
     Ok(Response::new(SandboxResponse {
         sandbox: Some(sandbox),
     }))
 }
 
-async fn sandbox_by_name(
-    state: &Arc<ServerState>,
-    workspace: &str,
-    name: &str,
-) -> Result<Sandbox, Status> {
-    if name.is_empty() {
-        return Err(Status::invalid_argument("sandbox_name is required"));
-    }
+pub fn mint_persisted_authentication(
+    state: &ServerState,
+    sandbox: &Sandbox,
+) -> Result<openshell_core::jwt::SandboxLaunchAuthentication, Status> {
+    let authority = state
+        .sandbox_session_jwt_authority
+        .as_ref()
+        .ok_or_else(|| Status::failed_precondition("sandbox session authority is unavailable"))?;
+    let metadata = sandbox
+        .metadata
+        .as_ref()
+        .ok_or_else(|| Status::failed_precondition("sandbox metadata is missing"))?;
+    let identity =
+        crate::auth::sandbox_session::PersistedSandboxIdentity::read(&metadata.annotations)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
+    authority.mint_persisted_launch(sandbox.object_id(), &identity)
+}
 
+async fn mint_next_runtime_authentication(
+    state: &Arc<ServerState>,
+    sandbox: &Sandbox,
+) -> Result<openshell_core::jwt::SandboxLaunchAuthentication, Status> {
+    let authority = state
+        .sandbox_session_jwt_authority
+        .as_ref()
+        .ok_or_else(|| Status::failed_precondition("sandbox session authority is unavailable"))?;
+    let metadata = sandbox
+        .metadata
+        .as_ref()
+        .ok_or_else(|| Status::failed_precondition("sandbox metadata is missing"))?;
+    let current =
+        crate::auth::sandbox_session::PersistedSandboxIdentity::read(&metadata.annotations)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
+    let next_epoch = current
+        .auth_epoch
+        .get()
+        .checked_add(1)
+        .and_then(|epoch| openshell_core::jwt::CredentialEpoch::new(epoch).ok())
+        .ok_or_else(|| Status::internal("sandbox authorization epoch overflow"))?;
+    let next = crate::auth::sandbox_session::PersistedSandboxIdentity {
+        runtime_generation: current.runtime_generation,
+        auth_epoch: next_epoch,
+        gateway_token_id: uuid::Uuid::new_v4(),
+        refresh_replay: None,
+    };
+    let authentication = authority.mint_persisted_launch(sandbox.object_id(), &next)?;
     state
         .store
-        .get_message_by_name::<Sandbox>(workspace, name)
+        .update_message_cas::<Sandbox, _>(
+            sandbox.object_id(),
+            metadata.resource_version,
+            |updated| {
+                if let Some(metadata) = updated.metadata.as_mut() {
+                    next.write(&mut metadata.annotations);
+                }
+            },
+        )
         .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))
+        .map_err(|error| Status::aborted(format!("persist sandbox runtime identity: {error}")))?;
+    Ok(authentication)
 }
 
 async fn providers_for_sandbox(
@@ -1506,12 +1724,15 @@ pub(super) async fn handle_watch_sandbox(
 ) -> Result<Response<WatchSandboxStream>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    if req.id.is_empty() {
-        return Err(Status::invalid_argument("id is required"));
-    }
-    let sandbox_id = req.id.clone();
-
-    let _sandbox = fetch_and_authorize_sandbox(state, &principal, &sandbox_id).await?;
+    let sandbox = resolve_and_authorize_sandbox_name(
+        state,
+        &principal,
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
+        MinWorkspaceRole::User,
+    )
+    .await?;
+    let sandbox_id = sandbox.object_id().to_string();
 
     let follow_status = req.follow_status;
     let follow_logs = req.follow_logs;
@@ -1522,7 +1743,11 @@ pub(super) async fn handle_watch_sandbox(
         req.log_tail_lines
     };
     let stop_on_terminal = req.stop_on_terminal;
-    let log_since_ms = req.log_since_ms;
+    if let Some(since_time) = req.since_time.as_ref() {
+        openshell_core::time::validate_timestamp(since_time)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    }
+    let log_since_time = req.since_time;
     let log_sources = req.log_sources;
     let log_min_level = req.log_min_level;
     let event_tail = req.event_tail;
@@ -1606,15 +1831,25 @@ pub(super) async fn handle_watch_sandbox(
                 }
             }
 
-            // Replay tail logs (best-effort), filtered by log_since_ms and log_sources.
+            // Replay tail logs (best-effort), filtered by log_since_time and log_sources.
             if follow_logs {
                 for evt in state.tracing_log_bus.tail(&sandbox_id, log_tail as usize) {
                     if let Some(openshell_core::proto::sandbox_stream_event::Payload::Log(
                         ref log,
                     )) = evt.payload
                     {
-                        if log_since_ms > 0 && log.timestamp_ms < log_since_ms {
-                            continue;
+                        if let Some(since_time) = log_since_time.as_ref() {
+                            let Some(event_time) = log.event_time.as_ref() else {
+                                continue;
+                            };
+                            let Ok(ordering) =
+                                openshell_core::time::compare_timestamps(event_time, since_time)
+                            else {
+                                continue;
+                            };
+                            if ordering == std::cmp::Ordering::Less {
+                                continue;
+                            }
                         }
                         if !log_sources.is_empty() && !source_matches(&log.source, &log_sources) {
                             continue;
@@ -1765,9 +2000,6 @@ pub(super) async fn handle_exec_sandbox(
 
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    if req.sandbox_id.is_empty() {
-        return Err(Status::invalid_argument("sandbox_id is required"));
-    }
     if req.command.is_empty() {
         return Err(Status::invalid_argument("command is required"));
     }
@@ -1778,7 +2010,14 @@ pub(super) async fn handle_exec_sandbox(
     }
     validate_exec_request_fields(&req)?;
 
-    let sandbox = fetch_and_authorize_sandbox(state, &principal, &req.sandbox_id).await?;
+    let sandbox = resolve_and_authorize_sandbox_name(
+        state,
+        &principal,
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
+        MinWorkspaceRole::User,
+    )
+    .await?;
 
     if SandboxPhase::try_from(sandbox.phase()).ok() != Some(SandboxPhase::Ready) {
         return Err(Status::failed_precondition("sandbox is not ready"));
@@ -1796,7 +2035,12 @@ pub(super) async fn handle_exec_sandbox(
     let command_str = build_remote_exec_command(&req)
         .map_err(|e| Status::invalid_argument(format!("command construction failed: {e}")))?;
     let stdin_payload = req.stdin;
-    let timeout_seconds = req.timeout_seconds;
+    let execution_timeout = req
+        .execution_timeout
+        .as_ref()
+        .map(openshell_core::time::duration_to_std)
+        .transpose()
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
     let request_tty = req.tty;
     let (cols, rows) = pty_dimensions(req.cols, req.rows);
 
@@ -1820,7 +2064,7 @@ pub(super) async fn handle_exec_sandbox(
             relay_stream,
             &command_str,
             stdin_payload,
-            timeout_seconds,
+            execution_timeout,
             request_tty,
             no_login_shell,
             cols,
@@ -1894,7 +2138,14 @@ pub(super) async fn handle_forward_tcp(
 
     let target = validate_tcp_forward_init(&init)?;
 
-    let sandbox = fetch_and_authorize_sandbox(state, &principal, &init.sandbox_id).await?;
+    let sandbox = resolve_and_authorize_sandbox_name(
+        state,
+        &principal,
+        &init.sandbox,
+        &init.workspace,
+        MinWorkspaceRole::User,
+    )
+    .await?;
 
     // The main process may finish between minting the SSH token and opening
     // its transport. Keep the relay reachable until terminal delivery is
@@ -1996,9 +2247,11 @@ async fn validate_ssh_forward_token(
         return Err(Status::unauthenticated("SSH session token is not valid"));
     }
 
-    if session.expires_at_ms > 0 {
+    if let Some(expiration_time) = session.expiration_time.as_ref() {
         let now_ms = current_time_ms();
-        if now_ms > session.expires_at_ms {
+        let expires_at_ms = openshell_core::time::timestamp_to_millis(expiration_time)
+            .map_err(|error| Status::internal(error.to_string()))?;
+        if now_ms > expires_at_ms {
             return Err(Status::unauthenticated("SSH session token expired"));
         }
     }
@@ -2052,10 +2305,6 @@ fn decrement_ssh_connection_count(counts: &std::sync::Mutex<HashMap<String, u32>
 }
 
 fn validate_tcp_forward_init(init: &TcpForwardInit) -> Result<relay_open::Target, Status> {
-    if init.sandbox_id.is_empty() {
-        return Err(Status::invalid_argument("sandbox_id is required"));
-    }
-
     if let Some(target) = init.target.as_ref() {
         return match target {
             tcp_forward_init::Target::Ssh(_) => {
@@ -2187,9 +2436,6 @@ fn validate_interactive_exec_start(
         ));
     };
 
-    if req.sandbox_id.is_empty() {
-        return Err(Status::invalid_argument("sandbox_id is required"));
-    }
     if req.command.is_empty() {
         return Err(Status::invalid_argument("command is required"));
     }
@@ -2219,7 +2465,14 @@ pub(super) async fn handle_exec_sandbox_interactive(
 
     let req = validate_interactive_exec_start(first_msg)?;
 
-    let sandbox = fetch_and_authorize_sandbox(state, &principal, &req.sandbox_id).await?;
+    let sandbox = resolve_and_authorize_sandbox_name(
+        state,
+        &principal,
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
+        MinWorkspaceRole::User,
+    )
+    .await?;
 
     if SandboxPhase::try_from(sandbox.phase()).ok() != Some(SandboxPhase::Ready) {
         return Err(Status::failed_precondition("sandbox is not ready"));
@@ -2235,7 +2488,12 @@ pub(super) async fn handle_exec_sandbox_interactive(
         .map_err(|e| Status::invalid_argument(format!("command construction failed: {e}")))?;
     let request_tty = req.tty;
     let no_login_shell = req.no_login_shell;
-    let timeout_seconds = req.timeout_seconds;
+    let execution_timeout = req
+        .execution_timeout
+        .as_ref()
+        .map(openshell_core::time::duration_to_std)
+        .transpose()
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
     let (cols, rows) = pty_dimensions(req.cols, req.rows);
 
     let sandbox_id = sandbox.object_id().to_string();
@@ -2263,7 +2521,7 @@ pub(super) async fn handle_exec_sandbox_interactive(
             input_stream,
             request_tty,
             no_login_shell,
-            timeout_seconds,
+            execution_timeout,
             cols,
             rows,
         )
@@ -2285,10 +2543,7 @@ fn sandbox_relay_reachable(state: &ServerState, sandbox: &Sandbox) -> bool {
     let phase = SandboxPhase::try_from(sandbox.phase()).ok();
     matches!(phase, Some(SandboxPhase::Ready))
         || (matches!(phase, Some(SandboxPhase::Completed | SandboxPhase::Error))
-            && state.supervisor_sessions.has_session(sandbox.object_id())
-            && !state
-                .supervisor_sessions
-                .terminal_delivery_finalized(sandbox.object_id()))
+            && state.supervisor_sessions.has_session(sandbox.object_id()))
 }
 
 pub(super) async fn handle_create_ssh_session(
@@ -2297,11 +2552,15 @@ pub(super) async fn handle_create_ssh_session(
 ) -> Result<Response<CreateSshSessionResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    if req.sandbox_id.is_empty() {
-        return Err(Status::invalid_argument("sandbox_id is required"));
-    }
-
-    let sandbox = fetch_and_authorize_sandbox(state, &principal, &req.sandbox_id).await?;
+    let sandbox = resolve_and_authorize_sandbox_name(
+        state,
+        &principal,
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
+        MinWorkspaceRole::User,
+    )
+    .await?;
+    let sandbox_id = sandbox.object_id().to_string();
 
     if !sandbox_relay_reachable(state, &sandbox) {
         return Err(Status::failed_precondition("sandbox is not ready"));
@@ -2318,17 +2577,18 @@ pub(super) async fn handle_create_ssh_session(
         metadata: Some(ObjectMeta {
             id: token.clone(),
             name: generate_name(),
-            created_at_ms: now_ms,
+            created_time: openshell_core::time::timestamp_from_millis(now_ms).ok(),
             labels: HashMap::new(),
             resource_version: 0,
             annotations: HashMap::new(),
             workspace: sandbox.object_workspace().to_string(),
-            deletion_timestamp_ms: 0,
+            deletion_time: None,
         }),
-        sandbox_id: req.sandbox_id.clone(),
+        sandbox_id: sandbox_id.clone(),
         token: token.clone(),
         revoked: false,
-        expires_at_ms,
+        expiration_time: openshell_core::time::optional_timestamp_from_legacy_millis(expires_at_ms)
+            .map_err(|error| Status::internal(error.to_string()))?,
     };
 
     // Ensure metadata is valid (defense in depth - should always be true for server-constructed metadata)
@@ -2366,13 +2626,14 @@ pub(super) async fn handle_create_ssh_session(
     };
 
     Ok(Response::new(CreateSshSessionResponse {
-        sandbox_id: req.sandbox_id,
+        sandbox_id,
         token,
         gateway_host,
         gateway_port: gateway_port.into(),
         gateway_scheme: scheme.to_string(),
         host_key_fingerprint: String::new(),
-        expires_at_ms,
+        expiration_time: openshell_core::time::optional_timestamp_from_legacy_millis(expires_at_ms)
+            .map_err(|error| Status::internal(error.to_string()))?,
     }))
 }
 
@@ -2381,7 +2642,8 @@ pub(super) async fn handle_revoke_ssh_session(
     request: Request<RevokeSshSessionRequest>,
 ) -> Result<Response<RevokeSshSessionResponse>, Status> {
     let principal = super::extract_principal(&request)?;
-    let token = request.into_inner().token;
+    let req = request.into_inner();
+    let token = req.token;
     if token.is_empty() {
         return Err(Status::invalid_argument("token is required"));
     }
@@ -2393,7 +2655,9 @@ pub(super) async fn handle_revoke_ssh_session(
         .map_err(|e| Status::internal(format!("fetch ssh session failed: {e}")))?;
 
     let Some(mut session) = session else {
-        return Ok(Response::new(RevokeSshSessionResponse { revoked: false }));
+        return Ok(Response::new(RevokeSshSessionResponse {
+            outcome: super::deletion_outcome(false, req.allow_missing, "ssh session")?,
+        }));
     };
     authorize_sandbox_workspace(
         &state.store,
@@ -2410,6 +2674,12 @@ pub(super) async fn handle_revoke_ssh_session(
             e
         }
     })?;
+
+    if session.revoked {
+        return Ok(Response::new(RevokeSshSessionResponse {
+            outcome: openshell_core::proto::DeletionOutcome::Completed.into(),
+        }));
+    }
 
     let resource_version = session
         .metadata
@@ -2442,7 +2712,9 @@ pub(super) async fn handle_revoke_ssh_session(
         .await
         .map_err(|e| super::persistence_error_to_status(e, "revoke ssh session"))?;
 
-    Ok(Response::new(RevokeSshSessionResponse { revoked: true }))
+    Ok(Response::new(RevokeSshSessionResponse {
+        outcome: openshell_core::proto::DeletionOutcome::Completed.into(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -2558,7 +2830,7 @@ async fn stream_exec_over_relay(
     relay_stream: tokio::io::DuplexStream,
     command: &str,
     stdin_payload: Vec<u8>,
-    timeout_seconds: u32,
+    execution_timeout: Option<std::time::Duration>,
     request_tty: bool,
     no_login_shell: bool,
     cols: u32,
@@ -2592,25 +2864,22 @@ async fn stream_exec_over_relay(
         tx.clone(),
     );
 
-    let exec_result = if timeout_seconds == 0 {
-        exec.await
-    } else if let Ok(r) = tokio::time::timeout(
-        std::time::Duration::from_secs(u64::from(timeout_seconds)),
-        exec,
-    )
-    .await
-    {
-        r
+    let exec_result = if let Some(execution_timeout) = execution_timeout {
+        if let Ok(result) = tokio::time::timeout(execution_timeout, exec).await {
+            result
+        } else {
+            let _ = tx
+                .send(Ok(ExecSandboxEvent {
+                    payload: Some(openshell_core::proto::exec_sandbox_event::Payload::Exit(
+                        ExecSandboxExit { exit_code: 124 },
+                    )),
+                }))
+                .await;
+            let _ = proxy_task.await;
+            return Ok(());
+        }
     } else {
-        let _ = tx
-            .send(Ok(ExecSandboxEvent {
-                payload: Some(openshell_core::proto::exec_sandbox_event::Payload::Exit(
-                    ExecSandboxExit { exit_code: 124 },
-                )),
-            }))
-            .await;
-        let _ = proxy_task.await;
-        return Ok(());
+        exec.await
     };
 
     let exit_code = match exec_result {
@@ -2644,7 +2913,7 @@ async fn stream_interactive_exec_over_relay(
     input_stream: tonic::Streaming<ExecSandboxInput>,
     request_tty: bool,
     no_login_shell: bool,
-    timeout_seconds: u32,
+    execution_timeout: Option<std::time::Duration>,
     cols: u32,
     rows: u32,
 ) -> Result<(), Status> {
@@ -2676,25 +2945,22 @@ async fn stream_interactive_exec_over_relay(
         tx.clone(),
     );
 
-    let exec_result = if timeout_seconds == 0 {
-        exec.await
-    } else if let Ok(r) = tokio::time::timeout(
-        std::time::Duration::from_secs(u64::from(timeout_seconds)),
-        exec,
-    )
-    .await
-    {
-        r
+    let exec_result = if let Some(execution_timeout) = execution_timeout {
+        if let Ok(result) = tokio::time::timeout(execution_timeout, exec).await {
+            result
+        } else {
+            let _ = tx
+                .send(Ok(ExecSandboxEvent {
+                    payload: Some(openshell_core::proto::exec_sandbox_event::Payload::Exit(
+                        ExecSandboxExit { exit_code: 124 },
+                    )),
+                }))
+                .await;
+            let _ = proxy_task.await;
+            return Ok(());
+        }
     } else {
-        let _ = tx
-            .send(Ok(ExecSandboxEvent {
-                payload: Some(openshell_core::proto::exec_sandbox_event::Payload::Exit(
-                    ExecSandboxExit { exit_code: 124 },
-                )),
-            }))
-            .await;
-        let _ = proxy_task.await;
-        return Ok(());
+        exec.await
     };
 
     let exit_code = match exec_result {
@@ -3092,33 +3358,8 @@ mod tests {
     use crate::grpc::test_support::{
         authed_request, test_server_state, test_server_state_with_driver,
     };
-    use crate::provider_profile_sources::ProviderProfileSources;
-    use openshell_core::GatewayProviderProfileSourceConfig;
     use openshell_core::proto::GpuResourceRequirements;
     use openshell_core::proto::datamodel::v1::ObjectMeta;
-
-    async fn test_server_state_with_user_only_github_profile() -> Arc<ServerState> {
-        let mut state = test_server_state().await;
-        Arc::get_mut(&mut state)
-            .expect("test server state should be uniquely owned")
-            .provider_profile_sources =
-            ProviderProfileSources::from_config(&[GatewayProviderProfileSourceConfig::User], None)
-                .expect("user-only provider profile source configuration should be valid");
-
-        let github_profile = openshell_providers::builtin_profiles()
-            .iter()
-            .find(|profile| profile.id == "github")
-            .expect("github builtin profile")
-            .to_proto();
-        state
-            .store
-            .put_message(&crate::provider_profile_sources::stored_provider_profile(
-                github_profile,
-            ))
-            .await
-            .expect("store user-managed github profile");
-        state
-    }
 
     // ---- shell_escape ----
 
@@ -3156,13 +3397,16 @@ mod tests {
     #[test]
     fn sandbox_create_telemetry_uses_resolved_template_gpu_request() {
         let request = CreateSandboxRequest {
+            request_id: String::new(),
             spec: Some(SandboxSpec {
                 providers: vec!["github".to_string()],
                 policy: Some(openshell_core::proto::SandboxPolicy::default()),
                 ..SandboxSpec::default()
             }),
-            workload_template_name: "gpu-kata".to_string(),
-            workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+            workload_template: "gpu-kata".to_string(),
+            workspace_scope: Some(openshell_core::proto::workspace_selector(
+                "default".to_string(),
+            )),
             ..CreateSandboxRequest::default()
         };
         let created = Sandbox {
@@ -3195,12 +3439,15 @@ mod tests {
     #[test]
     fn sandbox_create_telemetry_falls_back_to_request_for_unresolved_template() {
         let request = CreateSandboxRequest {
+            request_id: String::new(),
             spec: Some(SandboxSpec {
                 providers: vec!["github".to_string()],
                 ..SandboxSpec::default()
             }),
-            workload_template_name: "missing-template".to_string(),
-            workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+            workload_template: "missing-template".to_string(),
+            workspace_scope: Some(openshell_core::proto::workspace_selector(
+                "default".to_string(),
+            )),
             ..CreateSandboxRequest::default()
         };
 
@@ -3268,7 +3515,8 @@ mod tests {
     fn build_remote_exec_command_basic() {
         use openshell_core::proto::ExecSandboxRequest;
         let req = ExecSandboxRequest {
-            sandbox_id: "test".to_string(),
+            sandbox: "test".to_string(),
+            workspace_scope: None,
             command: vec!["ls".to_string(), "-la".to_string()],
             ..Default::default()
         };
@@ -3279,7 +3527,8 @@ mod tests {
     fn build_remote_exec_command_with_env_and_workdir() {
         use openshell_core::proto::ExecSandboxRequest;
         let req = ExecSandboxRequest {
-            sandbox_id: "test".to_string(),
+            sandbox: "test".to_string(),
+            workspace_scope: None,
             command: vec![
                 "python".to_string(),
                 "-c".to_string(),
@@ -3299,7 +3548,8 @@ mod tests {
     fn build_remote_exec_command_rejects_null_bytes_in_args() {
         use openshell_core::proto::ExecSandboxRequest;
         let req = ExecSandboxRequest {
-            sandbox_id: "test".to_string(),
+            sandbox: "test".to_string(),
+            workspace_scope: None,
             command: vec!["echo".to_string(), "hello\x00world".to_string()],
             ..Default::default()
         };
@@ -3310,7 +3560,8 @@ mod tests {
     fn build_remote_exec_command_rejects_newlines_in_workdir() {
         use openshell_core::proto::ExecSandboxRequest;
         let req = ExecSandboxRequest {
-            sandbox_id: "test".to_string(),
+            sandbox: "test".to_string(),
+            workspace_scope: None,
             command: vec!["ls".to_string()],
             workdir: "/tmp\nmalicious".to_string(),
             ..Default::default()
@@ -3323,7 +3574,8 @@ mod tests {
     fn build_remote_exec_command_accepts_multiline_script() {
         use openshell_core::proto::ExecSandboxRequest;
         let req = ExecSandboxRequest {
-            sandbox_id: "test".to_string(),
+            sandbox: "test".to_string(),
+            workspace_scope: None,
             command: vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -3340,7 +3592,8 @@ mod tests {
     fn build_remote_exec_command_multiline_with_single_quotes() {
         use openshell_core::proto::ExecSandboxRequest;
         let req = ExecSandboxRequest {
-            sandbox_id: "test".to_string(),
+            sandbox: "test".to_string(),
+            workspace_scope: None,
             command: vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -3360,7 +3613,8 @@ mod tests {
     fn tcp_forward_init_allows_loopback_targets() {
         for host in ["127.0.0.1", "::1", "localhost"] {
             let init = TcpForwardInit {
-                sandbox_id: "sbx".to_string(),
+                sandbox: "sbx".to_string(),
+                workspace: String::new(),
                 service_id: String::new(),
                 target: Some(tcp_forward_init::Target::Tcp(TcpRelayTarget {
                     host: host.to_string(),
@@ -3375,7 +3629,8 @@ mod tests {
     #[test]
     fn tcp_forward_init_allows_ssh_target() {
         let init = TcpForwardInit {
-            sandbox_id: "sbx".to_string(),
+            sandbox: "sbx".to_string(),
+            workspace: String::new(),
             target: Some(tcp_forward_init::Target::Ssh(SshRelayTarget::default())),
             ..Default::default()
         };
@@ -3388,7 +3643,8 @@ mod tests {
     #[test]
     fn tcp_forward_init_rejects_non_loopback_targets() {
         let init = TcpForwardInit {
-            sandbox_id: "sbx".to_string(),
+            sandbox: "sbx".to_string(),
+            workspace: String::new(),
             service_id: String::new(),
             target: Some(tcp_forward_init::Target::Tcp(TcpRelayTarget {
                 host: "example.com".to_string(),
@@ -3407,7 +3663,8 @@ mod tests {
     #[test]
     fn tcp_forward_init_rejects_invalid_port() {
         let init = TcpForwardInit {
-            sandbox_id: "sbx".to_string(),
+            sandbox: "sbx".to_string(),
+            workspace: String::new(),
             service_id: String::new(),
             target: Some(tcp_forward_init::Target::Tcp(TcpRelayTarget {
                 host: "127.0.0.1".to_string(),
@@ -3426,7 +3683,8 @@ mod tests {
     #[test]
     fn tcp_forward_init_requires_target() {
         let init = TcpForwardInit {
-            sandbox_id: "sbx".to_string(),
+            sandbox: "sbx".to_string(),
+            workspace: String::new(),
             ..Default::default()
         };
         assert_eq!(
@@ -3482,6 +3740,26 @@ mod tests {
         }
     }
 
+    /// Import a minimal profile so a synthetic provider type resolves.
+    ///
+    /// Provider profiles are import-only: a provider whose type no profile
+    /// declares cannot compose a sandbox. Tests about limits, CAS or credential
+    /// collisions still need their placeholder types to exist.
+    async fn import_test_profile(state: &ServerState, id: &str) {
+        state
+            .store
+            .put_message(&crate::provider_profile_sources::stored_provider_profile(
+                openshell_core::proto::ProviderProfile {
+                    id: id.to_string(),
+                    display_name: id.to_string(),
+                    category: openshell_core::proto::ProviderProfileCategory::Other as i32,
+                    ..Default::default()
+                },
+            ))
+            .await
+            .expect("store test provider profile");
+    }
+
     fn test_provider(name: &str, provider_type: &str) -> Provider {
         test_provider_with_credential_key(name, provider_type, "TOKEN")
     }
@@ -3495,18 +3773,18 @@ mod tests {
             metadata: Some(ObjectMeta {
                 id: format!("provider-{name}"),
                 name: name.to_string(),
-                created_at_ms: 1_000_000,
+                created_time: openshell_core::time::timestamp_from_millis(1_000_000).ok(),
                 labels: HashMap::new(),
                 resource_version: 0,
                 annotations: HashMap::new(),
                 workspace: "default".to_string(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             r#type: provider_type.to_string(),
             credentials: std::iter::once((credential_key.to_string(), "secret".to_string()))
                 .collect(),
             config: HashMap::new(),
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             profile_workspace: "default".to_string(),
             credential_handles: HashMap::new(),
         }
@@ -3517,12 +3795,12 @@ mod tests {
             metadata: Some(ObjectMeta {
                 id: format!("sandbox-{name}"),
                 name: name.to_string(),
-                created_at_ms: 1_000_000,
+                created_time: openshell_core::time::timestamp_from_millis(1_000_000).ok(),
                 labels: std::iter::once(("team".to_string(), "agents".to_string())).collect(),
                 resource_version: 0,
                 annotations: HashMap::new(),
                 workspace: "default".to_string(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             spec: Some(SandboxSpec {
                 log_level: "debug".to_string(),
@@ -3542,12 +3820,12 @@ mod tests {
             metadata: Some(ObjectMeta {
                 id: String::new(),
                 name: name.to_string(),
-                created_at_ms: 0,
+                created_time: openshell_core::time::timestamp_from_millis(0).ok(),
                 labels: HashMap::from([("team".to_string(), "runtime".to_string())]),
                 resource_version: 0,
                 annotations: HashMap::new(),
                 workspace: String::new(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             spec: Some(openshell_core::proto::SandboxWorkloadTemplateSpec {
                 workload: Some(openshell_core::proto::SandboxWorkloadConfig {
@@ -3589,7 +3867,10 @@ mod tests {
             handle_watch_sandbox(
                 &state,
                 authed_request(WatchSandboxRequest {
-                    id: sandbox.object_id().to_string(),
+                    sandbox: "watched".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                     ..Default::default()
                 }),
             )
@@ -3632,6 +3913,8 @@ mod tests {
             handle_delete_sandbox_inner(
                 &delete_state,
                 authed_request(DeleteSandboxRequest {
+                    request_id: String::new(),
+                    allow_missing: false,
                     name: "reused-name".to_string(),
                     workspace_scope: Some(openshell_core::proto::workspace_selector(
                         "default".to_string(),
@@ -3659,7 +3942,10 @@ mod tests {
         drop(global_guard);
 
         let response = delete.await.unwrap().unwrap().into_inner();
-        assert!(response.deleted);
+        assert_eq!(
+            response.outcome(),
+            openshell_core::proto::DeletionOutcome::Completed
+        );
         assert!(
             state
                 .store
@@ -3691,10 +3977,13 @@ mod tests {
         let response = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "work-github".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "work-github".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -3717,7 +4006,7 @@ mod tests {
 
     #[tokio::test]
     async fn attach_sandbox_provider_uses_configured_provider_profile_sources() {
-        let state = test_server_state_with_user_only_github_profile().await;
+        let state = test_server_state().await;
         state
             .store
             .put_message(&test_provider("work-github", "github"))
@@ -3732,14 +4021,17 @@ mod tests {
         let response = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "work-github".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "work-github".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
-        .expect("user-only profile catalog should not include the builtin github profile")
+        .expect("an imported github profile should resolve from the user source")
         .into_inner();
 
         assert!(response.attached);
@@ -3770,10 +4062,13 @@ mod tests {
         let response = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "work-github".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "work-github".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -3821,10 +4116,13 @@ mod tests {
         let response = handle_detach_sandbox_provider(
             &state,
             authed_request(DetachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "work-github".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "work-github".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -3846,10 +4144,13 @@ mod tests {
         let response = handle_detach_sandbox_provider(
             &state,
             authed_request(DetachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "work-github".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "work-github".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -3893,10 +4194,13 @@ mod tests {
         let error = handle_detach_sandbox_provider(
             &state,
             authed_request(DetachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "work-gcp".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "work-gcp".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -3933,8 +4237,10 @@ mod tests {
         let response = handle_list_sandbox_providers(
             &state,
             authed_request(ListSandboxProvidersRequest {
-                sandbox_name: "work".to_string(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -3961,10 +4267,13 @@ mod tests {
         let err = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "missing".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "missing".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -4014,7 +4323,7 @@ mod tests {
     }
 
     #[test]
-    fn interactive_exec_rejects_missing_sandbox_id() {
+    fn interactive_exec_rejects_missing_sandbox_name() {
         use openshell_core::proto::exec_sandbox_input;
         let msg = ExecSandboxInput {
             payload: Some(exec_sandbox_input::Payload::Start(ExecSandboxRequest {
@@ -4024,7 +4333,7 @@ mod tests {
         };
         let err = validate_interactive_exec_start(Some(msg)).unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("sandbox_id"));
+        assert!(err.message().contains("sandbox"));
     }
 
     #[test]
@@ -4032,7 +4341,8 @@ mod tests {
         use openshell_core::proto::exec_sandbox_input;
         let msg = ExecSandboxInput {
             payload: Some(exec_sandbox_input::Payload::Start(ExecSandboxRequest {
-                sandbox_id: "test-id".to_string(),
+                sandbox: "test-id".to_string(),
+                workspace_scope: None,
                 ..Default::default()
             })),
         };
@@ -4046,7 +4356,8 @@ mod tests {
         use openshell_core::proto::exec_sandbox_input;
         let msg = ExecSandboxInput {
             payload: Some(exec_sandbox_input::Payload::Start(ExecSandboxRequest {
-                sandbox_id: "test-id".to_string(),
+                sandbox: "test-id".to_string(),
+                workspace_scope: None,
                 command: vec!["bash".to_string()],
                 environment: std::iter::once(("bad key!".to_string(), "val".to_string())).collect(),
                 ..Default::default()
@@ -4062,7 +4373,8 @@ mod tests {
         use openshell_core::proto::exec_sandbox_input;
         let msg = ExecSandboxInput {
             payload: Some(exec_sandbox_input::Payload::Start(ExecSandboxRequest {
-                sandbox_id: "test-id".to_string(),
+                sandbox: "test-id".to_string(),
+                workspace_scope: None,
                 command: vec!["bash".to_string()],
                 tty: true,
                 cols: 120,
@@ -4071,7 +4383,7 @@ mod tests {
             })),
         };
         let req = validate_interactive_exec_start(Some(msg)).unwrap();
-        assert_eq!(req.sandbox_id, "test-id");
+        assert_eq!(req.sandbox, "test-id");
         assert_eq!(req.command, vec!["bash"]);
         assert!(req.tty);
         assert_eq!(req.cols, 120);
@@ -4083,14 +4395,15 @@ mod tests {
         let state = test_server_state().await;
 
         let req = ExecSandboxRequest {
-            sandbox_id: "nonexistent".to_string(),
+            sandbox: "nonexistent".to_string(),
+            workspace_scope: None,
             command: vec!["bash".to_string()],
             tty: true,
             ..Default::default()
         };
         let sandbox_result = state
             .store
-            .get_message::<Sandbox>(&req.sandbox_id)
+            .get_message_by_name::<Sandbox>("default", &req.sandbox)
             .await
             .unwrap();
         assert!(sandbox_result.is_none());
@@ -4118,6 +4431,8 @@ mod tests {
     #[tokio::test]
     async fn create_sandbox_rejects_provider_credential_key_collisions() {
         let state = test_server_state().await;
+        import_test_profile(&state, "outlook").await;
+        import_test_profile(&state, "google-drive").await;
         state
             .store
             .put_message(&test_provider("provider-a", "outlook"))
@@ -4132,6 +4447,7 @@ mod tests {
         let err = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "collision".to_string(),
                 spec: Some(SandboxSpec {
                     providers: vec!["provider-a".to_string(), "provider-b".to_string()],
@@ -4139,9 +4455,11 @@ mod tests {
                 }),
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 await_main_process_attachment: false,
-                workload_template_name: String::new(),
+                workload_template: String::new(),
             }),
         )
         .await
@@ -4155,27 +4473,108 @@ mod tests {
 
     #[tokio::test]
     async fn create_sandbox_uses_configured_provider_profile_sources() {
-        let state = test_server_state_with_user_only_github_profile().await;
+        let state = test_server_state().await;
 
         let response = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "user-catalog".to_string(),
                 spec: Some(SandboxSpec::default()),
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 await_main_process_attachment: false,
-                workload_template_name: String::new(),
+                workload_template: String::new(),
             }),
         )
         .await
-        .expect("user-only profile catalog should not include the builtin github profile")
+        .expect("an imported github profile should resolve from the user source")
         .into_inner();
 
         assert_eq!(
             response.sandbox.expect("created sandbox").object_name(),
             "user-catalog"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_sandbox_rejects_a_provider_whose_profile_is_absent() {
+        let state = test_server_state().await;
+        state
+            .store
+            .put_message(&test_provider("orphan", "never-imported"))
+            .await
+            .unwrap();
+
+        let err = handle_create_sandbox(
+            &state,
+            authed_request(CreateSandboxRequest {
+                request_id: String::new(),
+                name: "orphan-sandbox".to_string(),
+                spec: Some(SandboxSpec {
+                    providers: vec!["orphan".to_string()],
+                    ..Default::default()
+                }),
+                labels: HashMap::new(),
+                annotations: HashMap::new(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                await_main_process_attachment: false,
+                workload_template: String::new(),
+            }),
+        )
+        .await
+        .expect_err("a provider with no profile must not compose a sandbox");
+
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        let message = err.message();
+        assert!(message.contains("'orphan'"), "{message}");
+        assert!(message.contains("'never-imported'"), "{message}");
+        assert!(
+            message.contains("openshell provider profile import"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_sandbox_provider_rejects_a_provider_whose_profile_is_absent() {
+        let state = test_server_state().await;
+        state
+            .store
+            .put_message(&test_provider("orphan", "never-imported"))
+            .await
+            .unwrap();
+        state
+            .store
+            .put_message(&test_sandbox("work", Vec::new()))
+            .await
+            .unwrap();
+
+        let err = handle_attach_sandbox_provider(
+            &state,
+            authed_request(AttachSandboxProviderRequest {
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                provider: "orphan".to_string(),
+                expected_resource_version: 0,
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+            }),
+        )
+        .await
+        .expect_err("a provider with no profile must not attach");
+
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        let message = err.message();
+        assert!(message.contains("'never-imported'"), "{message}");
+        assert!(
+            message.contains("openshell provider profile import"),
+            "{message}"
         );
     }
 
@@ -4194,6 +4593,7 @@ mod tests {
         let err = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "reserved-policy-key".to_string(),
                 spec: Some(SandboxSpec {
                     policy: Some(policy),
@@ -4201,9 +4601,11 @@ mod tests {
                 }),
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 await_main_process_attachment: false,
-                workload_template_name: String::new(),
+                workload_template: String::new(),
             }),
         )
         .await
@@ -4308,7 +4710,9 @@ mod tests {
                 }),
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -4365,7 +4769,9 @@ mod tests {
                     }),
                     labels: HashMap::new(),
                     annotations: HashMap::new(),
-                    workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                     ..Default::default()
                 }),
             )
@@ -4464,7 +4870,9 @@ mod tests {
                         }),
                         labels: HashMap::new(),
                         annotations: HashMap::new(),
-                        workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                        workspace_scope: Some(openshell_core::proto::workspace_selector(
+                            "default".to_string(),
+                        )),
                         ..Default::default()
                     }),
                 )
@@ -4532,7 +4940,9 @@ mod tests {
                     }),
                     labels: HashMap::new(),
                     annotations: HashMap::new(),
-                    workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                     ..Default::default()
                 }),
             )
@@ -4561,13 +4971,16 @@ mod tests {
         let response = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "annotated".to_string(),
                 spec: Some(SandboxSpec::default()),
                 labels: HashMap::new(),
                 annotations: HashMap::from([(annotation_key.clone(), annotation_value.clone())]),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 await_main_process_attachment: false,
-                workload_template_name: String::new(),
+                workload_template: String::new(),
             }),
         )
         .await
@@ -4587,7 +5000,9 @@ mod tests {
             &state,
             authed_request(GetSandboxRequest {
                 name: "annotated".to_string(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -4619,6 +5034,7 @@ mod tests {
         let response = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "partial-id".to_string(),
                 spec: Some(SandboxSpec {
                     policy: Some(policy),
@@ -4626,9 +5042,11 @@ mod tests {
                 }),
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 await_main_process_attachment: false,
-                workload_template_name: String::new(),
+                workload_template: String::new(),
             }),
         )
         .await
@@ -4651,7 +5069,9 @@ mod tests {
             &state,
             authed_request(GetSandboxRequest {
                 name: "partial-id".to_string(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -4684,6 +5104,7 @@ mod tests {
         let response = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "kube-partial-id".to_string(),
                 spec: Some(SandboxSpec {
                     policy: Some(policy),
@@ -4691,9 +5112,11 @@ mod tests {
                 }),
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 await_main_process_attachment: false,
-                workload_template_name: String::new(),
+                workload_template: String::new(),
             }),
         )
         .await
@@ -4719,13 +5142,16 @@ mod tests {
         let err = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "bad-label".to_string(),
                 spec: Some(SandboxSpec::default()),
                 labels: HashMap::from([("team".to_string(), "x".repeat(512))]),
                 annotations: HashMap::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 await_main_process_attachment: false,
-                workload_template_name: String::new(),
+                workload_template: String::new(),
             }),
         )
         .await
@@ -4750,6 +5176,7 @@ mod tests {
             handle_create_sandbox(
                 &task_state,
                 authed_request(CreateSandboxRequest {
+                    request_id: String::new(),
                     name: "guarded-create".to_string(),
                     spec: Some(SandboxSpec {
                         providers: vec!["work-github".to_string()],
@@ -4757,9 +5184,11 @@ mod tests {
                     }),
                     labels: HashMap::new(),
                     annotations: HashMap::new(),
-                    workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                     await_main_process_attachment: false,
-                    workload_template_name: String::new(),
+                    workload_template: String::new(),
                 }),
             )
             .await
@@ -4791,6 +5220,7 @@ mod tests {
         let created = handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(test_workload_template("gpu-kata")),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -4847,6 +5277,8 @@ mod tests {
         let deleted = handle_delete_sandbox_template(
             &state,
             authed_request(DeleteSandboxTemplateRequest {
+                request_id: String::new(),
+                allow_missing: false,
                 name: "gpu-kata".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -4856,7 +5288,10 @@ mod tests {
         .await
         .expect("template delete should succeed")
         .into_inner();
-        assert!(deleted.deleted);
+        assert_eq!(
+            deleted.outcome(),
+            openshell_core::proto::DeletionOutcome::Completed
+        );
 
         let missing = handle_get_sandbox_template(
             &state,
@@ -4885,6 +5320,7 @@ mod tests {
         handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(gpu),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -4903,6 +5339,7 @@ mod tests {
         handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(cpu),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -4939,6 +5376,7 @@ mod tests {
         let err = handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(test_workload_template(" gpu-kata ")),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -4977,6 +5415,7 @@ mod tests {
         crate::grpc::workspace::handle_create_workspace(
             &state,
             Request::new(CreateWorkspaceRequest {
+                request_id: String::new(),
                 name: "beta".to_string(),
                 labels: HashMap::new(),
             }),
@@ -4990,8 +5429,11 @@ mod tests {
         let err = handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(template),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5027,6 +5469,7 @@ mod tests {
         let err = handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(template),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -5166,6 +5609,7 @@ mod tests {
         let err = handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(test_workload_template("overflow")),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -5197,6 +5641,7 @@ mod tests {
                 handle_create_sandbox_template(
                     &state,
                     authed_request(CreateSandboxTemplateRequest {
+                        request_id: String::new(),
                         template: Some(test_workload_template(&format!("overflow-{index}"))),
                         workspace_scope: Some(openshell_core::proto::workspace_selector(
                             "default".to_string(),
@@ -5245,6 +5690,7 @@ mod tests {
                 "template",
                 "resource_requirements",
             ],
+            &["provider_attachment_epoch"],
         );
     }
 
@@ -5252,6 +5698,7 @@ mod tests {
         message_name: &str,
         copied_from_create_request: &[&str],
         rejected_template_workload_overrides: &[&str],
+        generated_by_gateway: &[&str],
     ) {
         let pool = prost_reflect::DescriptorPool::decode(openshell_core::FILE_DESCRIPTOR_SET)
             .expect("decode descriptor set");
@@ -5261,8 +5708,16 @@ mod tests {
         let classified: std::collections::HashSet<&str> = copied_from_create_request
             .iter()
             .chain(rejected_template_workload_overrides.iter())
+            .chain(generated_by_gateway.iter())
             .copied()
             .collect();
+        assert_eq!(
+            classified.len(),
+            copied_from_create_request.len()
+                + rejected_template_workload_overrides.len()
+                + generated_by_gateway.len(),
+            "every field must have exactly one create-time owner"
+        );
         let actual: std::collections::HashSet<String> = message
             .fields()
             .map(|field| field.name().to_string())
@@ -5273,7 +5728,8 @@ mod tests {
                 classified.contains(field.as_str()),
                 "{message_name}.{field} is not classified for template-backed sandbox creates. \
                  Add it to copied_from_create_request when callers own the create-time value, \
-                 or to rejected_template_workload_overrides when the workload template owns it."
+                 to rejected_template_workload_overrides when the workload template owns it, \
+                 or to generated_by_gateway when the gateway replaces the caller's value."
             );
         }
 
@@ -5283,6 +5739,60 @@ mod tests {
                 "{message_name}.{field} is classified for template-backed sandbox creates, \
                  but the proto field no longer exists"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_sandbox_ignores_caller_provider_attachment_epoch() {
+        let state = test_server_state().await;
+        handle_create_sandbox_template(
+            &state,
+            authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
+                template: Some(test_workload_template("epoch-template")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+            }),
+        )
+        .await
+        .unwrap();
+        let supplied_epoch = uuid::Uuid::new_v4().to_string();
+        let mut generated_epochs = std::collections::HashSet::new();
+        for (name, workload_template_name) in
+            [("direct-epoch", ""), ("template-epoch", "epoch-template")]
+        {
+            let created = handle_create_sandbox(
+                &state,
+                authed_request(CreateSandboxRequest {
+                    name: name.to_string(),
+                    spec: Some(SandboxSpec {
+                        provider_attachment_epoch: supplied_epoch.clone(),
+                        ..Default::default()
+                    }),
+                    workload_template: workload_template_name.to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner()
+            .sandbox
+            .unwrap();
+            let epoch = &created.spec.as_ref().unwrap().provider_attachment_epoch;
+            assert_ne!(epoch, &supplied_epoch);
+            assert!(uuid::Uuid::parse_str(epoch).is_ok());
+            assert!(generated_epochs.insert(epoch.clone()));
+            let stored = state
+                .store
+                .get_message::<Sandbox>(created.object_id())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(&stored.spec.unwrap().provider_attachment_epoch, epoch);
         }
     }
 
@@ -5297,6 +5807,7 @@ mod tests {
         handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(test_workload_template("gpu-kata")),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -5321,6 +5832,7 @@ mod tests {
         let created = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "from-template".to_string(),
                 spec: Some(SandboxSpec {
                     providers: vec!["work-github".to_string()],
@@ -5334,7 +5846,7 @@ mod tests {
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
-                workload_template_name: "gpu-kata".to_string(),
+                workload_template: "gpu-kata".to_string(),
                 await_main_process_attachment: false,
             }),
         )
@@ -5401,6 +5913,7 @@ mod tests {
         handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(template),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -5413,6 +5926,7 @@ mod tests {
         let created = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "from-template".to_string(),
                 spec: Some(SandboxSpec::default()),
                 labels: HashMap::new(),
@@ -5420,7 +5934,7 @@ mod tests {
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
-                workload_template_name: "default-image".to_string(),
+                workload_template: "default-image".to_string(),
                 await_main_process_attachment: false,
             }),
         )
@@ -5452,6 +5966,7 @@ mod tests {
         handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(template),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -5464,6 +5979,7 @@ mod tests {
         let created = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "from-template".to_string(),
                 spec: Some(SandboxSpec::default()),
                 labels: HashMap::new(),
@@ -5471,7 +5987,7 @@ mod tests {
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
-                workload_template_name: "default-gpu".to_string(),
+                workload_template: "default-gpu".to_string(),
                 await_main_process_attachment: false,
             }),
         )
@@ -5503,6 +6019,7 @@ mod tests {
         let err = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "from-corrupt".to_string(),
                 spec: Some(SandboxSpec::default()),
                 labels: HashMap::new(),
@@ -5510,7 +6027,7 @@ mod tests {
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
-                workload_template_name: "corrupt-template".to_string(),
+                workload_template: "corrupt-template".to_string(),
                 await_main_process_attachment: false,
             }),
         )
@@ -5527,6 +6044,7 @@ mod tests {
         handle_create_sandbox_template(
             &state,
             authed_request(CreateSandboxTemplateRequest {
+                request_id: String::new(),
                 template: Some(test_workload_template("gpu-kata")),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
@@ -5539,6 +6057,7 @@ mod tests {
         let err = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "bad-template-create".to_string(),
                 spec: Some(SandboxSpec {
                     environment: HashMap::from([("INLINE".to_string(), "blocked".to_string())]),
@@ -5549,7 +6068,7 @@ mod tests {
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
-                workload_template_name: "gpu-kata".to_string(),
+                workload_template: "gpu-kata".to_string(),
                 await_main_process_attachment: false,
             }),
         )
@@ -5567,6 +6086,7 @@ mod tests {
         let err = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "bad-template-create".to_string(),
                 spec: Some(SandboxSpec::default()),
                 labels: HashMap::new(),
@@ -5574,7 +6094,7 @@ mod tests {
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
-                workload_template_name: "Invalid_Template_Name".to_string(),
+                workload_template: "Invalid_Template_Name".to_string(),
                 await_main_process_attachment: false,
             }),
         )
@@ -5592,6 +6112,7 @@ mod tests {
         let err = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "bad-template-create".to_string(),
                 spec: Some(SandboxSpec {
                     providers: (0..=MAX_PROVIDERS).map(|i| format!("p-{i}")).collect(),
@@ -5602,7 +6123,7 @@ mod tests {
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
-                workload_template_name: "missing-template".to_string(),
+                workload_template: "missing-template".to_string(),
                 await_main_process_attachment: false,
             }),
         )
@@ -5620,6 +6141,7 @@ mod tests {
         let err = handle_create_sandbox(
             &state,
             authed_request(CreateSandboxRequest {
+                request_id: String::new(),
                 name: "bad-direct-create".to_string(),
                 spec: Some(SandboxSpec {
                     providers: (0..=MAX_PROVIDERS).map(|i| format!("p-{i}")).collect(),
@@ -5630,7 +6152,7 @@ mod tests {
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "missing-workspace".to_string(),
                 )),
-                workload_template_name: String::new(),
+                workload_template: String::new(),
                 await_main_process_attachment: false,
             }),
         )
@@ -5644,6 +6166,8 @@ mod tests {
     #[tokio::test]
     async fn attach_sandbox_provider_rejects_credential_key_collisions() {
         let state = test_server_state().await;
+        import_test_profile(&state, "outlook").await;
+        import_test_profile(&state, "google-drive").await;
         state
             .store
             .put_message(&test_provider("provider-a", "outlook"))
@@ -5663,10 +6187,13 @@ mod tests {
         let err = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "provider-b".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "provider-b".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -5681,6 +6208,7 @@ mod tests {
     #[tokio::test]
     async fn attach_sandbox_provider_accepts_at_max_providers_limit() {
         let state = test_server_state().await;
+        import_test_profile(&state, "generic").await;
 
         // Create MAX_PROVIDERS (32) providers
         for i in 0..MAX_PROVIDERS {
@@ -5710,10 +6238,13 @@ mod tests {
         let response = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "provider-31".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "provider-31".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -5736,6 +6267,7 @@ mod tests {
     #[tokio::test]
     async fn attach_sandbox_provider_rejects_beyond_max_providers_limit() {
         let state = test_server_state().await;
+        import_test_profile(&state, "generic").await;
 
         // Create MAX_PROVIDERS + 1 providers
         for i in 0..=MAX_PROVIDERS {
@@ -5765,10 +6297,13 @@ mod tests {
         let err = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "provider-32".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "provider-32".to_string(),
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -5796,6 +6331,7 @@ mod tests {
 
         // Provider name that exceeds validation limits
         let long_name = "a".repeat(1000);
+        import_test_profile(&state, "generic").await;
         state
             .store
             .put_message(&test_provider(&long_name, "generic"))
@@ -5812,10 +6348,13 @@ mod tests {
         let err = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: long_name,
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: long_name,
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -5839,10 +6378,13 @@ mod tests {
         let err = handle_detach_sandbox_provider(
             &state,
             authed_request(DetachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: long_name,
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: long_name,
                 expected_resource_version: 0,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -5868,7 +6410,10 @@ mod tests {
             handle_create_ssh_session(
                 &state1,
                 authed_request(CreateSshSessionRequest {
-                    sandbox_id: "sandbox-work".to_string(),
+                    sandbox: "work".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
             )
             .await
@@ -5879,7 +6424,10 @@ mod tests {
             handle_create_ssh_session(
                 &state2,
                 authed_request(CreateSshSessionRequest {
-                    sandbox_id: "sandbox-work".to_string(),
+                    sandbox: "work".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
             )
             .await
@@ -5932,7 +6480,10 @@ mod tests {
         let response = handle_create_ssh_session(
             &state,
             authed_request(CreateSshSessionRequest {
-                sandbox_id: "sandbox-work".to_string(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await;
@@ -5944,6 +6495,9 @@ mod tests {
                 .supervisor_sessions
                 .finalize_main_process_exit("sandbox-work")
         );
+        assert!(sandbox_relay_reachable(&state, &sandbox));
+
+        assert!(state.supervisor_sessions.disconnect("sandbox-work"));
         assert!(!sandbox_relay_reachable(&state, &sandbox));
     }
 
@@ -5960,7 +6514,10 @@ mod tests {
         let response = handle_create_ssh_session(
             &state,
             authed_request(CreateSshSessionRequest {
-                sandbox_id: "sandbox-work".to_string(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5973,7 +6530,10 @@ mod tests {
         let handle1 = tokio::spawn(async move {
             handle_revoke_ssh_session(
                 &state1,
-                authed_request(RevokeSshSessionRequest { token: token1 }),
+                authed_request(RevokeSshSessionRequest {
+                    allow_missing: false,
+                    token: token1,
+                }),
             )
             .await
         });
@@ -5983,7 +6543,10 @@ mod tests {
         let handle2 = tokio::spawn(async move {
             handle_revoke_ssh_session(
                 &state2,
-                authed_request(RevokeSshSessionRequest { token: token2 }),
+                authed_request(RevokeSshSessionRequest {
+                    allow_missing: false,
+                    token: token2,
+                }),
             )
             .await
         });
@@ -5994,7 +6557,11 @@ mod tests {
         // One should succeed, one may fail with ABORTED due to CAS conflict
         let successes = [&result1, &result2]
             .iter()
-            .filter(|r| r.is_ok() && r.as_ref().unwrap().get_ref().revoked)
+            .filter(|r| {
+                r.is_ok()
+                    && r.as_ref().unwrap().get_ref().outcome()
+                        == openshell_core::proto::DeletionOutcome::Completed
+            })
             .count();
 
         // At least one should succeed in revoking
@@ -6038,10 +6605,13 @@ mod tests {
         let response = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "github".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "github".to_string(),
                 expected_resource_version: current_version,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -6090,10 +6660,13 @@ mod tests {
         let err = handle_attach_sandbox_provider(
             &state,
             authed_request(AttachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "github".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "github".to_string(),
                 expected_resource_version: 99,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -6153,10 +6726,13 @@ mod tests {
         let response = handle_detach_sandbox_provider(
             &state,
             authed_request(DetachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "github".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "github".to_string(),
                 expected_resource_version: current_version,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -6205,10 +6781,13 @@ mod tests {
         let err = handle_detach_sandbox_provider(
             &state,
             authed_request(DetachSandboxProviderRequest {
-                sandbox_name: "work".to_string(),
-                provider_name: "github".to_string(),
+                request_id: String::new(),
+                sandbox: "work".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                provider: "github".to_string(),
                 expected_resource_version: 99,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             }),
         )
         .await
@@ -6246,6 +6825,7 @@ mod tests {
         use std::sync::Arc;
 
         let state = Arc::new(test_server_state().await);
+        import_test_profile(&state, "generic").await;
 
         // Create multiple providers
         for i in 0..3 {
@@ -6286,10 +6866,13 @@ mod tests {
                 handle_attach_sandbox_provider(
                     &state_clone,
                     authed_request(AttachSandboxProviderRequest {
-                        sandbox_name: "work".to_string(),
-                        provider_name: format!("provider-{i}"),
+                        request_id: String::new(),
+                        sandbox: "work".to_string(),
+                        workspace_scope: Some(openshell_core::proto::workspace_selector(
+                            "default".to_string(),
+                        )),
+                        provider: format!("provider-{i}"),
                         expected_resource_version: initial_version,
-                        workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                     }),
                 )
                 .await
@@ -6350,6 +6933,7 @@ mod tests {
         crate::grpc::workspace::handle_create_workspace(
             &state,
             Request::new(CreateWorkspaceRequest {
+                request_id: String::new(),
                 name: "beta".to_string(),
                 labels: HashMap::new(),
             }),
@@ -6534,10 +7118,9 @@ mod tests {
         );
     }
 
-    /// Non-members must receive `PERMISSION_DENIED` — never `NOT_FOUND` — when
-    /// calling workspace-scoped sandbox RPCs with a workspace they do not belong
-    /// to.  If `authorize_workspace` ran *after* a store lookup the error code
-    /// would leak whether the workspace name exists (CWE-203 oracle).
+    /// Workspace collection operations reject non-members, while operations on
+    /// a sandbox reference hide both missing and unauthorized sandboxes as
+    /// `NOT_FOUND` to avoid an object-existence oracle.
     #[tokio::test]
     async fn non_member_gets_permission_denied_not_workspace_oracle() {
         use crate::auth::identity::{Identity, IdentityProvider};
@@ -6567,7 +7150,9 @@ mod tests {
         let err = handle_create_sandbox(
             &state,
             non_member_request(CreateSandboxRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 spec: Some(SandboxSpec::default()),
                 ..Default::default()
             }),
@@ -6585,16 +7170,18 @@ mod tests {
         let err = handle_get_sandbox(
             &state,
             non_member_request(GetSandboxRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
-                name: "any".into(),
+                name: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
             }),
         )
         .await
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_get_sandbox should reject non-members with PermissionDenied"
+            Code::NotFound,
+            "handle_get_sandbox should hide unauthorized sandbox existence"
         );
 
         // --- handle_list_sandboxes ---
@@ -6617,23 +7204,28 @@ mod tests {
         let err = handle_list_sandbox_providers(
             &state,
             non_member_request(ListSandboxProvidersRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
-                ..Default::default()
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
             }),
         )
         .await
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_list_sandbox_providers should reject non-members with PermissionDenied"
+            Code::NotFound,
+            "handle_list_sandbox_providers should hide unauthorized sandbox existence"
         );
 
         // --- handle_attach_sandbox_provider ---
         let err = handle_attach_sandbox_provider(
             &state,
             non_member_request(AttachSandboxProviderRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -6641,15 +7233,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_attach_sandbox_provider should reject non-members with PermissionDenied"
+            Code::NotFound,
+            "handle_attach_sandbox_provider should hide unauthorized sandbox existence"
         );
 
         // --- handle_detach_sandbox_provider ---
         let err = handle_detach_sandbox_provider(
             &state,
             non_member_request(DetachSandboxProviderRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -6657,8 +7252,8 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_detach_sandbox_provider should reject non-members with PermissionDenied"
+            Code::NotFound,
+            "handle_detach_sandbox_provider should hide unauthorized sandbox existence"
         );
 
         // --- handle_delete_sandbox ---
@@ -6666,49 +7261,59 @@ mod tests {
         let err = handle_delete_sandbox(
             &state,
             non_member_request(DeleteSandboxRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
-                name: "any".into(),
+                request_id: String::new(),
+                allow_missing: false,
+                name: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
             }),
         )
         .await
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_delete_sandbox should reject non-members with PermissionDenied"
+            Code::NotFound,
+            "handle_delete_sandbox should hide unauthorized sandbox existence"
         );
 
         for result in [
             handle_stop_sandbox(
                 &state,
                 non_member_request(StopSandboxRequest {
-                    workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
-                    name: "any".into(),
+                    request_id: String::new(),
+                    name: ("any").to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "no-such-ws".to_string(),
+                    )),
                 }),
             )
             .await,
             handle_start_sandbox(
                 &state,
                 non_member_request(StartSandboxRequest {
-                    workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
-                    name: "any".into(),
+                    request_id: String::new(),
+                    name: ("any").to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "no-such-ws".to_string(),
+                    )),
                 }),
             )
             .await,
         ] {
             assert_eq!(
                 result.unwrap_err().code(),
-                Code::PermissionDenied,
-                "lifecycle handlers should reject non-members"
+                Code::NotFound,
+                "lifecycle handlers should hide unauthorized sandbox existence"
             );
         }
     }
 
-    /// ID-based data-plane handlers must return `NOT_FOUND` — never
+    /// Name-based data-plane handlers must return `NOT_FOUND` — never
     /// `PERMISSION_DENIED` — when the caller lacks workspace access, so that
     /// cross-workspace sandbox existence cannot be inferred (CWE-203).
     #[tokio::test]
-    async fn id_based_handlers_hide_cross_workspace_sandboxes() {
+    async fn name_based_handlers_hide_cross_workspace_sandboxes() {
         use crate::auth::identity::{Identity, IdentityProvider};
         use crate::auth::principal::{Principal, UserPrincipal};
         use tonic::Code;
@@ -6732,13 +7337,25 @@ mod tests {
 
         let mut sandbox = test_sandbox("cross-ws", Vec::new());
         sandbox.metadata.as_mut().unwrap().workspace = "other-workspace".to_string();
+        sandbox.set_phase(SandboxPhase::Completed as i32);
         state.store.put_message(&sandbox).await.unwrap();
+        let (tx, _rx) = mpsc::channel(1);
+        let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+        let _ = state.supervisor_sessions.register(
+            sandbox.object_id().to_string(),
+            "retained-terminal-session".to_string(),
+            tx,
+            shutdown_tx,
+        );
 
         // --- handle_watch_sandbox ---
         let err = handle_watch_sandbox(
             &state,
             non_member_request(WatchSandboxRequest {
-                id: "sandbox-cross-ws".into(),
+                sandbox: "cross-ws".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "other-workspace".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -6754,7 +7371,10 @@ mod tests {
         let err = handle_create_ssh_session(
             &state,
             non_member_request(CreateSshSessionRequest {
-                sandbox_id: "sandbox-cross-ws".into(),
+                sandbox: "cross-ws".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "other-workspace".to_string(),
+                )),
             }),
         )
         .await
@@ -6778,7 +7398,10 @@ mod tests {
         let response = handle_create_ssh_session(
             &state,
             authed_request(CreateSshSessionRequest {
-                sandbox_id: "sandbox-ws-test".to_string(),
+                sandbox: "ws-test".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6788,6 +7411,7 @@ mod tests {
         handle_revoke_ssh_session(
             &state,
             authed_request(RevokeSshSessionRequest {
+                allow_missing: false,
                 token: token.clone(),
             }),
         )

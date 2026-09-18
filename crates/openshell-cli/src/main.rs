@@ -366,7 +366,7 @@ const POLICY_EXAMPLES: &str = "\x1b[1mALIAS\x1b[0m
   $ openshell policy set my-sandbox --policy policy.yaml
   $ openshell policy update my-sandbox --add-endpoint api.github.com:443:read-only:rest:enforce
   $ openshell policy update my-sandbox --add-endpoint realtime.example.com:443:read-write:websocket:enforce:websocket-credential-rewrite,allowed-ip=10.0.0.0/8
-  $ openshell policy update my-sandbox --add-allow 'api.github.com:443:GET:/repos/**'
+  $ openshell policy update my-sandbox --rule-name github --binary /usr/bin/gh --add-allow 'api.github.com:443:GET:/repos/**'
   $ openshell policy set --global --policy policy.yaml
   $ openshell policy delete --global
   $ openshell policy list my-sandbox
@@ -644,7 +644,7 @@ enum Commands {
     /// Two mutually exclusive modes:
     ///
     /// **Token mode** (used internally by `sandbox connect`):
-    ///   `openshell ssh-proxy --gateway <url> --sandbox-id <id> --token <token>`
+    ///   `openshell ssh-proxy --gateway <url> --sandbox <name> --token <token>`
     ///
     /// **Name mode** (for use in `~/.ssh/config`):
     ///   `openshell ssh-proxy --gateway <name> --name <sandbox-name>`
@@ -655,9 +655,9 @@ enum Commands {
         #[arg(long, short = 'g')]
         gateway: Option<String>,
 
-        /// Sandbox id. Required in token mode.
+        /// Sandbox name. Required in token mode.
         #[arg(long)]
-        sandbox_id: Option<String>,
+        sandbox: Option<String>,
 
         /// SSH session token. Required in token mode.
         #[arg(long)]
@@ -944,6 +944,9 @@ enum ProviderCommands {
         /// Credential expiry (`KEY=TIMESTAMP`). Accepts epoch milliseconds or RFC3339. A zero timestamp clears expiry.
         #[arg(long = "credential-expires-at", value_name = "KEY=TIMESTAMP")]
         credential_expires_at: Vec<String>,
+
+        #[command(flatten)]
+        readiness: ProviderReadinessArgs,
     },
 
     /// Delete providers by name.
@@ -1372,7 +1375,7 @@ enum SandboxCommands {
         no_tty: bool,
 
         /// Start the canonical main process without attaching to it.
-        #[arg(long, conflicts_with_all = ["editor", "no_keep"])]
+        #[arg(long, conflicts_with = "editor")]
         detach: bool,
 
         /// Auto-create missing providers from local credentials.
@@ -1624,6 +1627,32 @@ enum SandboxCommands {
     Template(SandboxTemplateCommands),
 }
 
+/// Common observation flags; the deadline starts after the mutation is saved.
+#[derive(clap::Args, Debug)]
+struct ProviderReadinessArgs {
+    /// Wait until the sandbox applies the credentials, policy, and environment for new processes.
+    #[arg(long)]
+    wait: bool,
+
+    /// Maximum wait in seconds after saving the change, shared by all selected sandboxes.
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=3600))]
+    timeout: u64,
+
+    /// Output format; JSON and YAML include change IDs and results for each sandbox.
+    #[arg(short = 'o', long = "output", value_enum, default_value_t = OutputFormat::Table)]
+    output: OutputFormat,
+}
+
+impl ProviderReadinessArgs {
+    fn options(&self) -> run::ProviderWaitOptions<'_> {
+        run::ProviderWaitOptions {
+            wait: self.wait,
+            timeout: std::time::Duration::from_secs(self.timeout),
+            output: self.output.as_str(),
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 enum SandboxProviderCommands {
     /// List providers attached to a sandbox.
@@ -1648,6 +1677,9 @@ enum SandboxProviderCommands {
         /// Provider name to attach.
         #[arg(add = ArgValueCompleter::new(completers::complete_provider_names))]
         provider: String,
+
+        #[command(flatten)]
+        readiness: ProviderReadinessArgs,
     },
 
     /// Detach a provider from a sandbox.
@@ -1660,6 +1692,28 @@ enum SandboxProviderCommands {
         /// Provider name to detach.
         #[arg(add = ArgValueCompleter::new(completers::complete_provider_names))]
         provider: String,
+
+        #[command(flatten)]
+        readiness: ProviderReadinessArgs,
+    },
+
+    /// Check whether a sandbox has applied a provider change.
+    #[command(help_template = LEAF_HELP_TEMPLATE, next_help_heading = "FLAGS")]
+    Status {
+        /// Sandbox name.
+        #[arg(add = ArgValueCompleter::new(completers::complete_sandbox_names))]
+        name: String,
+
+        /// Provider whose attachment or revocation is being inspected.
+        #[arg(add = ArgValueCompleter::new(completers::complete_provider_names))]
+        provider: String,
+
+        /// Change ID returned by attach, detach, or update; omitted means the latest saved state.
+        #[arg(long = "receipt")]
+        receipt: Option<String>,
+
+        #[command(flatten)]
+        readiness: ProviderReadinessArgs,
     },
 }
 
@@ -1890,11 +1944,15 @@ enum PolicyCommands {
         #[arg(long = "remove-endpoint")]
         remove_endpoints: Vec<String>,
 
-        /// Add a REST or WebSocket method/path allow rule: `host:port:METHOD:path_glob`.
+        /// Append an allow rule: `host:port[,port...]:METHOD:path_glob`.
+        /// List every port on the target endpoint.
+        /// Requires --rule-name and the complete --binary list or --any-binary.
         #[arg(long = "add-allow")]
         add_allow: Vec<String>,
 
-        /// Add a REST or WebSocket method/path deny rule: `host:port:METHOD:path_glob`.
+        /// Append a deny rule: `host:port[,port...]:METHOD:path_glob`.
+        /// List every port on the target endpoint.
+        /// Requires --rule-name and the complete --binary list or --any-binary.
         #[arg(long = "add-deny")]
         add_deny: Vec<String>,
 
@@ -1902,13 +1960,22 @@ enum PolicyCommands {
         #[arg(long = "remove-rule")]
         remove_rules: Vec<String>,
 
-        /// Add binaries to each --add-endpoint rule.
+        /// Add a binary to --add-endpoint, or declare every binary of an L7 target rule.
         #[arg(long = "binary", value_hint = ValueHint::FilePath)]
         binaries: Vec<String>,
 
-        /// Override the generated rule name when exactly one --add-endpoint is provided.
+        /// Name the target rule for L7 appends, or override one --add-endpoint rule name.
         #[arg(long = "rule-name")]
         rule_name: Option<String>,
+
+        /// Explicitly declare that the target rule for L7 appends allows any binary.
+        #[arg(long, conflicts_with = "binaries")]
+        any_binary: bool,
+
+        /// Select an exact endpoint path for L7 appends; an empty value selects no path.
+        /// This is distinct from the appended method/path matcher.
+        #[arg(long)]
+        endpoint_path: Option<String>,
 
         /// Preview the merged policy without sending it to the gateway.
         #[arg(long)]
@@ -2141,7 +2208,7 @@ enum ServiceCommands {
         page_token: String,
 
         /// List services across all workspaces (overrides --workspace).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "sandbox")]
         all_workspaces: bool,
 
         /// Output format.
@@ -2504,19 +2571,21 @@ async fn run_async() -> Result<()> {
             command: Some(fwd_cmd),
         }) => match fwd_cmd {
             ForwardCommands::Stop { port, name } => {
-                let name = match name {
-                    Some(n) => n,
+                let (workspace, name) = match name {
+                    Some(n) => (cli.workspace.clone(), n),
                     None => {
-                        if let Some(n) = run::find_forward_by_port(port)? {
-                            eprintln!("→ Found forward on sandbox '{n}'");
-                            n
+                        if let Some((workspace, name)) = run::find_forward_by_port(port)? {
+                            eprintln!(
+                                "→ Found forward on sandbox '{name}' in workspace '{workspace}'"
+                            );
+                            (workspace, name)
                         } else {
                             eprintln!("{} No active forward found for port {port}", "!".yellow());
                             return Ok(());
                         }
                     }
                 };
-                if run::stop_forward(&name, port)? {
+                if run::stop_forward(&workspace, &name, port)? {
                     eprintln!(
                         "{} Stopped forward of port {port} for sandbox {name}",
                         "✓".green().bold(),
@@ -2535,6 +2604,7 @@ async fn run_async() -> Result<()> {
                     &forwards,
                     |forward| {
                         serde_json::json!({
+                            "workspace": forward.workspace,
                             "sandbox": forward.sandbox_name,
                             "bind_address": forward.bind_addr,
                             "port": forward.port,
@@ -2548,6 +2618,12 @@ async fn run_async() -> Result<()> {
                 if forwards.is_empty() {
                     eprintln!("No active forwards.");
                 } else {
+                    let workspace_width = forwards
+                        .iter()
+                        .map(|f| f.workspace.len())
+                        .max()
+                        .unwrap_or(9)
+                        .max(9);
                     let name_width = forwards
                         .iter()
                         .map(|f| f.sandbox_name.len())
@@ -2561,11 +2637,13 @@ async fn run_async() -> Result<()> {
                         .unwrap_or(4)
                         .max(4);
                     println!(
-                        "{:<nw$} {:<bw$} {:<8} {:<10} STATUS",
+                        "{:<ww$} {:<nw$} {:<bw$} {:<8} {:<10} STATUS",
+                        "WORKSPACE",
                         "SANDBOX",
                         "BIND",
                         "PORT",
                         "PID",
+                        ww = workspace_width,
                         nw = name_width,
                         bw = bind_width,
                     );
@@ -2576,12 +2654,14 @@ async fn run_async() -> Result<()> {
                             "dead".red().to_string()
                         };
                         println!(
-                            "{:<nw$} {:<bw$} {:<8} {:<10} {}",
+                            "{:<ww$} {:<nw$} {:<bw$} {:<8} {:<10} {}",
+                            f.workspace,
                             f.sandbox_name,
                             f.bind_addr,
                             f.port,
                             f.pid,
                             status,
+                            ww = workspace_width,
                             nw = name_width,
                             bw = bind_width,
                         );
@@ -2785,6 +2865,8 @@ async fn run_async() -> Result<()> {
                     remove_rules,
                     binaries,
                     rule_name,
+                    any_binary,
+                    endpoint_path,
                     dry_run,
                     wait,
                     timeout,
@@ -2800,6 +2882,8 @@ async fn run_async() -> Result<()> {
                         &remove_rules,
                         &binaries,
                         rule_name.as_deref(),
+                        any_binary,
+                        endpoint_path.as_deref(),
                         dry_run,
                         wait,
                         timeout,
@@ -3105,7 +3189,6 @@ async fn run_async() -> Result<()> {
 
                     // Parse --env flags into a HashMap<String, String>.
                     let env_map = run::parse_env_pairs(&envs)?;
-                    run::warn_credential_env_vars(&env_map, no_credential_warnings);
 
                     // Parse --upload specs into [(local_path, sandbox_path, git_ignore)].
                     let upload_specs: Vec<(String, Option<String>, bool)> = upload
@@ -3160,6 +3243,7 @@ async fn run_async() -> Result<()> {
                             approval_mode: &approval_mode,
                             output: output.as_str(),
                             detach,
+                            suppress_credential_warnings: no_credential_warnings,
                         },
                         &cli.workspace,
                         &tls,
@@ -3356,23 +3440,50 @@ async fn run_async() -> Result<()> {
                                 )
                                 .await?;
                             }
-                            SandboxProviderCommands::Attach { name, provider } => {
+                            SandboxProviderCommands::Attach {
+                                name,
+                                provider,
+                                readiness,
+                            } => {
                                 run::sandbox_provider_attach(
                                     endpoint,
                                     &name,
                                     &provider,
                                     &cli.workspace,
                                     &tls,
+                                    readiness.options(),
                                 )
                                 .await?;
                             }
-                            SandboxProviderCommands::Detach { name, provider } => {
+                            SandboxProviderCommands::Detach {
+                                name,
+                                provider,
+                                readiness,
+                            } => {
                                 run::sandbox_provider_detach(
                                     endpoint,
                                     &name,
                                     &provider,
                                     &cli.workspace,
                                     &tls,
+                                    readiness.options(),
+                                )
+                                .await?;
+                            }
+                            SandboxProviderCommands::Status {
+                                name,
+                                provider,
+                                receipt,
+                                readiness,
+                            } => {
+                                run::sandbox_provider_status(
+                                    endpoint,
+                                    &name,
+                                    &provider,
+                                    receipt.as_deref().unwrap_or_default(),
+                                    &cli.workspace,
+                                    &tls,
+                                    readiness.options(),
                                 )
                                 .await?;
                             }
@@ -3397,7 +3508,6 @@ async fn run_async() -> Result<()> {
                                 let annotations =
                                     run::parse_key_value_pairs(&annotations, "--annotation")?;
                                 let environment = run::parse_env_pairs(&envs)?;
-                                run::warn_credential_env_vars(&environment, no_credential_warnings);
                                 let gpu_requirements: Option<GpuResourceRequirements> =
                                     gpu.map(Into::into);
                                 run::sandbox_template_create(
@@ -3416,6 +3526,7 @@ async fn run_async() -> Result<()> {
                                     output.as_str(),
                                     &cli.workspace,
                                     &tls,
+                                    no_credential_warnings,
                                 )
                                 .await?;
                             }
@@ -3733,6 +3844,7 @@ async fn run_async() -> Result<()> {
                     credentials,
                     config,
                     credential_expires_at,
+                    readiness,
                 } => {
                     run::provider_update(run::ProviderUpdateOptions {
                         server: endpoint,
@@ -3744,6 +3856,7 @@ async fn run_async() -> Result<()> {
                         credential_expires_at: &credential_expires_at,
                         workspace: &cli.workspace,
                         tls: &tls,
+                        readiness: readiness.options(),
                     })
                     .await?;
                 }
@@ -3785,15 +3898,15 @@ async fn run_async() -> Result<()> {
         }
         Some(Commands::SshProxy {
             gateway,
-            sandbox_id,
+            sandbox,
             token,
             server,
             gateway_name,
             name,
         }) => {
-            match (gateway, sandbox_id, token, server, gateway_name, name) {
+            match (gateway, sandbox, token, server, gateway_name, name) {
                 // Token mode (existing behavior): pre-created session credentials.
-                (Some(gw), Some(sid), Some(tok), _, gateway_name_opt, _) => {
+                (Some(gw), Some(sandbox), Some(tok), _, gateway_name_opt, _) => {
                     let mut effective_tls = match gateway_name_opt {
                         Some(ref g) => tls.with_gateway_name(g),
                         None => tls,
@@ -3801,7 +3914,8 @@ async fn run_async() -> Result<()> {
                     if let Some(ref g) = gateway_name_opt {
                         apply_auth(&mut effective_tls, g)?;
                     }
-                    run::sandbox_ssh_proxy(&gw, &sid, &tok, &effective_tls).await?;
+                    run::sandbox_ssh_proxy(&gw, &sandbox, &cli.workspace, &tok, &effective_tls)
+                        .await?;
                 }
                 // Name mode with --gateway-name: resolve endpoint from metadata.
                 (_, _, _, server_override, Some(g), Some(n)) => {
@@ -3827,7 +3941,7 @@ async fn run_async() -> Result<()> {
                 }
                 _ => {
                     return Err(miette::miette!(
-                        "provide either --gateway/--sandbox-id/--token or --gateway-name/--name (or --server/--name)"
+                        "provide either --gateway/--sandbox/--token or --gateway-name/--name (or --server/--name)"
                     ));
                 }
             }
@@ -3931,6 +4045,98 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
 
+    #[test]
+    fn policy_update_parses_explicit_l7_scope_and_endpoint_path() {
+        let cli = Cli::try_parse_from([
+            "openshell",
+            "policy",
+            "update",
+            "sandbox-1",
+            "--rule-name",
+            "api",
+            "--binary",
+            "/usr/bin/curl",
+            "--binary",
+            "/usr/bin/python3",
+            "--endpoint-path",
+            "",
+            "--add-allow",
+            "api.example.com:443,8443:POST:/v1/a:b",
+        ])
+        .expect("explicit scope flags should parse");
+        let Some(Commands::Policy {
+            command:
+                Some(PolicyCommands::Update {
+                    rule_name,
+                    binaries,
+                    any_binary,
+                    endpoint_path,
+                    add_allow,
+                    ..
+                }),
+            ..
+        }) = cli.command
+        else {
+            panic!("expected policy update");
+        };
+        assert_eq!(rule_name.as_deref(), Some("api"));
+        assert_eq!(binaries, vec!["/usr/bin/curl", "/usr/bin/python3"]);
+        assert!(!any_binary);
+        assert_eq!(endpoint_path.as_deref(), Some(""));
+        assert_eq!(add_allow, vec!["api.example.com:443,8443:POST:/v1/a:b"]);
+    }
+
+    #[test]
+    fn policy_update_any_binary_is_explicit_and_conflicts_with_binary() {
+        let args = [
+            "openshell",
+            "policy",
+            "update",
+            "--rule-name",
+            "api",
+            "--any-binary",
+            "--add-deny",
+            "api.example.com:443:DELETE:/v1/**",
+        ];
+        let cli = Cli::try_parse_from(args).expect("explicit wildcard should parse");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Policy {
+                command: Some(PolicyCommands::Update {
+                    any_binary: true,
+                    ..
+                }),
+                ..
+            })
+        ));
+        let conflicting = args.into_iter().chain(["--binary", "/usr/bin/curl"]);
+        assert!(Cli::try_parse_from(conflicting).is_err());
+    }
+
+    #[test]
+    fn policy_update_add_endpoint_keeps_scope_defaults() {
+        let cli = Cli::try_parse_from([
+            "openshell",
+            "policy",
+            "update",
+            "--add-endpoint",
+            "api.example.com:443",
+        ])
+        .expect("endpoint creation retains its existing flags");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Policy {
+                command: Some(PolicyCommands::Update {
+                    any_binary: false,
+                    endpoint_path: None,
+                    rule_name: None,
+                    ..
+                }),
+                ..
+            })
+        ));
+    }
+
     // Tests below mutate the process-global XDG_CONFIG_HOME env var.
     // A static mutex serialises them so concurrent threads don't clobber
     // each other's environment.
@@ -4030,7 +4236,9 @@ mod tests {
 
         let Some(Commands::Sandbox {
             command:
-                Some(SandboxCommands::Provider(SandboxProviderCommands::Attach { name, provider })),
+                Some(SandboxCommands::Provider(SandboxProviderCommands::Attach {
+                    name, provider, ..
+                })),
         }) = cli.command
         else {
             panic!("expected sandbox provider attach command");
@@ -4038,6 +4246,68 @@ mod tests {
 
         assert_eq!(name, "work-sandbox");
         assert_eq!(provider, "work-github");
+    }
+
+    #[test]
+    fn provider_readiness_commands_have_bounded_waits_and_structured_output() {
+        for action in ["attach", "detach", "status"] {
+            let cli = Cli::try_parse_from([
+                "openshell",
+                "sandbox",
+                "provider",
+                action,
+                "sandbox",
+                "provider",
+                "--wait",
+                "--timeout",
+                "45",
+                "--output",
+                "json",
+            ])
+            .expect("readiness flags should parse");
+            let Some(Commands::Sandbox {
+                command: Some(SandboxCommands::Provider(command)),
+            }) = cli.command
+            else {
+                panic!("expected provider command")
+            };
+            let (SandboxProviderCommands::Attach { readiness, .. }
+            | SandboxProviderCommands::Detach { readiness, .. }
+            | SandboxProviderCommands::Status { readiness, .. }) = command
+            else {
+                panic!("expected readiness command");
+            };
+            assert!(readiness.wait);
+            assert_eq!(readiness.timeout, 45);
+            assert_eq!(readiness.output.as_str(), "json");
+        }
+        for timeout in ["0", "3601"] {
+            assert!(
+                Cli::try_parse_from([
+                    "openshell",
+                    "provider",
+                    "update",
+                    "provider",
+                    "--wait",
+                    "--timeout",
+                    timeout,
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "openshell",
+                "sandbox",
+                "provider",
+                "status",
+                "sandbox",
+                "provider",
+                "--receipt",
+                "receipt-id",
+            ])
+            .is_ok()
+        );
     }
 
     #[test]
@@ -4477,19 +4747,22 @@ mod tests {
             "ssh-proxy",
             "--gateway",
             "https://gw.example.com:8080/proxy/connect",
-            "--sandbox-id",
-            "sbx-123",
+            "--sandbox",
+            "my-box",
+            "--workspace",
+            "team-a",
             "--token",
             "tok-abc",
             "--gateway-name",
             "my-gateway",
         ])
         .expect("TUI proxy command flags must be accepted by the CLI");
+        assert_eq!(cli.workspace, "team-a");
 
         match cli.command {
             Some(Commands::SshProxy {
                 gateway,
-                sandbox_id,
+                sandbox,
                 token,
                 gateway_name,
                 ..
@@ -4499,7 +4772,7 @@ mod tests {
                     Some("https://gw.example.com:8080/proxy/connect"),
                     "gateway URL must land in SshProxy.gateway, not the global flag"
                 );
-                assert_eq!(sandbox_id.as_deref(), Some("sbx-123"));
+                assert_eq!(sandbox.as_deref(), Some("my-box"));
                 assert_eq!(token.as_deref(), Some("tok-abc"));
                 assert_eq!(gateway_name.as_deref(), Some("my-gateway"));
             }
@@ -5461,10 +5734,35 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_create_detach_rejects_ephemeral_sandbox() {
-        let result =
-            Cli::try_parse_from(["openshell", "sandbox", "create", "--detach", "--no-keep"]);
-        assert!(result.is_err());
+    fn sandbox_create_detach_accepts_ephemeral_sandbox() {
+        let cli = Cli::try_parse_from([
+            "openshell",
+            "sandbox",
+            "create",
+            "--detach",
+            "--no-keep",
+            "--",
+            "worker",
+        ])
+        .expect("detached ephemeral sandbox should parse");
+
+        match cli.command {
+            Some(Commands::Sandbox {
+                command:
+                    Some(SandboxCommands::Create {
+                        detach,
+                        no_keep,
+                        command,
+                        ..
+                    }),
+                ..
+            }) => {
+                assert!(detach);
+                assert!(no_keep);
+                assert_eq!(command, ["worker"]);
+            }
+            other => panic!("expected SandboxCommands::Create, got: {other:?}"),
+        }
     }
 
     #[test]
@@ -6064,6 +6362,19 @@ mod tests {
             }
             other => panic!("expected service list command, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn service_list_rejects_sandbox_with_all_workspaces() {
+        let result = Cli::try_parse_from([
+            "openshell",
+            "service",
+            "list",
+            "my-sandbox",
+            "--all-workspaces",
+        ]);
+
+        assert!(result.is_err());
     }
 
     #[test]

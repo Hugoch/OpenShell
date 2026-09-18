@@ -637,13 +637,13 @@ fn build_service_endpoint_config_event(
     url: &str,
     created: bool,
 ) -> OcsfEvent {
-    let service_label = service_display_name(&endpoint.sandbox_name, &endpoint.service_name);
+    let service_label = service_display_name(&endpoint.sandbox, &endpoint.name);
     let state_label = if created {
         "service_endpoint_created"
     } else {
         "service_endpoint_updated"
     };
-    let ctx = gateway_ocsf_ctx(&endpoint.sandbox_id, &endpoint.sandbox_name);
+    let ctx = gateway_ocsf_ctx(&endpoint.sandbox_id, &endpoint.sandbox);
     let mut builder = ConfigStateChangeBuilder::new(&ctx)
         .state(StateId::Enabled, state_label)
         .severity(SeverityId::Informational)
@@ -653,7 +653,7 @@ fn build_service_endpoint_config_event(
             endpoint.target_port
         ))
         .unmapped("endpoint_name", endpoint_name(endpoint))
-        .unmapped("service_name", endpoint.service_name.clone())
+        .unmapped("service_name", endpoint.name.clone())
         .unmapped("target_port", u64::from(endpoint.target_port));
 
     if !url.is_empty() {
@@ -664,19 +664,16 @@ fn build_service_endpoint_config_event(
 }
 
 fn build_service_endpoint_delete_event(endpoint: &ServiceEndpoint) -> OcsfEvent {
-    let service_label = service_display_name(&endpoint.sandbox_name, &endpoint.service_name);
-    ConfigStateChangeBuilder::new(&gateway_ocsf_ctx(
-        &endpoint.sandbox_id,
-        &endpoint.sandbox_name,
-    ))
-    .state(StateId::Disabled, "service_endpoint_deleted")
-    .severity(SeverityId::Informational)
-    .status(StatusId::Success)
-    .message(format!("Service endpoint deleted {service_label}"))
-    .unmapped("endpoint_name", endpoint_name(endpoint))
-    .unmapped("service_name", endpoint.service_name.clone())
-    .unmapped("target_port", u64::from(endpoint.target_port))
-    .build()
+    let service_label = service_display_name(&endpoint.sandbox, &endpoint.name);
+    ConfigStateChangeBuilder::new(&gateway_ocsf_ctx(&endpoint.sandbox_id, &endpoint.sandbox))
+        .state(StateId::Disabled, "service_endpoint_deleted")
+        .severity(SeverityId::Informational)
+        .status(StatusId::Success)
+        .message(format!("Service endpoint deleted {service_label}"))
+        .unmapped("endpoint_name", endpoint_name(endpoint))
+        .unmapped("service_name", endpoint.name.clone())
+        .unmapped("target_port", u64::from(endpoint.target_port))
+        .build()
 }
 
 fn build_service_http_failure_event(
@@ -730,25 +727,22 @@ fn build_service_relay_failure_event(
     target_port: u16,
     reason: &str,
 ) -> OcsfEvent {
-    NetworkActivityBuilder::new(&gateway_ocsf_ctx(
-        &endpoint.sandbox_id,
-        &endpoint.sandbox_name,
-    ))
-    .activity(ActivityId::Open)
-    .action(ActionId::Denied)
-    .disposition(DispositionId::Error)
-    .severity(SeverityId::Low)
-    .status(StatusId::Failure)
-    .dst_endpoint(Endpoint::from_ip_str(RELAY_TARGET_HOST, target_port))
-    .firewall_rule(RELAY_RULE_NAME, ROUTING_RULE_TYPE)
-    .status_detail(reason)
-    .message(format!(
-        "Service endpoint is not reachable: {}",
-        service_display_name(&endpoint.sandbox_name, &endpoint.service_name)
-    ))
-    .unmapped("endpoint_name", endpoint_name(endpoint))
-    .unmapped("service_name", endpoint.service_name.clone())
-    .build()
+    NetworkActivityBuilder::new(&gateway_ocsf_ctx(&endpoint.sandbox_id, &endpoint.sandbox))
+        .activity(ActivityId::Open)
+        .action(ActionId::Denied)
+        .disposition(DispositionId::Error)
+        .severity(SeverityId::Low)
+        .status(StatusId::Failure)
+        .dst_endpoint(Endpoint::from_ip_str(RELAY_TARGET_HOST, target_port))
+        .firewall_rule(RELAY_RULE_NAME, ROUTING_RULE_TYPE)
+        .status_detail(reason)
+        .message(format!(
+            "Service endpoint is not reachable: {}",
+            service_display_name(&endpoint.sandbox, &endpoint.name)
+        ))
+        .unmapped("endpoint_name", endpoint_name(endpoint))
+        .unmapped("service_name", endpoint.name.clone())
+        .build()
 }
 
 fn emit_gateway_ocsf_event(sandbox_id: &str, event: OcsfEvent) {
@@ -774,7 +768,7 @@ fn gateway_ocsf_ctx(sandbox_id: &str, sandbox_name: &str) -> EventContext {
 
 fn endpoint_name(endpoint: &ServiceEndpoint) -> String {
     endpoint.metadata.as_ref().map_or_else(
-        || endpoint_key(&endpoint.sandbox_name, &endpoint.service_name),
+        || endpoint_key(&endpoint.sandbox, &endpoint.name),
         |metadata| metadata.name.clone(),
     )
 }
@@ -825,16 +819,16 @@ mod tests {
             metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                 id: "endpoint-id".to_string(),
                 name: "my-sandbox--web".to_string(),
-                created_at_ms: 1_700_000_000_000,
+                created_time: openshell_core::time::timestamp_from_millis(1_700_000_000_000).ok(),
                 labels: std::collections::HashMap::default(),
                 resource_version: 0,
                 annotations: std::collections::HashMap::new(),
                 workspace: "default".to_string(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             sandbox_id: "sandbox-id".to_string(),
-            sandbox_name: "my-sandbox".to_string(),
-            service_name: "web".to_string(),
+            sandbox: "my-sandbox".to_string(),
+            name: "web".to_string(),
             target_port: 8080,
             domain: true,
         }
@@ -1210,16 +1204,16 @@ mod tests {
             metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                 id: "ep-1".to_string(),
                 name: "my-sandbox--web".to_string(),
-                created_at_ms: 1_700_000_000_000,
+                created_time: openshell_core::time::timestamp_from_millis(1_700_000_000_000).ok(),
                 labels: std::collections::HashMap::default(),
                 resource_version: 0,
                 annotations: std::collections::HashMap::new(),
                 workspace: "default".to_string(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             sandbox_id: "sandbox-1".to_string(),
-            sandbox_name: "my-sandbox".to_string(),
-            service_name: "web".to_string(),
+            sandbox: "my-sandbox".to_string(),
+            name: "web".to_string(),
             target_port: 8080,
             domain: true,
         };

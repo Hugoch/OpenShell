@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// Clones point at the same atomic value, so the sandbox orchestrator can pass
 /// this into the process and network supervisors and then update it from the
-/// settings poll loop or sidecar control.
+/// settings poll loop or supervisor control.
 #[derive(Clone, Debug)]
 pub struct AgentProposals {
     enabled: Arc<AtomicBool>,

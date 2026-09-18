@@ -83,6 +83,7 @@ pub trait SupervisorConfigRouter: fmt::Debug + Send + Sync {
         &self,
         sandbox_id: &str,
         message: SupervisorConfigMessage,
+        require_acknowledgement: bool,
     ) -> DeliveryDisposition;
 
     async fn routable_sandbox_ids(&self) -> Vec<String>;
@@ -106,8 +107,10 @@ impl SupervisorConfigRouter for LocalSupervisorConfigRouter {
         &self,
         sandbox_id: &str,
         message: SupervisorConfigMessage,
+        require_acknowledgement: bool,
     ) -> DeliveryDisposition {
-        self.sessions.deliver_config(sandbox_id, message)
+        self.sessions
+            .deliver_config(sandbox_id, message, require_acknowledgement)
     }
 
     async fn routable_sandbox_ids(&self) -> Vec<String> {
@@ -564,7 +567,7 @@ async fn enqueue_sandbox_from_fanout(
 
 async fn publish_sandbox_component_now(state: &Arc<ServerState>, key: &DeliveryKey) {
     let component = key.component.name();
-    let build = async {
+    let build = Box::pin(async {
         let sandbox = state
             .store
             .get_message::<Sandbox>(&key.sandbox_id)
@@ -576,28 +579,37 @@ async fn publish_sandbox_component_now(state: &Arc<ServerState>, key: &DeliveryK
         match key.component {
             ConfigComponentKind::SandboxConfig => {
                 let snapshot = build_sandbox_config_snapshot(state, &sandbox).await?;
-                crate::config_update_operation::associate_pending_with_snapshot(
-                    state,
-                    &key.sandbox_id,
-                    &snapshot,
-                )
-                .await?;
-                Ok(SupervisorConfigMessage::SandboxConfig(Box::new(snapshot)))
+                let requires_acknowledgement =
+                    crate::config_update_operation::associate_pending_with_snapshot(
+                        state,
+                        &key.sandbox_id,
+                        &snapshot,
+                    )
+                    .await?;
+                Ok((
+                    SupervisorConfigMessage::SandboxConfig(Box::new(snapshot)),
+                    requires_acknowledgement,
+                ))
             }
             ConfigComponentKind::ProviderEnvironment => {
                 build_provider_environment_snapshot(state, &sandbox, true)
                     .await
-                    .map(SupervisorConfigMessage::ProviderEnvironment)
+                    .map(|snapshot| {
+                        (
+                            SupervisorConfigMessage::ProviderEnvironment(snapshot),
+                            false,
+                        )
+                    })
             }
         }
         .map(Some)
-    };
+    });
     match state.config_delivery_queue.run_bounded_build(build).await {
         Ok(Ok(None)) => {}
-        Ok(Ok(Some(message))) => {
+        Ok(Ok(Some((message, requires_acknowledgement)))) => {
             let disposition = state
                 .supervisor_config_router()
-                .deliver(&key.sandbox_id, message)
+                .deliver(&key.sandbox_id, message, requires_acknowledgement)
                 .await;
             record_delivery(component, disposition);
         }
@@ -745,7 +757,10 @@ mod tests {
 
     use super::*;
     use crate::grpc::test_support::{connect_supervisor_stream, test_server_state};
-    use openshell_core::proto::{GatewayMessage, ObjectMeta, SandboxSpec, gateway_message};
+    use openshell_core::proto::{
+        GatewayMessage, ObjectMeta, SandboxSpec, StartupConfigPrepared, SupervisorMessage,
+        gateway_message, startup_config_prepared, supervisor_message,
+    };
 
     fn key(sandbox_id: &str, component: ConfigComponentKind) -> DeliveryKey {
         DeliveryKey {
@@ -878,6 +893,7 @@ mod tests {
             &self,
             sandbox_id: &str,
             _message: SupervisorConfigMessage,
+            _require_acknowledgement: bool,
         ) -> DeliveryDisposition {
             self.visits.send(sandbox_id.to_string()).unwrap();
             assert!(
@@ -1265,8 +1281,29 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+        let Some(gateway_message::Payload::StartupConfigCandidate(candidate)) = first.payload
+        else {
+            panic!("expected StartupConfigCandidate");
+        };
+        harness
+            .outbound
+            .send(SupervisorMessage {
+                payload: Some(supervisor_message::Payload::StartupConfigPrepared(
+                    StartupConfigPrepared {
+                        candidate_id: candidate.candidate_id,
+                        result: Some(startup_config_prepared::Result::Unchanged(())),
+                    },
+                )),
+            })
+            .await
+            .unwrap();
+        let accepted = tokio::time::timeout(Duration::from_secs(5), harness.inbound.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         assert!(matches!(
-            first.payload,
+            accepted.payload,
             Some(gateway_message::Payload::SessionAccepted(_))
         ));
 
