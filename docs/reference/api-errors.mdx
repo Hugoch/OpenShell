@@ -145,6 +145,7 @@ tokens are first-execution preconditions, not conditions to execute again.
 |---|---|
 | Workspace, membership, template, provider, and profile resources | Load the original UUID at its recorded version. Missing or changed resources make replay unavailable. Provider credentials remain redacted. |
 | Sandbox resources | Load the original UUID with its current state, including newer status or configuration. Attach/detach flags describe the original operation. A missing original sandbox makes replay unavailable. |
+| Provider readiness receipts | Return the original attach, detach, or update receipts and mutation ID, including the original update target set. Later attachment changes do not replace these receipts. Missing operation evidence makes replay unavailable without executing the mutation again. |
 | Service endpoint | Require the original endpoint version and sandbox identity. Return the recorded URL. |
 | Refresh status | Return current status for the original provider, refresh record, and authorization epoch. Reconfiguration or removal makes replay unavailable. Rotation is not repeated. |
 | Policy and config | Return the original versions, counts, and nonsecret annotations while the original sandbox exists. Global config has no sandbox guard. |

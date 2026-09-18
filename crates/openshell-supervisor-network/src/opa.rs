@@ -175,7 +175,7 @@ pub(crate) fn test_opa_query_count() -> u64 {
 }
 
 /// Generation guard captured when an HTTP tunnel or request path starts.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PolicyGenerationGuard {
     captured_generation: u64,
     current_generation: Arc<AtomicU64>,
@@ -714,7 +714,7 @@ impl OpaEngine {
     /// validation guarantees as initial load. Atomically replaces the inner
     /// engine on success; on failure the previous engine is untouched (LKG).
     pub fn reload_from_proto(&self, proto: &ProtoSandboxPolicy) -> Result<()> {
-        self.reload_from_proto_with_pid(proto, 0)
+        self.reload_from_proto_with_pid(proto, 0).map(|_| ())
     }
 
     /// Reload policy from a proto with symlink resolution.
@@ -722,49 +722,45 @@ impl OpaEngine {
     /// When `entrypoint_pid` is non-zero, binary paths that are symlinks
     /// inside the container filesystem are resolved and added as additional
     /// match entries. See [`from_proto_with_pid`] for details.
+    /// Returns evidence tied to the generation installed by this call.
     pub fn reload_from_proto_with_pid(
         &self,
         proto: &ProtoSandboxPolicy,
         entrypoint_pid: u32,
-    ) -> Result<()> {
-        // Build a complete new engine through the same validated pipeline.
-        let new = Self::from_proto_with_pid(proto, entrypoint_pid)?;
-        let new_engine = new
-            .engine
-            .into_inner()
-            .map_err(|_| miette::miette!("lock poisoned on new engine"))?;
-        let mut engine = self
-            .engine
-            .lock()
-            .map_err(|_| miette::miette!("OPA engine lock poisoned"))?;
-        *engine = new_engine;
-        *self
-            .fail_closed_reason
-            .write()
-            .map_err(|_| miette::miette!("OPA fail-closed state lock poisoned"))? = None;
-        self.advance_generation();
-        Ok(())
+    ) -> Result<PolicyGenerationGuard> {
+        self.reload_configuration_from_proto_with_pid(proto, entrypoint_pid, None, || {})
     }
 
     /// Reload the policy and middleware registry as one runtime generation.
-    ///
-    /// Both replacements are prepared before the live locks are acquired. The
-    /// engine and runner are then swapped while holding both locks, followed by
-    /// a single generation increment. A preparation or lock failure leaves the
-    /// live pair and generation untouched.
     pub fn reload_policy_and_middleware_from_proto_with_pid(
         &self,
         proto: &ProtoSandboxPolicy,
         entrypoint_pid: u32,
         registry: MiddlewareRegistry,
-    ) -> Result<()> {
+    ) -> Result<PolicyGenerationGuard> {
+        self.reload_configuration_from_proto_with_pid(proto, entrypoint_pid, Some(registry), || {})
+    }
+
+    /// Validate a complete candidate before publishing policy, middleware, and
+    /// prepared credentials together. A validation or lock failure leaves the
+    /// active configuration untouched and never invokes `commit_credentials`.
+    ///
+    /// The callback must be infallible and must not call back into this engine.
+    /// Existing policy guards become stale before credentials change; new
+    /// policy readers remain blocked until the complete configuration is live.
+    pub fn reload_configuration_from_proto_with_pid(
+        &self,
+        proto: &ProtoSandboxPolicy,
+        entrypoint_pid: u32,
+        registry: Option<MiddlewareRegistry>,
+        commit_credentials: impl FnOnce(),
+    ) -> Result<PolicyGenerationGuard> {
         let new = Self::from_proto_with_pid(proto, entrypoint_pid)?;
         let new_engine = new
             .engine
             .into_inner()
             .map_err(|_| miette::miette!("lock poisoned on new engine"))?;
-        // Match clone_engine_for_tunnel's lock order (engine, then runner) so
-        // readers can observe only the old pair or the new pair.
+        // Match clone_engine_for_tunnel's lock order (engine, then runner).
         let mut engine = self
             .engine
             .lock()
@@ -773,15 +769,19 @@ impl OpaEngine {
             .middleware_runner
             .write()
             .map_err(|_| miette::miette!("middleware runner lock poisoned"))?;
-        let new_runner = runner.with_replacement_registry(registry);
-        *engine = new_engine;
-        *runner = new_runner;
-        *self
+        let mut fail_closed_reason = self
             .fail_closed_reason
             .write()
-            .map_err(|_| miette::miette!("OPA fail-closed state lock poisoned"))? = None;
-        self.advance_generation();
-        Ok(())
+            .map_err(|_| miette::miette!("OPA fail-closed state lock poisoned"))?;
+        let new_runner = registry.map(|registry| runner.with_replacement_registry(registry));
+        let generation = self.advance_generation();
+        commit_credentials();
+        *engine = new_engine;
+        if let Some(new_runner) = new_runner {
+            *runner = new_runner;
+        }
+        *fail_closed_reason = None;
+        self.generation_guard(generation)
     }
 
     /// Publish a deny-all quarantine generation without activating any part
@@ -10586,6 +10586,44 @@ network_policies:
             .await
             .expect("describe chain");
         assert!(described[0].is_resolved());
+    }
+
+    #[test]
+    fn rejected_configuration_never_commits_credentials() {
+        let mut proto = test_proto();
+        let engine = OpaEngine::from_proto(&proto).unwrap();
+        proto.network_middlewares.insert(
+            String::new(),
+            NetworkMiddlewareConfig {
+                middleware: openshell_supervisor_middleware_builtins::BUILTIN_REGEX.into(),
+                ..Default::default()
+            },
+        );
+        engine
+            .reload_configuration_from_proto_with_pid(&proto, 0, None, || {
+                panic!("invalid candidate must not publish credentials");
+            })
+            .expect_err("invalid candidate");
+        assert_eq!(engine.current_generation(), 0);
+    }
+
+    #[test]
+    fn configuration_commit_invalidates_old_guards_before_credentials_change() {
+        let proto = test_proto();
+        let engine = OpaEngine::from_proto(&proto).unwrap();
+        let old = engine.clone_engine_for_tunnel(0).unwrap();
+        engine.enter_fail_closed("invalid candidate").unwrap();
+        let mut committed = false;
+        engine
+            .reload_configuration_from_proto_with_pid(&proto, 0, None, || {
+                assert!(old.generation_guard().is_stale());
+                assert_eq!(engine.current_generation(), 2);
+                committed = true;
+            })
+            .unwrap();
+        assert!(committed);
+        assert!(engine.fail_closed_reason().is_none());
+        assert!(engine.clone_engine_for_tunnel(2).is_ok());
     }
 
     #[tokio::test]

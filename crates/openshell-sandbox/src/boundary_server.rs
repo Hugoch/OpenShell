@@ -1537,12 +1537,53 @@ mod linux {
                 .map_err(|error| tonic::Status::unauthenticated(error.to_string()))
         }
 
+        fn discover_image_policy() -> Response {
+            Self::discover_image_policy_from_paths(&[
+                openshell_policy::CONTAINER_POLICY_PATH,
+                openshell_policy::LEGACY_CONTAINER_POLICY_PATH,
+            ])
+        }
+
+        fn discover_image_policy_from_paths(paths: &[&str]) -> Response {
+            use std::io::Read as _;
+            for path in paths {
+                match File::open(path) {
+                    Ok(file) => {
+                        let mut yaml = String::new();
+                        if file.take(1_048_577).read_to_string(&mut yaml).is_err()
+                            || yaml.len() > 1_048_576
+                        {
+                            return Response::ImagePolicy {
+                                yaml: None,
+                                invalid: true,
+                            };
+                        }
+                        return Response::ImagePolicy {
+                            yaml: Some(yaml),
+                            invalid: false,
+                        };
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(_) => {
+                        return Response::ImagePolicy {
+                            yaml: None,
+                            invalid: true,
+                        };
+                    }
+                }
+            }
+            Response::ImagePolicy {
+                yaml: None,
+                invalid: false,
+            }
+        }
+
         fn authorize_request(
             &self,
             principal: &SandboxProtocolPrincipal,
             request: &Request,
         ) -> Result<(), String> {
-            if matches!(request, Request::Attach { .. }) {
+            if matches!(request, Request::Attach { .. } | Request::DiscoverPolicy) {
                 return Ok(());
             }
             if matches!(request, Request::Confirm) {
@@ -1830,6 +1871,7 @@ mod linux {
             let request_id = envelope.request_id;
             let payload_digest = envelope.payload_digest;
             let response = match envelope.request {
+                Request::DiscoverPolicy => Self::discover_image_policy(),
                 Request::Attach {
                     supervisor_instance_id: _,
                     policy,
@@ -1863,10 +1905,10 @@ mod linux {
                     provider_env,
                 ),
                 Request::UpdateProviderEnvironment {
-                    expected_revision,
+                    generation,
                     revision,
                     provider_env,
-                } => self.update_provider_environment(expected_revision, revision, provider_env),
+                } => self.update_provider_environment(generation, revision, provider_env),
                 Request::Wait { process_id } => self.wait(&process_id),
                 Request::Signal { process_id, signal } => self.signal(&process_id, signal),
                 Request::Terminate { process_id } => self.terminate(&process_id),
@@ -2336,6 +2378,7 @@ mod linux {
                     Response::Started {
                         process_id: process.process_id(),
                         provider_env_revision: process.provider_credentials.snapshot().revision,
+                        provider_env_generation: *lock(&process.provider_environment_generation),
                     }
                 } else {
                     guest_error(
@@ -2400,12 +2443,13 @@ mod linux {
             Response::Started {
                 process_id,
                 provider_env_revision,
+                provider_env_generation: 0,
             }
         }
 
         fn update_provider_environment(
             &self,
-            expected_revision: u64,
+            generation: u64,
             revision: u64,
             provider_env: std::collections::HashMap<String, String>,
         ) -> Response {
@@ -2419,14 +2463,34 @@ mod linux {
                 };
                 process.clone()
             };
+            // The session-scoped publication order is separate from opaque
+            // provider fingerprints. Holding it through installation prevents
+            // a delayed request from replacing a newer same-revision repair.
+            let mut installed_generation = lock(&process.provider_environment_generation);
+            let current = match process.provider_credentials.child_environment_snapshot() {
+                Ok(snapshot) => snapshot,
+                Err(error) => return guest_error(BoundaryErrorKind::Process, error.to_string()),
+            };
+            if generation <= *installed_generation {
+                return Response::ProviderEnvironmentUpdated {
+                    revision: current.revision,
+                    generation: *installed_generation,
+                    applied: false,
+                };
+            }
             let revision = match process
                 .provider_credentials
-                .compare_and_install_child_env_snapshot(expected_revision, revision, provider_env)
+                .compare_and_install_child_env_snapshot(current.revision, revision, provider_env)
             {
                 Ok(revision) => revision,
                 Err(error) => return guest_error(BoundaryErrorKind::Process, error.to_string()),
             };
-            Response::ProviderEnvironmentUpdated { revision }
+            *installed_generation = generation;
+            Response::ProviderEnvironmentUpdated {
+                revision,
+                generation,
+                applied: true,
+            }
         }
 
         fn wait(&self, process_id: &str) -> Response {
@@ -2699,6 +2763,7 @@ mod linux {
         attached: Arc<AtomicBool>,
         boundary_runtime: Arc<BoundaryRuntimeState>,
         provider_credentials: ProviderCredentialState,
+        provider_environment_generation: Mutex<u64>,
     }
 
     struct ManagedProcessLaunch {
@@ -2792,6 +2857,7 @@ mod linux {
                 attached: Arc::new(AtomicBool::new(false)),
                 boundary_runtime,
                 provider_credentials,
+                provider_environment_generation: Mutex::new(0),
             })
         }
 
@@ -4235,6 +4301,46 @@ mod linux {
         }
 
         #[test]
+        fn image_discovery_preserves_invalid_content_and_bounds_reads() {
+            let directory = tempfile::tempdir().unwrap();
+            let primary = directory.path().join("policy.yaml");
+            let legacy = directory.path().join("legacy.yaml");
+            let paths = [primary.to_str().unwrap(), legacy.to_str().unwrap()];
+            assert_eq!(
+                BoundaryRuntime::discover_image_policy_from_paths(&paths),
+                Response::ImagePolicy {
+                    yaml: None,
+                    invalid: false
+                }
+            );
+            std::fs::write(&legacy, "legacy policy").unwrap();
+            assert_eq!(
+                BoundaryRuntime::discover_image_policy_from_paths(&paths),
+                Response::ImagePolicy {
+                    yaml: Some("legacy policy".to_string()),
+                    invalid: false
+                }
+            );
+            // Parsing belongs to admission; malformed primary content must never fall back.
+            std::fs::write(&primary, "not: [valid yaml").unwrap();
+            assert_eq!(
+                BoundaryRuntime::discover_image_policy_from_paths(&paths),
+                Response::ImagePolicy {
+                    yaml: Some("not: [valid yaml".to_string()),
+                    invalid: false
+                }
+            );
+            std::fs::write(&primary, vec![b'x'; 1_048_577]).unwrap();
+            assert_eq!(
+                BoundaryRuntime::discover_image_policy_from_paths(&paths),
+                Response::ImagePolicy {
+                    yaml: None,
+                    invalid: true
+                }
+            );
+        }
+
+        #[test]
         fn unix_listener_allows_authenticated_cross_uid_control() {
             use std::os::unix::fs::PermissionsExt as _;
 
@@ -4598,13 +4704,14 @@ mod linux {
             let Response::Started {
                 process_id,
                 provider_env_revision: 0,
+                provider_env_generation: 0,
             } = start()
             else {
                 panic!("initial start did not succeed");
             };
 
             let update = RequestEnvelope::new(Request::UpdateProviderEnvironment {
-                expected_revision: 0,
+                generation: 1,
                 revision: 7,
                 provider_env: std::collections::HashMap::from([(
                     "REPLAY_TEST".to_string(),
@@ -4614,11 +4721,19 @@ mod linux {
             .expect("build replayed update");
             assert_eq!(
                 boundary.dispatch(update.clone()),
-                Response::ProviderEnvironmentUpdated { revision: 7 }
+                Response::ProviderEnvironmentUpdated {
+                    revision: 7,
+                    generation: 1,
+                    applied: true,
+                }
             );
             assert_eq!(
                 boundary.dispatch(update.clone()),
-                Response::ProviderEnvironmentUpdated { revision: 7 },
+                Response::ProviderEnvironmentUpdated {
+                    revision: 7,
+                    generation: 1,
+                    applied: true,
+                },
                 "the same request ID and payload must replay its recorded response"
             );
             let mut changed = RequestEnvelope::new(Request::Terminate {
@@ -4662,6 +4777,7 @@ mod linux {
                 Response::Started {
                     process_id: process_id.clone(),
                     provider_env_revision: 7,
+                    provider_env_generation: 1,
                 }
             );
 
@@ -4684,9 +4800,44 @@ mod linux {
                 Response::Error { kind, .. } if kind == BoundaryErrorKind::Denied
             ));
 
+            // Failed refresh and recovery can retain the same provider
+            // fingerprint. Distinct publications must still replace the map,
+            // while a delayed older clear must never undo the repair.
+            assert_eq!(
+                boundary.update_provider_environment(2, 7, std::collections::HashMap::default()),
+                Response::ProviderEnvironmentUpdated {
+                    revision: 7,
+                    generation: 2,
+                    applied: true
+                }
+            );
+            assert_eq!(
+                boundary.update_provider_environment(
+                    3,
+                    7,
+                    std::collections::HashMap::from([(
+                        "REPLAY_TEST".to_string(),
+                        "reconnected".to_string()
+                    ),])
+                ),
+                Response::ProviderEnvironmentUpdated {
+                    revision: 7,
+                    generation: 3,
+                    applied: true
+                }
+            );
+            assert_eq!(
+                boundary.update_provider_environment(2, 7, std::collections::HashMap::default()),
+                Response::ProviderEnvironmentUpdated {
+                    revision: 7,
+                    generation: 3,
+                    applied: false
+                }
+            );
+
             let exec_spec = ExecSpecWire {
                 program: "/bin/sh".to_string(),
-                args: vec!["-c".to_string(), "printf reconnected".to_string()],
+                args: vec!["-c".to_string(), "printf '%s' \"$REPLAY_TEST\"".to_string()],
                 env: Vec::new(),
                 workdir: None,
                 pty: false,
@@ -4869,19 +5020,24 @@ mod linux {
                 Response::Started {
                     process_id: process.process_id(),
                     provider_env_revision: 0,
+                    provider_env_generation: 0,
                 }
             );
 
             assert_eq!(
                 boundary.update_provider_environment(
-                    0,
+                    1,
                     2,
                     std::collections::HashMap::from([(
                         "ROTATED_TOKEN".to_string(),
                         "refreshed".to_string(),
                     )]),
                 ),
-                Response::ProviderEnvironmentUpdated { revision: 2 }
+                Response::ProviderEnvironmentUpdated {
+                    revision: 2,
+                    generation: 1,
+                    applied: true,
+                }
             );
             assert_eq!(
                 boundary.update_provider_environment(
@@ -4892,11 +5048,19 @@ mod linux {
                         "stale".to_string(),
                     )]),
                 ),
-                Response::ProviderEnvironmentUpdated { revision: 2 }
+                Response::ProviderEnvironmentUpdated {
+                    revision: 2,
+                    generation: 1,
+                    applied: false,
+                }
             );
             assert_eq!(
                 boundary.update_provider_environment(2, 1, std::collections::HashMap::new()),
-                Response::ProviderEnvironmentUpdated { revision: 1 },
+                Response::ProviderEnvironmentUpdated {
+                    revision: 1,
+                    generation: 2,
+                    applied: true,
+                },
                 "a numerically smaller opaque revision must revoke the environment"
             );
             assert_eq!(
@@ -4908,12 +5072,20 @@ mod linux {
                         "out-of-order".to_string(),
                     )]),
                 ),
-                Response::ProviderEnvironmentUpdated { revision: 1 },
-                "a stale expected revision must not overwrite current state"
+                Response::ProviderEnvironmentUpdated {
+                    revision: 1,
+                    generation: 2,
+                    applied: false,
+                },
+                "a stale publication must not overwrite current state"
             );
             assert_eq!(
                 boundary.update_provider_environment(1, 1, std::collections::HashMap::new()),
-                Response::ProviderEnvironmentUpdated { revision: 1 },
+                Response::ProviderEnvironmentUpdated {
+                    revision: 1,
+                    generation: 2,
+                    applied: false,
+                },
                 "a duplicate update must be idempotent"
             );
 
@@ -4938,6 +5110,7 @@ mod linux {
                 Response::Started {
                     process_id: process.process_id(),
                     provider_env_revision: 1,
+                    provider_env_generation: 2,
                 },
                 "a replacement control must resume from the boundary's current revision"
             );

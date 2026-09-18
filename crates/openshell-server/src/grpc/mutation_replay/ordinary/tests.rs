@@ -456,6 +456,121 @@ async fn service_deletion_replays_without_parent_and_does_not_delete_replacement
 }
 
 #[tokio::test]
+async fn provider_replay_preserves_receipts_after_attachment_changes() {
+    let (_directory, state) = protected_state().await;
+    let created = run(
+        &state,
+        authed_request(CreateProviderRequest {
+            provider: Some(Provider {
+                metadata: Some(meta("receipt-provider")),
+                r#type: "openai".into(),
+                credentials: HashMap::from([("OPENAI_API_KEY".into(), "private-value".into())]),
+                ..Default::default()
+            }),
+            workspace_scope: Some(scope()),
+            request_id: id(),
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    let sandbox = Sandbox {
+        metadata: Some(meta("receipt-sandbox")),
+        spec: Some(SandboxSpec::default()),
+        ..Default::default()
+    };
+    state.store.put_message(&sandbox).await.unwrap();
+    let attach = AttachSandboxProviderRequest {
+        sandbox_name: "receipt-sandbox".into(),
+        provider_name: "receipt-provider".into(),
+        workspace_scope: Some(scope()),
+        request_id: id(),
+        ..Default::default()
+    };
+    let attached = run(&state, authed_request(attach.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(attached.attached);
+    assert!(attached.receipt.is_some());
+    assert_eq!(replay(&state, attach.clone()).await, attached);
+
+    let mut provider = created.provider.unwrap();
+    provider.credentials = HashMap::from([("OPENAI_API_KEY".into(), "replacement-value".into())]);
+    let update = UpdateProviderRequest {
+        provider: Some(provider),
+        workspace_scope: Some(scope()),
+        request_id: id(),
+        ..Default::default()
+    };
+    let updated = run(&state, authed_request(update.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!updated.mutation_id.is_empty());
+    assert_eq!(updated.target_receipts.len(), 1);
+    assert_eq!(updated.target_receipts[0].mutation_id, updated.mutation_id);
+
+    let detach = DetachSandboxProviderRequest {
+        sandbox_name: "receipt-sandbox".into(),
+        provider_name: "receipt-provider".into(),
+        workspace_scope: Some(scope()),
+        request_id: id(),
+        ..Default::default()
+    };
+    let detached = run(&state, authed_request(detach.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(detached.detached);
+    assert!(detached.receipt.is_some());
+    assert_eq!(replay(&state, detach.clone()).await, detached);
+
+    // Replay returns the original target and epoch even though it is detached
+    // now. It neither selects new targets nor executes the stale attach again.
+    assert_eq!(replay(&state, update.clone()).await, updated);
+    let replayed_attach = replay(&state, attach).await;
+    assert_eq!(replayed_attach.receipt, attached.receipt);
+    assert!(replayed_attach.attached);
+    assert_eq!(replayed_attach.sandbox, detached.sandbox);
+    let operations = state
+        .store
+        .count_in_workspace(
+            config_update_operation::CONFIG_UPDATE_OPERATION_OBJECT_TYPE,
+            "default",
+        )
+        .await
+        .unwrap();
+    assert_eq!(operations, 3);
+
+    // Lost operation evidence makes replay unavailable. It must not rotate
+    // credentials or produce a replacement receipt to repair that evidence.
+    state
+        .store
+        .delete(
+            config_update_operation::CONFIG_UPDATE_OPERATION_OBJECT_TYPE,
+            &updated.target_receipts[0].receipt_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reason(&run(&state, authed_request(update)).await.unwrap_err()),
+        "REQUEST_REPLAY_UNAVAILABLE"
+    );
+    assert_eq!(replay(&state, detach).await, detached);
+    let current: Provider = state
+        .store
+        .get_message(updated.provider.as_ref().unwrap().object_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        current.get_resource_version(),
+        updated.provider.unwrap().get_resource_version()
+    );
+}
+
+#[tokio::test]
 async fn provider_replay_is_redacted_and_update_does_not_recheck_stale_version() {
     let (_directory, state) = protected_state().await;
     let create = CreateProviderRequest {

@@ -19,9 +19,9 @@ use openshell_core::proto::open_shell_client::OpenShellClient;
 use openshell_core::proto::{
     ConfigApplyFailure, ConfigApplyOutcome, ConfigBootstrap, ConfigBootstrapResult,
     ConfigComponent, ConfigComponentApplyResult, ConfigSnapshotRevision, ConfigUpdate,
-    ConfigUpdateResult, FinalizeMainProcessExitRequest, GatewayMessage, RelayFrame, RelayInit,
-    RelayOpen, RelayOpenResult, ReportMainProcessExitRequest, SandboxPolicy, StartupConfigPrepared,
-    SupervisorHeartbeat, SupervisorHello, SupervisorMessage, TcpRelayTarget,
+    ConfigUpdateResult, FinalizeMainProcessExitRequest, GatewayMessage, ImagePolicyDiscovery,
+    RelayFrame, RelayInit, RelayOpen, RelayOpenResult, ReportMainProcessExitRequest, SandboxPolicy,
+    StartupConfigPrepared, SupervisorHeartbeat, SupervisorHello, SupervisorMessage, TcpRelayTarget,
     config_snapshot_revision, config_update, gateway_message, relay_open, startup_config_prepared,
     supervisor_message,
 };
@@ -45,7 +45,9 @@ use openshell_core::transport_errors::is_expected_transport_close_status;
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const CONFIG_APPLY_TIMEOUT: Duration = Duration::from_mins(1);
-const SESSION_PREPARE_TIMEOUT: Duration = Duration::from_mins(2);
+// The gateway may hold the initial stream open while an operator repairs an
+// invalid image policy. Keep this above the five-minute provisioning window.
+const SESSION_PREPARE_TIMEOUT: Duration = Duration::from_mins(6);
 
 type StartupPolicyPreparer =
     Box<dyn FnOnce(SandboxPolicy) -> Result<Option<SandboxPolicy>, String> + Send>;
@@ -130,6 +132,7 @@ fn update_component_and_revision(
                         policy_version: snapshot.version,
                         policy_source: snapshot.policy_source,
                         global_policy_version: snapshot.global_policy_version,
+                        settings_revision: snapshot.settings_revision,
                     },
                 )),
             }),
@@ -441,7 +444,7 @@ pub async fn prepare(
     endpoint: String,
     sandbox_id: String,
     instance_id: String,
-    image_policy: Option<SandboxPolicy>,
+    image_policy_discovery: ImagePolicyDiscovery,
     prepare_policy: impl FnOnce(SandboxPolicy) -> Result<Option<SandboxPolicy>, String> + Send + 'static,
 ) -> Result<PreparedSupervisorSession, Box<dyn std::error::Error + Send + Sync>> {
     let prepared = tokio::time::timeout(
@@ -450,7 +453,7 @@ pub async fn prepare(
             endpoint,
             sandbox_id,
             instance_id,
-            image_policy,
+            Some(image_policy_discovery),
             Some(Box::new(prepare_policy)),
         ),
     )
@@ -571,7 +574,7 @@ async fn open_session(
     endpoint: String,
     sandbox_id: String,
     instance_id: String,
-    image_policy: Option<SandboxPolicy>,
+    image_policy_discovery: Option<ImagePolicyDiscovery>,
     mut prepare_policy: Option<StartupPolicyPreparer>,
 ) -> Result<PreparedSupervisorSession, Box<dyn std::error::Error + Send + Sync>> {
     // The same authenticated channel carries the long-lived control stream
@@ -586,12 +589,22 @@ async fn open_session(
     let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
 
     // Send hello as the first message.
+    let image_policy = image_policy_discovery.as_ref().and_then(|discovery| {
+        let openshell_core::proto::image_policy_discovery::Result::Policy(policy) =
+            discovery.result.as_ref()?
+        else {
+            return None;
+        };
+        Some(policy.clone())
+    });
     tx.send(SupervisorMessage {
         payload: Some(supervisor_message::Payload::Hello(SupervisorHello {
             sandbox_id: sandbox_id.clone(),
             instance_id: instance_id.clone(),
             protocol_revision: SUPERVISOR_PROTOCOL_REVISION,
             image_policy,
+            image_policy_discovery,
+            supports_provider_readiness: true,
         })),
     })
     .await
@@ -848,6 +861,7 @@ fn bootstrap_components(
                         policy_version: snapshot.version,
                         policy_source: snapshot.policy_source,
                         global_policy_version: snapshot.global_policy_version,
+                        settings_revision: snapshot.settings_revision,
                     },
                 )),
             }),
