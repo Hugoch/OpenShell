@@ -11,8 +11,8 @@ The driver embeds libkrun, libkrunfw, the guest OCI unpacker, the portable guest
 ```mermaid
 flowchart LR
     subgraph host["Host"]
-        gateway["openshell-gateway<br/>(VM factory adapter)"]
-        driver["openshell-driver-vm<br/>libkrun"]
+        gateway["openshell-gateway<br/>(generic registry consumer)"]
+        driver["openshell-driver-vm<br/>driver-owned registry adapter + libkrun"]
         supervisor["openshell-supervisor<br/>host policy supervisor"]
         gateway <-->|"gRPC over UDS<br/>compute-driver.sock"| driver
         supervisor <-->|"authenticated gRPC<br/>policy + relay"| gateway

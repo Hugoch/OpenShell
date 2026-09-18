@@ -17,6 +17,8 @@ pub mod driver;
 mod embedded_runtime;
 #[cfg(feature = "compute-driver")]
 mod ffi;
+#[cfg(all(not(target_os = "windows"), feature = "gateway-integration"))]
+mod gateway;
 #[cfg(feature = "compute-driver")]
 pub mod gpu;
 #[cfg(feature = "compute-driver")]
@@ -36,6 +38,8 @@ mod runtime;
 
 #[cfg(feature = "compute-driver")]
 pub use driver::{VmDriver, VmDriverConfig};
+#[cfg(all(not(target_os = "windows"), feature = "gateway-integration"))]
+pub use gateway::gateway_registration;
 #[cfg(feature = "compute-driver")]
 pub use lifecycle::{
     BackendFeature, ExtensionCapabilities, ExtensionDescriptor, GuestInitDropin, LaunchAbortReason,

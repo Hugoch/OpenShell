@@ -4279,6 +4279,7 @@ dependencies = [
 name = "openshell-driver-vm"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "base64",
  "bollard",
  "clap",
@@ -4297,6 +4298,7 @@ dependencies = [
  "openshell-otel-test-support",
  "openshell-policy",
  "openshell-sandbox-backend",
+ "openshell-server",
  "openshell-vfio",
  "opentelemetry",
  "opentelemetry_sdk",

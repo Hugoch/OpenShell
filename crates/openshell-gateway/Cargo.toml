@@ -23,10 +23,10 @@ miette = { workspace = true }
 tokio = { workspace = true }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
+openshell-managed-compute-driver = { workspace = true, features = ["gateway-integration"], optional = true }
 openshell-driver-docker = { path = "../openshell-driver-docker", optional = true }
 openshell-driver-kubernetes = { path = "../openshell-driver-kubernetes", optional = true }
 openshell-driver-podman = { path = "../openshell-driver-podman", optional = true }
-openshell-driver-vm = { path = "../openshell-driver-vm", default-features = false, features = ["managed"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 openshell-driver-mxc = { path = "../openshell-driver-mxc", optional = true }
@@ -36,18 +36,15 @@ default = ["telemetry", "in-tree-compute-drivers"]
 in-tree-compute-drivers = [
     "compute-driver-docker",
     "compute-driver-kubernetes",
+    "compute-driver-managed",
     "compute-driver-podman",
-    "compute-driver-vm",
     "compute-driver-mxc",
 ]
 compute-driver-mxc = ["dep:openshell-driver-mxc"]
 compute-driver-docker = ["dep:openshell-driver-docker", "dep:openshell-otel"]
 compute-driver-kubernetes = ["dep:openshell-driver-kubernetes", "dep:openshell-otel"]
+compute-driver-managed = ["dep:openshell-managed-compute-driver"]
 compute-driver-podman = ["dep:openshell-driver-podman", "dep:openshell-otel"]
-compute-driver-vm = [
-    "dep:openshell-driver-vm",
-    "dep:openshell-otel",
-]
 telemetry = ["openshell-core/telemetry", "openshell-server/telemetry"]
 ## Convenience alias: every default feature except `telemetry`. Build a
 ## telemetry-free gateway with

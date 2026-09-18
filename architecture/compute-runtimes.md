@@ -156,9 +156,10 @@ on a server-only API.
 Driver crates own their configuration defaults and backend-specific startup
 contract. The standalone VM driver exposes a lightweight `managed` feature for
 its configuration and subprocess arguments; this does not link libkrun or the
-VM runtime into the gateway. The gateway composition crate only adapts that
-launcher to `ComputeDriverFactory`. The server owns the generic managed-child
-readiness probe, UDS connection, supervision, and socket cleanup.
+VM runtime into the gateway. Its optional `gateway-integration` feature owns the
+`ComputeDriverFactory` adapter and exports an opaque registration; the gateway
+only installs that provider. The server owns the generic managed-child readiness
+probe, UDS connection, supervision, and socket cleanup.
 
 ## Stop and Start Lifecycle
 
