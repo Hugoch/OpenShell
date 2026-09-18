@@ -198,24 +198,99 @@ target a specific risk rather than form a simple cross-product.
 Upgrade and backward-compatibility testing is a likely release follow-up, but it
 is not part of the initial release gate.
 
-## Local build and test cycle
+## Running tests locally
 
-The default local integration environment is Ubuntu with Docker, running the
-conformance suite. From the repository root:
+The local interface is migrating with the test implementation. This section
+separates commands that work now from the desired interface so contributors do
+not mistake a target-state command for an implemented one.
+
+### Available now
+
+Local Nix commands require flakes. `tmachine` additionally requires capacity for
+a four-vCPU, 4 GiB QEMU guest. It uses HVF on Apple Silicon macOS, KVM on
+native-architecture Linux when available, and a slower TCG fallback on Linux.
+Artifact image builds require Docker.
+
+Enter the pinned source-development environment:
+
+```shell
+nix develop
+```
+
+From that shell, run the core Rust source checks individually:
+
+```shell
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run --profile ci --workspace \
+  --features openshell-server/test-support
+```
+
+These commands cover the main Rust workspace. CI also checks the separate E2E
+and example workspaces and exercises additional feature combinations as
+documented in [CI.md](CI.md).
+
+The default local integration cycle builds the current checkout and runs CLI
+conformance in the Ubuntu/Docker scenario:
 
 ```shell
 nix run .#build-artifacts
 nix run .#tmachine -- test ubuntu-docker-rootful conformance
 ```
 
-`build-artifacts` produces the binaries, images, Helm chart, and conformance
-archive expected by the current tmachine scenarios. Nix and tmachine caches may
-reuse immutable setup and installation layers, while each test runs on a fresh
-writable overlay.
+`build-artifacts` produces the binaries, runtime images, Helm chart, and
+conformance archive expected by tmachine. For a focused rebuild, the flake also
+exposes:
 
-Developers select another scenario or testsuite explicitly when working on a
-driver or feature. CI runs the complete fixed matrix in parallel; contributors
-do not need to reproduce every CI pair locally before review.
+```shell
+nix run .#build-artifacts-binaries
+nix run .#build-artifacts-images
+nix run .#build-artifacts-test-archives
+nix run .#build-artifacts-helm
+```
+
+The tmachine invocation accepts any scenario and testsuite defined in
+`tests/config.nix`:
+
+```shell
+nix run .#tmachine -- test <scenario> <testsuite>
+```
+
+The currently implemented conformance pairs are:
+
+| Scenario | Testsuite |
+|---|---|
+| `ubuntu-docker-rootful` | `conformance` |
+| `fedora-podman-rootful` | `conformance` |
+| `fedora-podman-rootless` | `conformance` |
+
+Nix and tmachine caches may reuse immutable setup and installation layers, while
+each test runs on a fresh writable overlay.
+
+The repository still provides legacy aggregate commands for checks that have
+not migrated to Nix outputs:
+
+```shell
+mise run pre-commit
+mise run test
+mise run ci
+```
+
+Use `mise tasks` to discover focused legacy tasks. These commands describe the
+current transition state; they are not the desired long-term integration-test
+interface.
+
+### Desired interface
+
+The default local path remains build artifacts, then run one named tmachine
+scenario and testsuite. New feature and driver suites should use the same
+pattern rather than add new host-specific wrappers. Nix may expose convenience
+apps that compose the build and test steps, but artifact construction remains a
+Nix responsibility and scenario execution remains a tmachine responsibility.
+
+Developers should be able to run one focused source check or one integration
+pair locally. CI runs the complete fixed matrix in parallel; contributors do
+not need to reproduce every CI pair before review.
 
 ## Test behavior and diagnostics
 
