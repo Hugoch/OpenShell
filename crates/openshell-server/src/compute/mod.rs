@@ -654,6 +654,25 @@ impl fmt::Debug for ComputeRuntime {
     }
 }
 
+#[derive(Clone, Copy)]
+enum SupervisorSessionStateUpdate<'a> {
+    Connected {
+        instance_id: &'a str,
+        admission: Option<&'a openshell_core::proto::SandboxConfigurationAdmission>,
+        readiness: SupervisorRuntimeReadiness,
+    },
+    Disconnected {
+        terminal_delivery_finalized: bool,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum SupervisorRuntimeReadiness {
+    Initializing,
+    Ready,
+    ReadyAfterAdmission,
+}
+
 impl ComputeRuntime {
     #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(
@@ -1610,7 +1629,7 @@ impl ComputeRuntime {
     ) -> Option<Sandbox> {
         let sandbox_id = transition.object_id().to_string();
         let expected_resource_version = sandbox_resource_version(transition);
-        let session_connected = self.supervisor_sessions.has_session(&sandbox_id);
+        let session_connected = self.supervisor_sessions.is_runtime_ready(&sandbox_id);
         match self
             .store
             .update_message_cas::<Sandbox, _>(&sandbox_id, expected_resource_version, |sandbox| {
@@ -2100,7 +2119,7 @@ impl ComputeRuntime {
 
         match observed {
             Ok(Some(snapshot)) if snapshot.id == sandbox_id && snapshot.status.is_some() => {
-                let session_connected = self.supervisor_sessions.has_session(sandbox_id);
+                let session_connected = self.supervisor_sessions.is_runtime_ready(sandbox_id);
                 self.write_delete_recovery_with_retry(
                     sandbox_id,
                     deleting_resource_version,
@@ -3312,7 +3331,7 @@ impl ComputeRuntime {
         expected_resource_version: u64,
         existing_phase: SandboxPhase,
     ) -> Result<(), String> {
-        let session_connected = self.supervisor_sessions.has_session(&incoming.id);
+        let session_connected = self.supervisor_sessions.is_runtime_ready(&incoming.id);
         let sandbox = self
             .store
             .update_message_cas::<Sandbox, _>(
@@ -3354,8 +3373,31 @@ impl ComputeRuntime {
         sandbox_id: &str,
         instance_id: &str,
     ) -> Result<(), String> {
-        self.set_supervisor_session_state(sandbox_id, true, Some(instance_id), None, false)
-            .await
+        self.set_supervisor_session_state(
+            sandbox_id,
+            SupervisorSessionStateUpdate::Connected {
+                instance_id,
+                admission: None,
+                readiness: SupervisorRuntimeReadiness::Ready,
+            },
+        )
+        .await
+    }
+
+    pub async fn supervisor_runtime_ready(
+        &self,
+        sandbox_id: &str,
+        instance_id: &str,
+    ) -> Result<(), String> {
+        self.set_supervisor_session_state(
+            sandbox_id,
+            SupervisorSessionStateUpdate::Connected {
+                instance_id,
+                admission: None,
+                readiness: SupervisorRuntimeReadiness::ReadyAfterAdmission,
+            },
+        )
+        .await
     }
 
     pub async fn supervisor_session_admission(
@@ -3366,10 +3408,15 @@ impl ComputeRuntime {
     ) -> Result<(), String> {
         self.set_supervisor_session_state(
             sandbox_id,
-            true,
-            Some(instance_id),
-            Some(admission),
-            false,
+            SupervisorSessionStateUpdate::Connected {
+                instance_id,
+                admission: Some(admission),
+                readiness: if self.supervisor_sessions.is_runtime_ready(sandbox_id) {
+                    SupervisorRuntimeReadiness::Ready
+                } else {
+                    SupervisorRuntimeReadiness::Initializing
+                },
+            },
         )
         .await
     }
@@ -3381,10 +3428,9 @@ impl ComputeRuntime {
     ) -> Result<(), String> {
         self.set_supervisor_session_state(
             sandbox_id,
-            false,
-            None,
-            None,
-            terminal_delivery_finalized,
+            SupervisorSessionStateUpdate::Disconnected {
+                terminal_delivery_finalized,
+            },
         )
         .await
     }
@@ -3392,10 +3438,7 @@ impl ComputeRuntime {
     async fn set_supervisor_session_state(
         &self,
         sandbox_id: &str,
-        connected: bool,
-        instance_id: Option<&str>,
-        admission: Option<&openshell_core::proto::SandboxConfigurationAdmission>,
-        terminal_delivery_finalized: bool,
+        update: SupervisorSessionStateUpdate<'_>,
     ) -> Result<(), String> {
         let _guard = self.sync_lock.lock().await;
         let existing = self
@@ -3403,32 +3446,54 @@ impl ComputeRuntime {
             .get_message::<Sandbox>(sandbox_id)
             .await
             .map_err(|err| err.to_string())?;
-        self.set_supervisor_session_state_from_snapshot(
-            sandbox_id,
-            connected,
-            instance_id,
-            admission,
-            terminal_delivery_finalized,
-            existing,
-        )
-        .await
+        self.set_supervisor_session_state_from_snapshot(sandbox_id, update, existing)
+            .await
     }
 
     async fn set_supervisor_session_state_from_snapshot(
         &self,
         sandbox_id: &str,
-        connected: bool,
-        instance_id: Option<&str>,
-        admission: Option<&openshell_core::proto::SandboxConfigurationAdmission>,
-        terminal_delivery_finalized: bool,
+        update: SupervisorSessionStateUpdate<'_>,
         mut existing: Option<Sandbox>,
     ) -> Result<(), String> {
+        let (connected, instance_id, admission, terminal_delivery_finalized, readiness) =
+            match update {
+                SupervisorSessionStateUpdate::Connected {
+                    instance_id,
+                    admission,
+                    readiness,
+                } => (true, Some(instance_id), admission, false, Some(readiness)),
+                SupervisorSessionStateUpdate::Disconnected {
+                    terminal_delivery_finalized,
+                } => (false, None, None, terminal_delivery_finalized, None),
+            };
+        let runtime_ready = matches!(
+            readiness,
+            Some(
+                SupervisorRuntimeReadiness::Ready | SupervisorRuntimeReadiness::ReadyAfterAdmission
+            )
+        );
+        let require_activated_configuration = matches!(
+            readiness,
+            Some(SupervisorRuntimeReadiness::ReadyAfterAdmission)
+        );
         for attempt in 1..=SUPERVISOR_SESSION_CAS_RETRY_LIMIT {
             let Some(current) = existing else {
                 return Ok(());
             };
             let current_phase =
                 SandboxPhase::try_from(current.phase()).unwrap_or(SandboxPhase::Unknown);
+            if connected
+                && runtime_ready
+                && require_activated_configuration
+                && current
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.configuration_activated)
+                    != Some(true)
+            {
+                return Err("sandbox configuration is not durably admitted".to_string());
+            }
             if connected
                 && (provisioning_deadline::timed_out(&current)
                     || matches!(
@@ -3468,7 +3533,6 @@ impl ComputeRuntime {
                     expected_resource_version,
                     |sandbox| {
                         if connected {
-                            ensure_supervisor_ready_status(&mut sandbox.status);
                             let status = sandbox.status.get_or_insert_with(Default::default);
                             status.main_process_instance_id =
                                 instance_id.unwrap_or_default().to_string();
@@ -3480,7 +3544,10 @@ impl ComputeRuntime {
                                         == i32::from(openshell_core::proto::ConfigurationAdmissionState::Accepted),
                                 );
                             }
-                            sandbox.set_phase(SandboxPhase::Ready as i32);
+                            if runtime_ready {
+                                ensure_supervisor_ready_status(&mut sandbox.status);
+                                sandbox.set_phase(SandboxPhase::Ready as i32);
+                            }
                         } else {
                             ensure_supervisor_not_ready_status(&mut sandbox.status);
                             sandbox.set_phase(SandboxPhase::Provisioning as i32);
@@ -10541,6 +10608,13 @@ mod tests {
             rejected.status.as_ref().unwrap().configuration_activated,
             Some(false)
         );
+        assert!(
+            runtime
+                .supervisor_runtime_ready("sb-1", "supervisor-1")
+                .await
+                .unwrap_err()
+                .contains("not durably admitted")
+        );
 
         admission.state = ConfigurationAdmissionState::Accepted.into();
         admission.error.clear();
@@ -10554,7 +10628,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(repaired.phase(), SandboxPhase::Ready as i32);
+        assert_eq!(repaired.phase(), SandboxPhase::Provisioning as i32);
         assert_eq!(
             repaired.status.as_ref().unwrap().main_process_instance_id,
             "supervisor-1"
@@ -10563,6 +10637,18 @@ mod tests {
             repaired.status.as_ref().unwrap().configuration_activated,
             Some(true)
         );
+
+        runtime
+            .supervisor_runtime_ready("sb-1", "supervisor-1")
+            .await
+            .unwrap();
+        let ready = runtime
+            .store
+            .get_message::<Sandbox>("sb-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready.phase(), SandboxPhase::Ready as i32);
     }
 
     #[tokio::test]
@@ -10604,10 +10690,11 @@ mod tests {
         runtime
             .set_supervisor_session_state_from_snapshot(
                 "sb-1",
-                true,
-                Some("test-generation"),
-                None,
-                false,
+                SupervisorSessionStateUpdate::Connected {
+                    instance_id: "test-generation",
+                    admission: None,
+                    readiness: SupervisorRuntimeReadiness::Ready,
+                },
                 stale,
             )
             .await

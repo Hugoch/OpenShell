@@ -2903,8 +2903,13 @@ message SupervisorMessage {
     ConfigUpdateResult config_update_result = 5;
     ConfigBootstrapResult config_bootstrap_result = 6;
     StartupConfigPrepared startup_config_prepared = 7;
+    // Sent after accepted admission once the workload relay is usable.
+    SupervisorRuntimeReady runtime_ready = 8;
   }
 }
+
+// Confirms that the admitted workload and its gateway relay are usable.
+message SupervisorRuntimeReady {}
 
 // Envelope for gateway-to-supervisor messages on the ConnectSupervisor stream.
 message GatewayMessage {
