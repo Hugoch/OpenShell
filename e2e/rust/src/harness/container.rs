@@ -162,12 +162,13 @@ impl ContainerHttpServer {
         let engine = ContainerEngine::from_env()?;
         let host_port = find_free_port();
         let network = e2e_network_name();
-        // Docker supervisors use the daemon host network. Publish fixtures on
-        // that host and address them through the backend's reserved alias;
-        // a Docker-network alias is not visible from a host-networked
-        // supervisor. Podman keeps its shared-network fixture path.
-        let use_host_port = network.is_none() || is_e2e_driver("docker");
-        let host = if use_host_port {
+        // A host-networked Docker supervisor cannot use a Docker network's DNS
+        // aliases, but it can route directly to containers on the bridge. Use
+        // the fixture's bridge address instead of overloading the reserved
+        // host alias, which may point at the CI job container. Podman keeps the
+        // shared-network alias path.
+        let use_host_port = network.is_none();
+        let mut host = if use_host_port {
             "host.openshell.internal".to_string()
         } else {
             alias.to_string()
@@ -216,6 +217,18 @@ impl ContainerHttpServer {
                 engine.name(),
                 output.status.code()
             ));
+        }
+
+        if is_e2e_driver("docker")
+            && let Some(network) = network.as_deref()
+        {
+            match container_network_ip(&engine, &stdout, network, alias) {
+                Ok(ip) => host = ip,
+                Err(err) => {
+                    let _ = engine.command().args(["rm", "-f", &stdout]).output();
+                    return Err(err);
+                }
+            }
         }
 
         let server = Self {
@@ -557,27 +570,32 @@ impl SupportContainer {
 
     /// The container's IP address on the shared e2e network.
     pub fn ip(&self) -> Result<String, String> {
-        let format = format!(
-            "{{{{with index .NetworkSettings.Networks \"{}\"}}}}{{{{.IPAddress}}}}{{{{end}}}}",
-            self.network
-        );
-        let output = self
-            .engine
-            .command()
-            .args(["inspect", "--format", &format, &self.container_id])
-            .output()
-            .map_err(|e| format!("inspect {} container: {e}", self.engine.name()))?;
-        let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !output.status.success() || ip.is_empty() {
-            return Err(format!(
-                "could not resolve IP of support container '{}' on network '{}':\n{}",
-                self.alias,
-                self.network,
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        Ok(ip)
+        container_network_ip(&self.engine, &self.container_id, &self.network, &self.alias)
     }
+}
+
+fn container_network_ip(
+    engine: &ContainerEngine,
+    container_id: &str,
+    network: &str,
+    label: &str,
+) -> Result<String, String> {
+    let format = format!(
+        "{{{{with index .NetworkSettings.Networks \"{network}\"}}}}{{{{.IPAddress}}}}{{{{end}}}}"
+    );
+    let output = engine
+        .command()
+        .args(["inspect", "--format", &format, container_id])
+        .output()
+        .map_err(|e| format!("inspect {} container: {e}", engine.name()))?;
+    let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || ip.is_empty() {
+        return Err(format!(
+            "could not resolve IP of support container '{label}' on network '{network}':\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(ip)
 }
 
 impl Drop for SupportContainer {
