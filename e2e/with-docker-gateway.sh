@@ -524,20 +524,17 @@ if ! ensure_sandbox_image_available "${SANDBOX_IMAGE}"; then
   exit 2
 fi
 
-PKI_DIR="${WORKDIR}/pki"
-e2e_generate_pki "${GATEWAY_BIN}" "${PKI_DIR}"
-export OPENSHELL_E2E_GATEWAY_CA_CERT="${PKI_DIR}/ca.crt"
-
 HOST_PORT=$(e2e_pick_port)
 HEALTH_PORT=$(e2e_pick_port)
 STATE_DIR="${XDG_STATE_HOME}"
 mkdir -p "${STATE_DIR}"
 JWT_DIR="${STATE_DIR}/jwt"
 
-GATEWAY_ENDPOINT="https://127.0.0.1:${HOST_PORT}"
 E2E_NAMESPACE="e2e-docker-$$-${HOST_PORT}"
 DOCKER_NETWORK_NAME="${E2E_NAMESPACE}"
 GATEWAY_HOST_ALIAS_IP=""
+GATEWAY_BIND_IP="127.0.0.1"
+SUPERVISOR_GATEWAY_HOST="127.0.0.1"
 
 ensure_e2e_docker_network "${DOCKER_NETWORK_NAME}"
 export OPENSHELL_E2E_DOCKER_NETWORK_NAME="${DOCKER_NETWORK_NAME}"
@@ -546,9 +543,26 @@ export OPENSHELL_E2E_SANDBOX_NAMESPACE="${E2E_NAMESPACE}"
 export OPENSHELL_E2E_DRIVER="docker"
 if connect_current_container_to_docker_network "${DOCKER_NETWORK_NAME}"; then
   echo "Connected CI job container to Docker network ${DOCKER_NETWORK_NAME} (${GATEWAY_HOST_ALIAS_IP})."
+  # Container jobs use the host Docker daemon. The host-networked supervisor
+  # therefore cannot reach the gateway through the job container's loopback;
+  # it reaches the gateway through the job container's address on this bridge.
+  GATEWAY_BIND_IP="0.0.0.0"
+  SUPERVISOR_GATEWAY_HOST="${GATEWAY_HOST_ALIAS_IP}"
 else
   GATEWAY_HOST_ALIAS_IP=""
 fi
+
+PKI_DIR="${WORKDIR}/pki"
+if [ -n "${GATEWAY_HOST_ALIAS_IP}" ]; then
+  e2e_generate_pki \
+    "${GATEWAY_BIN}" \
+    "${PKI_DIR}" \
+    "${SUPERVISOR_GATEWAY_HOST}"
+else
+  e2e_generate_pki "${GATEWAY_BIN}" "${PKI_DIR}"
+fi
+export OPENSHELL_E2E_GATEWAY_CA_CERT="${PKI_DIR}/ca.crt"
+GATEWAY_ENDPOINT="https://${SUPERVISOR_GATEWAY_HOST}:${HOST_PORT}"
 
 echo "Starting openshell-gateway on port ${HOST_PORT} (namespace: ${E2E_NAMESPACE})..."
 echo "Using sandbox image: ${SANDBOX_IMAGE} (pull policy: ${SANDBOX_IMAGE_PULL_POLICY})"
@@ -611,7 +625,7 @@ if [ "${OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER:-0}" = "1" ]; then
   "${DRIVER_BIN}" \
     --bind-socket "${DRIVER_SOCKET}" \
     --config "${DRIVER_CONFIG}" \
-    --gateway-bind "127.0.0.1:${HOST_PORT}" \
+    --gateway-bind "${GATEWAY_BIND_IP}:${HOST_PORT}" \
     >"${DRIVER_LOG}" 2>&1 &
   DRIVER_PID=$!
   e2e_wait_for_socket \
@@ -620,6 +634,7 @@ fi
 
 GATEWAY_ARGS=(
   --config "${GATEWAY_CONFIG}"
+  --bind-address "${GATEWAY_BIND_IP}"
   --port "${HOST_PORT}"
   --health-port "${HEALTH_PORT}"
   --compute-driver docker
