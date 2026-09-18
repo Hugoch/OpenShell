@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Fern site config — merged with skills/convert-to-fern/assets/theme/nvidia/docs-theme.yml pattern
 # Production: https://docs.nvidia.com/openshell/ — preview + custom-domain share path prefix `openshell`.
-# Internal MDX links use /latest/...; basepath-aware resolves them under /openshell/ on production.
+# Source checkouts and pull request previews expose the current documentation at /dev.
 instances:
   - url: openshell.docs.buildwithfern.com/openshell
     custom-domain: docs.nvidia.com/openshell
@@ -38,7 +38,7 @@ logo:
   dark: ./assets/NVIDIA_dark.svg
   light: ./assets/NVIDIA_light.svg
   height: 20
-  href: /openshell/latest
+  href: /openshell
   right-text: OpenShell
 
 favicon: ./assets/NVIDIA_symbol.svg
@@ -56,9 +56,10 @@ experimental:
     - ./components
 
 versions:
-  - display-name: Latest
+  - display-name: Dev
     path: ../docs/index.yml
-    slug: latest
+    slug: dev
+    availability: beta
 
 redirects:
   - source: "/openshell/latest/sandboxes/providers-v2"

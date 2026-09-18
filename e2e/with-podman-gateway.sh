@@ -151,6 +151,10 @@ export XDG_CONFIG_HOME="${WORKDIR}/config"
 cleanup() {
   local exit_code=$?
 
+  if [ -n "${SUPERVISOR_METADATA_CONTAINER:-}" ]; then
+    podman_cmd rm -f "${SUPERVISOR_METADATA_CONTAINER}" >/dev/null 2>&1 || true
+  fi
+
   e2e_stop_gateway "${GATEWAY_PID}" "${GATEWAY_PID_FILE}"
   e2e_stop_process "${DRIVER_PID}" "external Podman compute driver"
 
@@ -594,9 +598,14 @@ if ! [[ "${SUPERVISOR_BASE_IMAGE_ID}" =~ ^[0-9a-f]{64}$ ]] \
 fi
 SUPERVISOR_PACKAGE_MANIFEST="${OPENSHELL_PARITY_SUPERVISOR_PACKAGE_CAPTURE:-${WORKDIR}/supervisor.packages.txt}"
 mkdir -p "$(dirname "${SUPERVISOR_PACKAGE_MANIFEST}")"
-podman_cmd run --rm --network none --entrypoint /usr/bin/dpkg-query \
-  "${SUPERVISOR_RUNTIME_IMAGE}" -W '-f=${binary:Package}=${Version}\n' \
-  | LC_ALL=C sort >"${SUPERVISOR_PACKAGE_MANIFEST}"
+# Distroless retains package metadata but has no dpkg-query executable.
+# Copy from a stopped container so inventory does not execute image contents.
+SUPERVISOR_METADATA_CONTAINER="$(podman_cmd create --network none "${SUPERVISOR_RUNTIME_IMAGE}")"
+podman_cmd cp "${SUPERVISOR_METADATA_CONTAINER}:/var/lib/dpkg" "${WORKDIR}/supervisor-dpkg"
+podman_cmd rm "${SUPERVISOR_METADATA_CONTAINER}" >/dev/null
+SUPERVISOR_METADATA_CONTAINER=""
+uv run --no-project python "${ROOT}/e2e/support/debian-package-manifest.py" \
+  "${WORKDIR}/supervisor-dpkg" >"${SUPERVISOR_PACKAGE_MANIFEST}"
 SUPERVISOR_PACKAGE_MANIFEST_SHA256="$(sha256sum "${SUPERVISOR_PACKAGE_MANIFEST}" | cut -d' ' -f1)"
 echo "Using Podman supervisor image: ${SUPERVISOR_RUNTIME_IMAGE} (ID ${SUPERVISOR_IMAGE_ID}, digest ${SUPERVISOR_IMAGE_DIGEST}, base ${SUPERVISOR_BASE_IMAGE} ID ${SUPERVISOR_BASE_IMAGE_ID} digest ${SUPERVISOR_BASE_IMAGE_DIGEST}, packages ${SUPERVISOR_PACKAGE_MANIFEST_SHA256})"
 
@@ -762,7 +771,7 @@ if [ -n "${OPENSHELL_PARITY_LAUNCH_MANIFEST_CAPTURE:-}" ]; then
     "${SUPERVISOR_BASE_IMAGE}" \
     "${SUPERVISOR_BASE_IMAGE_ID}" \
     "${SUPERVISOR_BASE_IMAGE_DIGEST}" \
-    "${OPENSHELL_E2E_SUPERVISOR_BASE_RUNTIME_IMAGE:-${SUPERVISOR_BASE_IMAGE}@${SUPERVISOR_BASE_IMAGE_DIGEST}}" \
+    "${OPENSHELL_E2E_SUPERVISOR_BASE_RUNTIME_IMAGE:-${SUPERVISOR_BASE_IMAGE%@*}@${SUPERVISOR_BASE_IMAGE_DIGEST}}" \
     "${SUPERVISOR_PACKAGE_MANIFEST_SHA256}" \
     "${SANDBOX_IMAGE_REQUEST}" \
     "${SANDBOX_IMAGE_ID}" \
@@ -910,5 +919,23 @@ if [ -n "${OPENSHELL_E2E_EXPECTED_CONFORMANCE_SHA256:-}" ]; then
   require_expected_sha256 "conformance CLI" "${OPENSHELL_CONFORMANCE_BIN}" \
     "${OPENSHELL_E2E_EXPECTED_CONFORMANCE_SHA256}"
 fi
+# Seed the example profiles the provider tests rely on. The mTLS lanes already
+# have a registered gateway identity; the OIDC lanes deliberately skip
+# registration and have no token yet, so establish an administrator session
+# first rather than importing unauthenticated.
+if [ "${OIDC_MODE}" = "1" ]; then
+  e2e_register_oidc_admin_session \
+    "${XDG_CONFIG_HOME}" \
+    "${GATEWAY_NAME}" \
+    "${CLI_GATEWAY_ENDPOINT}" \
+    "${HOST_PORT}" \
+    "${OIDC_ISSUER}" \
+    "${OPENSHELL_E2E_OIDC_USERNAME:-admin@test}" \
+    "${OPENSHELL_E2E_OIDC_PASSWORD:-admin}" \
+    "${PKI_DIR}" \
+    "${CLI_BIN}" || exit 1
+fi
+e2e_import_example_provider_profiles "${CLI_BIN}" "${ROOT}" || exit 1
+
 echo "Running e2e command against ${CLI_GATEWAY_ENDPOINT}: $*"
 "$@"

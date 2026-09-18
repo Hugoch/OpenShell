@@ -106,6 +106,398 @@ func (SandboxPhase) EnumDescriptor() ([]byte, []int) {
 	return file_openshell_proto_rawDescGZIP(), []int{0}
 }
 
+// Operation whose installed authority is tracked by a receipt.
+type ProviderMutationKind int32
+
+const (
+	ProviderMutationKind_PROVIDER_MUTATION_KIND_UNSPECIFIED ProviderMutationKind = 0
+	ProviderMutationKind_PROVIDER_MUTATION_KIND_ATTACH      ProviderMutationKind = 1
+	ProviderMutationKind_PROVIDER_MUTATION_KIND_DETACH      ProviderMutationKind = 2
+	ProviderMutationKind_PROVIDER_MUTATION_KIND_UPDATE      ProviderMutationKind = 3
+	// Reconstructed status for existing desired state without a mutation receipt.
+	ProviderMutationKind_PROVIDER_MUTATION_KIND_OBSERVE ProviderMutationKind = 4
+)
+
+// Enum value maps for ProviderMutationKind.
+var (
+	ProviderMutationKind_name = map[int32]string{
+		0: "PROVIDER_MUTATION_KIND_UNSPECIFIED",
+		1: "PROVIDER_MUTATION_KIND_ATTACH",
+		2: "PROVIDER_MUTATION_KIND_DETACH",
+		3: "PROVIDER_MUTATION_KIND_UPDATE",
+		4: "PROVIDER_MUTATION_KIND_OBSERVE",
+	}
+	ProviderMutationKind_value = map[string]int32{
+		"PROVIDER_MUTATION_KIND_UNSPECIFIED": 0,
+		"PROVIDER_MUTATION_KIND_ATTACH":      1,
+		"PROVIDER_MUTATION_KIND_DETACH":      2,
+		"PROVIDER_MUTATION_KIND_UPDATE":      3,
+		"PROVIDER_MUTATION_KIND_OBSERVE":     4,
+	}
+)
+
+func (x ProviderMutationKind) Enum() *ProviderMutationKind {
+	p := new(ProviderMutationKind)
+	*p = x
+	return p
+}
+
+func (x ProviderMutationKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ProviderMutationKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshell_proto_enumTypes[1].Descriptor()
+}
+
+func (ProviderMutationKind) Type() protoreflect.EnumType {
+	return &file_openshell_proto_enumTypes[1]
+}
+
+func (x ProviderMutationKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ProviderMutationKind.Descriptor instead.
+func (ProviderMutationKind) EnumDescriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{1}
+}
+
+// Readiness states describe persisted intent separately from installed state.
+type ProviderReadinessState int32
+
+const (
+	ProviderReadinessState_PROVIDER_READINESS_STATE_UNSPECIFIED ProviderReadinessState = 0
+	ProviderReadinessState_PROVIDER_READINESS_STATE_PERSISTED   ProviderReadinessState = 1
+	ProviderReadinessState_PROVIDER_READINESS_STATE_PENDING     ProviderReadinessState = 2
+	ProviderReadinessState_PROVIDER_READINESS_STATE_READY       ProviderReadinessState = 3
+	ProviderReadinessState_PROVIDER_READINESS_STATE_WITHHELD    ProviderReadinessState = 4
+	ProviderReadinessState_PROVIDER_READINESS_STATE_REVOKED     ProviderReadinessState = 5
+	ProviderReadinessState_PROVIDER_READINESS_STATE_FAILED      ProviderReadinessState = 6
+	ProviderReadinessState_PROVIDER_READINESS_STATE_SUPERSEDED  ProviderReadinessState = 7
+)
+
+// Enum value maps for ProviderReadinessState.
+var (
+	ProviderReadinessState_name = map[int32]string{
+		0: "PROVIDER_READINESS_STATE_UNSPECIFIED",
+		1: "PROVIDER_READINESS_STATE_PERSISTED",
+		2: "PROVIDER_READINESS_STATE_PENDING",
+		3: "PROVIDER_READINESS_STATE_READY",
+		4: "PROVIDER_READINESS_STATE_WITHHELD",
+		5: "PROVIDER_READINESS_STATE_REVOKED",
+		6: "PROVIDER_READINESS_STATE_FAILED",
+		7: "PROVIDER_READINESS_STATE_SUPERSEDED",
+	}
+	ProviderReadinessState_value = map[string]int32{
+		"PROVIDER_READINESS_STATE_UNSPECIFIED": 0,
+		"PROVIDER_READINESS_STATE_PERSISTED":   1,
+		"PROVIDER_READINESS_STATE_PENDING":     2,
+		"PROVIDER_READINESS_STATE_READY":       3,
+		"PROVIDER_READINESS_STATE_WITHHELD":    4,
+		"PROVIDER_READINESS_STATE_REVOKED":     5,
+		"PROVIDER_READINESS_STATE_FAILED":      6,
+		"PROVIDER_READINESS_STATE_SUPERSEDED":  7,
+	}
+)
+
+func (x ProviderReadinessState) Enum() *ProviderReadinessState {
+	p := new(ProviderReadinessState)
+	*p = x
+	return p
+}
+
+func (x ProviderReadinessState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ProviderReadinessState) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshell_proto_enumTypes[2].Descriptor()
+}
+
+func (ProviderReadinessState) Type() protoreflect.EnumType {
+	return &file_openshell_proto_enumTypes[2]
+}
+
+func (x ProviderReadinessState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ProviderReadinessState.Descriptor instead.
+func (ProviderReadinessState) EnumDescriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{2}
+}
+
+// Closed reason categories are safe to display. Raw installation errors are
+// never part of the readiness protocol.
+type ProviderReadinessReason int32
+
+const (
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_UNSPECIFIED               ProviderReadinessReason = 0
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_WAITING_FOR_SUPERVISOR    ProviderReadinessReason = 1
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_WAITING_FOR_CREDENTIALS   ProviderReadinessReason = 2
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_WAITING_FOR_POLICY        ProviderReadinessReason = 3
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_WAITING_FOR_PROCESS       ProviderReadinessReason = 4
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_UNSUPPORTED_SUPERVISOR    ProviderReadinessReason = 5
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_CREDENTIALS_WITHHELD      ProviderReadinessReason = 6
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_CREDENTIAL_INSTALL_FAILED ProviderReadinessReason = 7
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_POLICY_ACTIVATION_FAILED  ProviderReadinessReason = 8
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_PROCESS_INSTALL_FAILED    ProviderReadinessReason = 9
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_SUPERVISOR_DISCONNECTED   ProviderReadinessReason = 10
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_SUPERVISOR_LEASE_EXPIRED  ProviderReadinessReason = 11
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_DESIRED_STATE_CHANGED     ProviderReadinessReason = 12
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_CREDENTIAL_EXPIRED        ProviderReadinessReason = 13
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_LOCAL_POLICY              ProviderReadinessReason = 14
+	ProviderReadinessReason_PROVIDER_READINESS_REASON_SNAPSHOT_MISMATCH         ProviderReadinessReason = 15
+)
+
+// Enum value maps for ProviderReadinessReason.
+var (
+	ProviderReadinessReason_name = map[int32]string{
+		0:  "PROVIDER_READINESS_REASON_UNSPECIFIED",
+		1:  "PROVIDER_READINESS_REASON_WAITING_FOR_SUPERVISOR",
+		2:  "PROVIDER_READINESS_REASON_WAITING_FOR_CREDENTIALS",
+		3:  "PROVIDER_READINESS_REASON_WAITING_FOR_POLICY",
+		4:  "PROVIDER_READINESS_REASON_WAITING_FOR_PROCESS",
+		5:  "PROVIDER_READINESS_REASON_UNSUPPORTED_SUPERVISOR",
+		6:  "PROVIDER_READINESS_REASON_CREDENTIALS_WITHHELD",
+		7:  "PROVIDER_READINESS_REASON_CREDENTIAL_INSTALL_FAILED",
+		8:  "PROVIDER_READINESS_REASON_POLICY_ACTIVATION_FAILED",
+		9:  "PROVIDER_READINESS_REASON_PROCESS_INSTALL_FAILED",
+		10: "PROVIDER_READINESS_REASON_SUPERVISOR_DISCONNECTED",
+		11: "PROVIDER_READINESS_REASON_SUPERVISOR_LEASE_EXPIRED",
+		12: "PROVIDER_READINESS_REASON_DESIRED_STATE_CHANGED",
+		13: "PROVIDER_READINESS_REASON_CREDENTIAL_EXPIRED",
+		14: "PROVIDER_READINESS_REASON_LOCAL_POLICY",
+		15: "PROVIDER_READINESS_REASON_SNAPSHOT_MISMATCH",
+	}
+	ProviderReadinessReason_value = map[string]int32{
+		"PROVIDER_READINESS_REASON_UNSPECIFIED":               0,
+		"PROVIDER_READINESS_REASON_WAITING_FOR_SUPERVISOR":    1,
+		"PROVIDER_READINESS_REASON_WAITING_FOR_CREDENTIALS":   2,
+		"PROVIDER_READINESS_REASON_WAITING_FOR_POLICY":        3,
+		"PROVIDER_READINESS_REASON_WAITING_FOR_PROCESS":       4,
+		"PROVIDER_READINESS_REASON_UNSUPPORTED_SUPERVISOR":    5,
+		"PROVIDER_READINESS_REASON_CREDENTIALS_WITHHELD":      6,
+		"PROVIDER_READINESS_REASON_CREDENTIAL_INSTALL_FAILED": 7,
+		"PROVIDER_READINESS_REASON_POLICY_ACTIVATION_FAILED":  8,
+		"PROVIDER_READINESS_REASON_PROCESS_INSTALL_FAILED":    9,
+		"PROVIDER_READINESS_REASON_SUPERVISOR_DISCONNECTED":   10,
+		"PROVIDER_READINESS_REASON_SUPERVISOR_LEASE_EXPIRED":  11,
+		"PROVIDER_READINESS_REASON_DESIRED_STATE_CHANGED":     12,
+		"PROVIDER_READINESS_REASON_CREDENTIAL_EXPIRED":        13,
+		"PROVIDER_READINESS_REASON_LOCAL_POLICY":              14,
+		"PROVIDER_READINESS_REASON_SNAPSHOT_MISMATCH":         15,
+	}
+)
+
+func (x ProviderReadinessReason) Enum() *ProviderReadinessReason {
+	p := new(ProviderReadinessReason)
+	*p = x
+	return p
+}
+
+func (x ProviderReadinessReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ProviderReadinessReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshell_proto_enumTypes[3].Descriptor()
+}
+
+func (ProviderReadinessReason) Type() protoreflect.EnumType {
+	return &file_openshell_proto_enumTypes[3]
+}
+
+func (x ProviderReadinessReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ProviderReadinessReason.Descriptor instead.
+func (ProviderReadinessReason) EnumDescriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{3}
+}
+
+// Component whose desired state is tracked by a durable update operation.
+type ConfigComponent int32
+
+const (
+	ConfigComponent_CONFIG_COMPONENT_UNSPECIFIED          ConfigComponent = 0
+	ConfigComponent_CONFIG_COMPONENT_SANDBOX_CONFIG       ConfigComponent = 1
+	ConfigComponent_CONFIG_COMPONENT_PROVIDER_ENVIRONMENT ConfigComponent = 2
+)
+
+// Enum value maps for ConfigComponent.
+var (
+	ConfigComponent_name = map[int32]string{
+		0: "CONFIG_COMPONENT_UNSPECIFIED",
+		1: "CONFIG_COMPONENT_SANDBOX_CONFIG",
+		2: "CONFIG_COMPONENT_PROVIDER_ENVIRONMENT",
+	}
+	ConfigComponent_value = map[string]int32{
+		"CONFIG_COMPONENT_UNSPECIFIED":          0,
+		"CONFIG_COMPONENT_SANDBOX_CONFIG":       1,
+		"CONFIG_COMPONENT_PROVIDER_ENVIRONMENT": 2,
+	}
+)
+
+func (x ConfigComponent) Enum() *ConfigComponent {
+	p := new(ConfigComponent)
+	*p = x
+	return p
+}
+
+func (x ConfigComponent) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ConfigComponent) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshell_proto_enumTypes[4].Descriptor()
+}
+
+func (ConfigComponent) Type() protoreflect.EnumType {
+	return &file_openshell_proto_enumTypes[4]
+}
+
+func (x ConfigComponent) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ConfigComponent.Descriptor instead.
+func (ConfigComponent) EnumDescriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{4}
+}
+
+// Result of applying a component revision at its owning runtime boundary.
+type ConfigApplyOutcome int32
+
+const (
+	ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_UNSPECIFIED                     ConfigApplyOutcome = 0
+	ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_APPLIED                         ConfigApplyOutcome = 1
+	ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_IGNORED_DUPLICATE               ConfigApplyOutcome = 2
+	ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_IGNORED_STALE                   ConfigApplyOutcome = 3
+	ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_RETAINED_LOCAL_OVERRIDE         ConfigApplyOutcome = 4
+	ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_DEGRADED                        ConfigApplyOutcome = 5
+	ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_FAILED_RETAINED_LAST_KNOWN_GOOD ConfigApplyOutcome = 6
+	ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_FAILED_CLOSED                   ConfigApplyOutcome = 7
+	ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_UNSUPPORTED                     ConfigApplyOutcome = 8
+)
+
+// Enum value maps for ConfigApplyOutcome.
+var (
+	ConfigApplyOutcome_name = map[int32]string{
+		0: "CONFIG_APPLY_OUTCOME_UNSPECIFIED",
+		1: "CONFIG_APPLY_OUTCOME_APPLIED",
+		2: "CONFIG_APPLY_OUTCOME_IGNORED_DUPLICATE",
+		3: "CONFIG_APPLY_OUTCOME_IGNORED_STALE",
+		4: "CONFIG_APPLY_OUTCOME_RETAINED_LOCAL_OVERRIDE",
+		5: "CONFIG_APPLY_OUTCOME_DEGRADED",
+		6: "CONFIG_APPLY_OUTCOME_FAILED_RETAINED_LAST_KNOWN_GOOD",
+		7: "CONFIG_APPLY_OUTCOME_FAILED_CLOSED",
+		8: "CONFIG_APPLY_OUTCOME_UNSUPPORTED",
+	}
+	ConfigApplyOutcome_value = map[string]int32{
+		"CONFIG_APPLY_OUTCOME_UNSPECIFIED":                     0,
+		"CONFIG_APPLY_OUTCOME_APPLIED":                         1,
+		"CONFIG_APPLY_OUTCOME_IGNORED_DUPLICATE":               2,
+		"CONFIG_APPLY_OUTCOME_IGNORED_STALE":                   3,
+		"CONFIG_APPLY_OUTCOME_RETAINED_LOCAL_OVERRIDE":         4,
+		"CONFIG_APPLY_OUTCOME_DEGRADED":                        5,
+		"CONFIG_APPLY_OUTCOME_FAILED_RETAINED_LAST_KNOWN_GOOD": 6,
+		"CONFIG_APPLY_OUTCOME_FAILED_CLOSED":                   7,
+		"CONFIG_APPLY_OUTCOME_UNSUPPORTED":                     8,
+	}
+)
+
+func (x ConfigApplyOutcome) Enum() *ConfigApplyOutcome {
+	p := new(ConfigApplyOutcome)
+	*p = x
+	return p
+}
+
+func (x ConfigApplyOutcome) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ConfigApplyOutcome) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshell_proto_enumTypes[5].Descriptor()
+}
+
+func (ConfigApplyOutcome) Type() protoreflect.EnumType {
+	return &file_openshell_proto_enumTypes[5]
+}
+
+func (x ConfigApplyOutcome) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ConfigApplyOutcome.Descriptor instead.
+func (ConfigApplyOutcome) EnumDescriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{5}
+}
+
+// Durable lifecycle of one desired-state update operation.
+type ConfigUpdateOperationState int32
+
+const (
+	ConfigUpdateOperationState_CONFIG_UPDATE_OPERATION_STATE_UNSPECIFIED ConfigUpdateOperationState = 0
+	ConfigUpdateOperationState_CONFIG_UPDATE_OPERATION_STATE_PENDING     ConfigUpdateOperationState = 1
+	ConfigUpdateOperationState_CONFIG_UPDATE_OPERATION_STATE_APPLIED     ConfigUpdateOperationState = 2
+	ConfigUpdateOperationState_CONFIG_UPDATE_OPERATION_STATE_INACTIVE    ConfigUpdateOperationState = 3
+	ConfigUpdateOperationState_CONFIG_UPDATE_OPERATION_STATE_FAILED      ConfigUpdateOperationState = 4
+	ConfigUpdateOperationState_CONFIG_UPDATE_OPERATION_STATE_SUPERSEDED  ConfigUpdateOperationState = 5
+	ConfigUpdateOperationState_CONFIG_UPDATE_OPERATION_STATE_CANCELLED   ConfigUpdateOperationState = 6
+)
+
+// Enum value maps for ConfigUpdateOperationState.
+var (
+	ConfigUpdateOperationState_name = map[int32]string{
+		0: "CONFIG_UPDATE_OPERATION_STATE_UNSPECIFIED",
+		1: "CONFIG_UPDATE_OPERATION_STATE_PENDING",
+		2: "CONFIG_UPDATE_OPERATION_STATE_APPLIED",
+		3: "CONFIG_UPDATE_OPERATION_STATE_INACTIVE",
+		4: "CONFIG_UPDATE_OPERATION_STATE_FAILED",
+		5: "CONFIG_UPDATE_OPERATION_STATE_SUPERSEDED",
+		6: "CONFIG_UPDATE_OPERATION_STATE_CANCELLED",
+	}
+	ConfigUpdateOperationState_value = map[string]int32{
+		"CONFIG_UPDATE_OPERATION_STATE_UNSPECIFIED": 0,
+		"CONFIG_UPDATE_OPERATION_STATE_PENDING":     1,
+		"CONFIG_UPDATE_OPERATION_STATE_APPLIED":     2,
+		"CONFIG_UPDATE_OPERATION_STATE_INACTIVE":    3,
+		"CONFIG_UPDATE_OPERATION_STATE_FAILED":      4,
+		"CONFIG_UPDATE_OPERATION_STATE_SUPERSEDED":  5,
+		"CONFIG_UPDATE_OPERATION_STATE_CANCELLED":   6,
+	}
+)
+
+func (x ConfigUpdateOperationState) Enum() *ConfigUpdateOperationState {
+	p := new(ConfigUpdateOperationState)
+	*p = x
+	return p
+}
+
+func (x ConfigUpdateOperationState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ConfigUpdateOperationState) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshell_proto_enumTypes[6].Descriptor()
+}
+
+func (ConfigUpdateOperationState) Type() protoreflect.EnumType {
+	return &file_openshell_proto_enumTypes[6]
+}
+
+func (x ConfigUpdateOperationState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ConfigUpdateOperationState.Descriptor instead.
+func (ConfigUpdateOperationState) EnumDescriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{6}
+}
+
 // Provider credential token grant configuration.
 // When present, the credential is obtained dynamically via OAuth2 grant when needed.
 type ProviderCredentialTokenGrantType int32
@@ -141,11 +533,11 @@ func (x ProviderCredentialTokenGrantType) String() string {
 }
 
 func (ProviderCredentialTokenGrantType) Descriptor() protoreflect.EnumDescriptor {
-	return file_openshell_proto_enumTypes[1].Descriptor()
+	return file_openshell_proto_enumTypes[7].Descriptor()
 }
 
 func (ProviderCredentialTokenGrantType) Type() protoreflect.EnumType {
-	return &file_openshell_proto_enumTypes[1]
+	return &file_openshell_proto_enumTypes[7]
 }
 
 func (x ProviderCredentialTokenGrantType) Number() protoreflect.EnumNumber {
@@ -154,7 +546,7 @@ func (x ProviderCredentialTokenGrantType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ProviderCredentialTokenGrantType.Descriptor instead.
 func (ProviderCredentialTokenGrantType) EnumDescriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{1}
+	return file_openshell_proto_rawDescGZIP(), []int{7}
 }
 
 type ProviderCredentialRefreshStrategy int32
@@ -202,11 +594,11 @@ func (x ProviderCredentialRefreshStrategy) String() string {
 }
 
 func (ProviderCredentialRefreshStrategy) Descriptor() protoreflect.EnumDescriptor {
-	return file_openshell_proto_enumTypes[2].Descriptor()
+	return file_openshell_proto_enumTypes[8].Descriptor()
 }
 
 func (ProviderCredentialRefreshStrategy) Type() protoreflect.EnumType {
-	return &file_openshell_proto_enumTypes[2]
+	return &file_openshell_proto_enumTypes[8]
 }
 
 func (x ProviderCredentialRefreshStrategy) Number() protoreflect.EnumNumber {
@@ -215,7 +607,7 @@ func (x ProviderCredentialRefreshStrategy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ProviderCredentialRefreshStrategy.Descriptor instead.
 func (ProviderCredentialRefreshStrategy) EnumDescriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{2}
+	return file_openshell_proto_rawDescGZIP(), []int{8}
 }
 
 // Stable provider profile categories used by clients for grouping and filtering.
@@ -267,11 +659,11 @@ func (x ProviderProfileCategory) String() string {
 }
 
 func (ProviderProfileCategory) Descriptor() protoreflect.EnumDescriptor {
-	return file_openshell_proto_enumTypes[3].Descriptor()
+	return file_openshell_proto_enumTypes[9].Descriptor()
 }
 
 func (ProviderProfileCategory) Type() protoreflect.EnumType {
-	return &file_openshell_proto_enumTypes[3]
+	return &file_openshell_proto_enumTypes[9]
 }
 
 func (x ProviderProfileCategory) Number() protoreflect.EnumNumber {
@@ -280,7 +672,59 @@ func (x ProviderProfileCategory) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ProviderProfileCategory.Descriptor instead.
 func (ProviderProfileCategory) EnumDescriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{3}
+	return file_openshell_proto_rawDescGZIP(), []int{9}
+}
+
+type ConfigurationAdmissionState int32
+
+const (
+	ConfigurationAdmissionState_CONFIGURATION_ADMISSION_STATE_UNSPECIFIED ConfigurationAdmissionState = 0
+	ConfigurationAdmissionState_CONFIGURATION_ADMISSION_STATE_PENDING     ConfigurationAdmissionState = 1
+	ConfigurationAdmissionState_CONFIGURATION_ADMISSION_STATE_ACCEPTED    ConfigurationAdmissionState = 2
+	ConfigurationAdmissionState_CONFIGURATION_ADMISSION_STATE_REJECTED    ConfigurationAdmissionState = 3
+)
+
+// Enum value maps for ConfigurationAdmissionState.
+var (
+	ConfigurationAdmissionState_name = map[int32]string{
+		0: "CONFIGURATION_ADMISSION_STATE_UNSPECIFIED",
+		1: "CONFIGURATION_ADMISSION_STATE_PENDING",
+		2: "CONFIGURATION_ADMISSION_STATE_ACCEPTED",
+		3: "CONFIGURATION_ADMISSION_STATE_REJECTED",
+	}
+	ConfigurationAdmissionState_value = map[string]int32{
+		"CONFIGURATION_ADMISSION_STATE_UNSPECIFIED": 0,
+		"CONFIGURATION_ADMISSION_STATE_PENDING":     1,
+		"CONFIGURATION_ADMISSION_STATE_ACCEPTED":    2,
+		"CONFIGURATION_ADMISSION_STATE_REJECTED":    3,
+	}
+)
+
+func (x ConfigurationAdmissionState) Enum() *ConfigurationAdmissionState {
+	p := new(ConfigurationAdmissionState)
+	*p = x
+	return p
+}
+
+func (x ConfigurationAdmissionState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ConfigurationAdmissionState) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshell_proto_enumTypes[10].Descriptor()
+}
+
+func (ConfigurationAdmissionState) Type() protoreflect.EnumType {
+	return &file_openshell_proto_enumTypes[10]
+}
+
+func (x ConfigurationAdmissionState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ConfigurationAdmissionState.Descriptor instead.
+func (ConfigurationAdmissionState) EnumDescriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{10}
 }
 
 // Policy load status.
@@ -329,11 +773,11 @@ func (x PolicyStatus) String() string {
 }
 
 func (PolicyStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_openshell_proto_enumTypes[4].Descriptor()
+	return file_openshell_proto_enumTypes[11].Descriptor()
 }
 
 func (PolicyStatus) Type() protoreflect.EnumType {
-	return &file_openshell_proto_enumTypes[4]
+	return &file_openshell_proto_enumTypes[11]
 }
 
 func (x PolicyStatus) Number() protoreflect.EnumNumber {
@@ -342,7 +786,7 @@ func (x PolicyStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PolicyStatus.Descriptor instead.
 func (PolicyStatus) EnumDescriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{4}
+	return file_openshell_proto_rawDescGZIP(), []int{11}
 }
 
 // Service status enum.
@@ -382,11 +826,11 @@ func (x ServiceStatus) String() string {
 }
 
 func (ServiceStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_openshell_proto_enumTypes[5].Descriptor()
+	return file_openshell_proto_enumTypes[12].Descriptor()
 }
 
 func (ServiceStatus) Type() protoreflect.EnumType {
-	return &file_openshell_proto_enumTypes[5]
+	return &file_openshell_proto_enumTypes[12]
 }
 
 func (x ServiceStatus) Number() protoreflect.EnumNumber {
@@ -395,7 +839,7 @@ func (x ServiceStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ServiceStatus.Descriptor instead.
 func (ServiceStatus) EnumDescriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{5}
+	return file_openshell_proto_rawDescGZIP(), []int{12}
 }
 
 // Workspace-scoped role for members.
@@ -432,11 +876,11 @@ func (x WorkspaceRole) String() string {
 }
 
 func (WorkspaceRole) Descriptor() protoreflect.EnumDescriptor {
-	return file_openshell_proto_enumTypes[6].Descriptor()
+	return file_openshell_proto_enumTypes[13].Descriptor()
 }
 
 func (WorkspaceRole) Type() protoreflect.EnumType {
-	return &file_openshell_proto_enumTypes[6]
+	return &file_openshell_proto_enumTypes[13]
 }
 
 func (x WorkspaceRole) Number() protoreflect.EnumNumber {
@@ -445,7 +889,7 @@ func (x WorkspaceRole) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WorkspaceRole.Descriptor instead.
 func (WorkspaceRole) EnumDescriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{6}
+	return file_openshell_proto_rawDescGZIP(), []int{13}
 }
 
 // Stable recovery action for the most recent provider credential refresh
@@ -491,11 +935,11 @@ func (x ProviderCredentialRefreshRecoveryAction) String() string {
 }
 
 func (ProviderCredentialRefreshRecoveryAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_openshell_proto_enumTypes[7].Descriptor()
+	return file_openshell_proto_enumTypes[14].Descriptor()
 }
 
 func (ProviderCredentialRefreshRecoveryAction) Type() protoreflect.EnumType {
-	return &file_openshell_proto_enumTypes[7]
+	return &file_openshell_proto_enumTypes[14]
 }
 
 func (x ProviderCredentialRefreshRecoveryAction) Number() protoreflect.EnumNumber {
@@ -504,7 +948,7 @@ func (x ProviderCredentialRefreshRecoveryAction) Number() protoreflect.EnumNumbe
 
 // Deprecated: Use ProviderCredentialRefreshRecoveryAction.Descriptor instead.
 func (ProviderCredentialRefreshRecoveryAction) EnumDescriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{7}
+	return file_openshell_proto_rawDescGZIP(), []int{14}
 }
 
 // Result of a public delete, membership removal, or session revocation.
@@ -554,11 +998,11 @@ func (x DeletionOutcome) String() string {
 }
 
 func (DeletionOutcome) Descriptor() protoreflect.EnumDescriptor {
-	return file_openshell_proto_enumTypes[8].Descriptor()
+	return file_openshell_proto_enumTypes[15].Descriptor()
 }
 
 func (DeletionOutcome) Type() protoreflect.EnumType {
-	return &file_openshell_proto_enumTypes[8]
+	return &file_openshell_proto_enumTypes[15]
 }
 
 func (x DeletionOutcome) Number() protoreflect.EnumNumber {
@@ -567,7 +1011,7 @@ func (x DeletionOutcome) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DeletionOutcome.Descriptor instead.
 func (DeletionOutcome) EnumDescriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{8}
+	return file_openshell_proto_rawDescGZIP(), []int{15}
 }
 
 // Last observed network result for a configured external tool endpoint.
@@ -628,11 +1072,11 @@ func (x EndpointResult) String() string {
 }
 
 func (EndpointResult) Descriptor() protoreflect.EnumDescriptor {
-	return file_openshell_proto_enumTypes[9].Descriptor()
+	return file_openshell_proto_enumTypes[16].Descriptor()
 }
 
 func (EndpointResult) Type() protoreflect.EnumType {
-	return &file_openshell_proto_enumTypes[9]
+	return &file_openshell_proto_enumTypes[16]
 }
 
 func (x EndpointResult) Number() protoreflect.EnumNumber {
@@ -641,7 +1085,7 @@ func (x EndpointResult) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EndpointResult.Descriptor instead.
 func (EndpointResult) EnumDescriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{9}
+	return file_openshell_proto_rawDescGZIP(), []int{16}
 }
 
 // IssueSandboxToken request. Empty body; identity is established by the
@@ -1632,9 +2076,12 @@ type SandboxSpec struct {
 	// portable scratch login shell before persistence.
 	Command []string `protobuf:"bytes,12,rep,name=command,proto3" json:"command,omitempty"`
 	// Allocate a retained pseudo-terminal for the main process.
-	Tty           bool `protobuf:"varint,13,opt,name=tty,proto3" json:"tty,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Tty bool `protobuf:"varint,13,opt,name=tty,proto3" json:"tty,omitempty"`
+	// Gateway-owned attachment identity, changed atomically with the provider set.
+	// Equality only: detach and reattach must not revive an older receipt.
+	ProviderAttachmentEpoch string `protobuf:"bytes,14,opt,name=provider_attachment_epoch,json=providerAttachmentEpoch,proto3" json:"provider_attachment_epoch,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *SandboxSpec) Reset() {
@@ -1721,6 +2168,13 @@ func (x *SandboxSpec) GetTty() bool {
 		return x.Tty
 	}
 	return false
+}
+
+func (x *SandboxSpec) GetProviderAttachmentEpoch() string {
+	if x != nil {
+		return x.ProviderAttachmentEpoch
+	}
+	return ""
 }
 
 type ResourceRequirements struct {
@@ -2374,8 +2828,14 @@ type SandboxStatus struct {
 	// Currently populated for MCP-over-HTTP endpoints. These passive results
 	// remain separate from sandbox lifecycle conditions and readiness.
 	EndpointStatuses []*EndpointStatus `protobuf:"bytes,10,rep,name=endpoint_statuses,json=endpointStatuses,proto3" json:"endpoint_statuses,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Independent of infrastructure phase; retained across driver observations.
+	ConfigurationAdmission *SandboxConfigurationAdmission `protobuf:"bytes,11,opt,name=configuration_admission,json=configurationAdmission,proto3" json:"configuration_admission,omitempty"`
+	// Durable first-acceptance marker. Absent on legacy records; never reset by restart.
+	ConfigurationActivated *bool `protobuf:"varint,12,opt,name=configuration_activated,json=configurationActivated,proto3,oneof" json:"configuration_activated,omitempty"`
+	// Gateway-owned repair window. Retained after timeout for inspection and retry.
+	Provisioning  *SandboxProvisioning `protobuf:"bytes,13,opt,name=provisioning,proto3" json:"provisioning,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SandboxStatus) Reset() {
@@ -2474,6 +2934,27 @@ func (x *SandboxStatus) GetExitCode() int32 {
 func (x *SandboxStatus) GetEndpointStatuses() []*EndpointStatus {
 	if x != nil {
 		return x.EndpointStatuses
+	}
+	return nil
+}
+
+func (x *SandboxStatus) GetConfigurationAdmission() *SandboxConfigurationAdmission {
+	if x != nil {
+		return x.ConfigurationAdmission
+	}
+	return nil
+}
+
+func (x *SandboxStatus) GetConfigurationActivated() bool {
+	if x != nil && x.ConfigurationActivated != nil {
+		return *x.ConfigurationActivated
+	}
+	return false
+}
+
+func (x *SandboxStatus) GetProvisioning() *SandboxProvisioning {
+	if x != nil {
+		return x.Provisioning
 	}
 	return nil
 }
@@ -2669,8 +3150,11 @@ type CreateSandboxRequest struct {
 	WorkloadTemplateName string `protobuf:"bytes,7,opt,name=workload_template_name,json=workloadTemplateName,proto3" json:"workload_template_name,omitempty"`
 	// Explicit workspace for the sandbox. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,8,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,9,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateSandboxRequest) Reset() {
@@ -2752,13 +3236,23 @@ func (x *CreateSandboxRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelecto
 	return nil
 }
 
+func (x *CreateSandboxRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type CreateSandboxTemplateRequest struct {
 	state    protoimpl.MessageState   `protogen:"open.v1"`
 	Template *SandboxWorkloadTemplate `protobuf:"bytes,1,opt,name=template,proto3" json:"template,omitempty"`
 	// Explicit workspace for the template. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,3,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateSandboxTemplateRequest) Reset() {
@@ -2803,6 +3297,13 @@ func (x *CreateSandboxTemplateRequest) GetWorkspaceScope() *datamodelv1.Workspac
 		return x.WorkspaceScope
 	}
 	return nil
+}
+
+func (x *CreateSandboxTemplateRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
 }
 
 type GetSandboxTemplateRequest struct {
@@ -2939,7 +3440,9 @@ type DeleteSandboxTemplateRequest struct {
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,3,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
 	// Succeed with ALREADY_ABSENT if the target is missing. Authorization and
 	// parent-workspace checks still apply.
-	AllowMissing  bool `protobuf:"varint,4,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
+	AllowMissing bool `protobuf:"varint,4,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
+	// Optional nonzero UUID. Same ID and payload replay success for 24 hours.
+	RequestId     string `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2993,6 +3496,13 @@ func (x *DeleteSandboxTemplateRequest) GetAllowMissing() bool {
 		return x.AllowMissing
 	}
 	return false
+}
+
+func (x *DeleteSandboxTemplateRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
 }
 
 type SandboxTemplateResponse struct {
@@ -3477,8 +3987,11 @@ type AttachSandboxProviderRequest struct {
 	ExpectedResourceVersion uint64 `protobuf:"varint,3,opt,name=expected_resource_version,json=expectedResourceVersion,proto3" json:"expected_resource_version,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,5,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AttachSandboxProviderRequest) Reset() {
@@ -3539,6 +4052,13 @@ func (x *AttachSandboxProviderRequest) GetWorkspaceScope() *datamodelv1.Workspac
 	return nil
 }
 
+func (x *AttachSandboxProviderRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Detach provider from sandbox request.
 type DetachSandboxProviderRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -3553,8 +4073,11 @@ type DetachSandboxProviderRequest struct {
 	ExpectedResourceVersion uint64 `protobuf:"varint,3,opt,name=expected_resource_version,json=expectedResourceVersion,proto3" json:"expected_resource_version,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,5,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DetachSandboxProviderRequest) Reset() {
@@ -3615,6 +4138,13 @@ func (x *DetachSandboxProviderRequest) GetWorkspaceScope() *datamodelv1.Workspac
 	return nil
 }
 
+func (x *DetachSandboxProviderRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Delete sandbox request.
 type DeleteSandboxRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -3624,7 +4154,10 @@ type DeleteSandboxRequest struct {
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,3,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
 	// Succeed with ALREADY_ABSENT if the target is missing. Does not wait for
 	// asynchronous cleanup and does not suppress authorization or parent errors.
-	AllowMissing  bool `protobuf:"varint,4,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
+	AllowMissing bool `protobuf:"varint,4,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3680,6 +4213,13 @@ func (x *DeleteSandboxRequest) GetAllowMissing() bool {
 	return false
 }
 
+func (x *DeleteSandboxRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Stop sandbox request.
 type StopSandboxRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -3687,8 +4227,11 @@ type StopSandboxRequest struct {
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,3,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StopSandboxRequest) Reset() {
@@ -3735,6 +4278,13 @@ func (x *StopSandboxRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelector 
 	return nil
 }
 
+func (x *StopSandboxRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Start sandbox request.
 type StartSandboxRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -3742,8 +4292,11 @@ type StartSandboxRequest struct {
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,3,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StartSandboxRequest) Reset() {
@@ -3788,6 +4341,13 @@ func (x *StartSandboxRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelector
 		return x.WorkspaceScope
 	}
 	return nil
+}
+
+func (x *StartSandboxRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
 }
 
 // Sandbox response.
@@ -3939,7 +4499,9 @@ type AttachSandboxProviderResponse struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Sandbox *Sandbox               `protobuf:"bytes,1,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
 	// True when the provider was newly attached. False means it was already attached.
-	Attached      bool `protobuf:"varint,2,opt,name=attached,proto3" json:"attached,omitempty"`
+	Attached bool `protobuf:"varint,2,opt,name=attached,proto3" json:"attached,omitempty"`
+	// Persisted intent; readiness requires current supervisor observations.
+	Receipt       *ProviderMutationReceipt `protobuf:"bytes,3,opt,name=receipt,proto3" json:"receipt,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3988,12 +4550,21 @@ func (x *AttachSandboxProviderResponse) GetAttached() bool {
 	return false
 }
 
+func (x *AttachSandboxProviderResponse) GetReceipt() *ProviderMutationReceipt {
+	if x != nil {
+		return x.Receipt
+	}
+	return nil
+}
+
 // Detach provider from sandbox response.
 type DetachSandboxProviderResponse struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Sandbox *Sandbox               `protobuf:"bytes,1,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
 	// True when the provider was removed. False means it was not attached.
-	Detached      bool `protobuf:"varint,2,opt,name=detached,proto3" json:"detached,omitempty"`
+	Detached bool `protobuf:"varint,2,opt,name=detached,proto3" json:"detached,omitempty"`
+	// Revocation is complete only when this receipt reports REVOKED.
+	Receipt       *ProviderMutationReceipt `protobuf:"bytes,3,opt,name=receipt,proto3" json:"receipt,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4042,6 +4613,971 @@ func (x *DetachSandboxProviderResponse) GetDetached() bool {
 	return false
 }
 
+func (x *DetachSandboxProviderResponse) GetReceipt() *ProviderMutationReceipt {
+	if x != nil {
+		return x.Receipt
+	}
+	return nil
+}
+
+// Exact desired authority. Revisions are opaque identities, never ordered.
+type ProviderDesiredIdentity struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId       string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	SandboxName     string                 `protobuf:"bytes,2,opt,name=sandbox_name,json=sandboxName,proto3" json:"sandbox_name,omitempty"`
+	AttachmentEpoch string                 `protobuf:"bytes,3,opt,name=attachment_epoch,json=attachmentEpoch,proto3" json:"attachment_epoch,omitempty"`
+	// Empty for a detached provider.
+	ProviderId              string `protobuf:"bytes,4,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
+	ProviderResourceVersion uint64 `protobuf:"varint,5,opt,name=provider_resource_version,json=providerResourceVersion,proto3" json:"provider_resource_version,omitempty"`
+	ProviderEnvRevision     uint64 `protobuf:"varint,6,opt,name=provider_env_revision,json=providerEnvRevision,proto3" json:"provider_env_revision,omitempty"`
+	ConfigRevision          uint64 `protobuf:"varint,7,opt,name=config_revision,json=configRevision,proto3" json:"config_revision,omitempty"`
+	PolicyHash              string `protobuf:"bytes,8,opt,name=policy_hash,json=policyHash,proto3" json:"policy_hash,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *ProviderDesiredIdentity) Reset() {
+	*x = ProviderDesiredIdentity{}
+	mi := &file_openshell_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderDesiredIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderDesiredIdentity) ProtoMessage() {}
+
+func (x *ProviderDesiredIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderDesiredIdentity.ProtoReflect.Descriptor instead.
+func (*ProviderDesiredIdentity) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *ProviderDesiredIdentity) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *ProviderDesiredIdentity) GetSandboxName() string {
+	if x != nil {
+		return x.SandboxName
+	}
+	return ""
+}
+
+func (x *ProviderDesiredIdentity) GetAttachmentEpoch() string {
+	if x != nil {
+		return x.AttachmentEpoch
+	}
+	return ""
+}
+
+func (x *ProviderDesiredIdentity) GetProviderId() string {
+	if x != nil {
+		return x.ProviderId
+	}
+	return ""
+}
+
+func (x *ProviderDesiredIdentity) GetProviderResourceVersion() uint64 {
+	if x != nil {
+		return x.ProviderResourceVersion
+	}
+	return 0
+}
+
+func (x *ProviderDesiredIdentity) GetProviderEnvRevision() uint64 {
+	if x != nil {
+		return x.ProviderEnvRevision
+	}
+	return 0
+}
+
+func (x *ProviderDesiredIdentity) GetConfigRevision() uint64 {
+	if x != nil {
+		return x.ConfigRevision
+	}
+	return 0
+}
+
+func (x *ProviderDesiredIdentity) GetPolicyHash() string {
+	if x != nil {
+		return x.PolicyHash
+	}
+	return ""
+}
+
+// Identifies one component snapshot revision. Revisions are equality tokens,
+// not members of one shared ordering domain.
+type ConfigSnapshotRevision struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Component:
+	//
+	//	*ConfigSnapshotRevision_SandboxConfig
+	//	*ConfigSnapshotRevision_ProviderEnvironment
+	//	*ConfigSnapshotRevision_ProviderTarget
+	Component     isConfigSnapshotRevision_Component `protobuf_oneof:"component"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigSnapshotRevision) Reset() {
+	*x = ConfigSnapshotRevision{}
+	mi := &file_openshell_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigSnapshotRevision) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigSnapshotRevision) ProtoMessage() {}
+
+func (x *ConfigSnapshotRevision) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigSnapshotRevision.ProtoReflect.Descriptor instead.
+func (*ConfigSnapshotRevision) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *ConfigSnapshotRevision) GetComponent() isConfigSnapshotRevision_Component {
+	if x != nil {
+		return x.Component
+	}
+	return nil
+}
+
+func (x *ConfigSnapshotRevision) GetSandboxConfig() *SandboxConfigRevision {
+	if x != nil {
+		if x, ok := x.Component.(*ConfigSnapshotRevision_SandboxConfig); ok {
+			return x.SandboxConfig
+		}
+	}
+	return nil
+}
+
+func (x *ConfigSnapshotRevision) GetProviderEnvironment() uint64 {
+	if x != nil {
+		if x, ok := x.Component.(*ConfigSnapshotRevision_ProviderEnvironment); ok {
+			return x.ProviderEnvironment
+		}
+	}
+	return 0
+}
+
+func (x *ConfigSnapshotRevision) GetProviderTarget() *ProviderDesiredIdentity {
+	if x != nil {
+		if x, ok := x.Component.(*ConfigSnapshotRevision_ProviderTarget); ok {
+			return x.ProviderTarget
+		}
+	}
+	return nil
+}
+
+type isConfigSnapshotRevision_Component interface {
+	isConfigSnapshotRevision_Component()
+}
+
+type ConfigSnapshotRevision_SandboxConfig struct {
+	SandboxConfig *SandboxConfigRevision `protobuf:"bytes,1,opt,name=sandbox_config,json=sandboxConfig,proto3,oneof"`
+}
+
+type ConfigSnapshotRevision_ProviderEnvironment struct {
+	ProviderEnvironment uint64 `protobuf:"varint,2,opt,name=provider_environment,json=providerEnvironment,proto3,oneof"`
+}
+
+type ConfigSnapshotRevision_ProviderTarget struct {
+	// Complete desired authority for one sandbox-scoped provider mutation.
+	ProviderTarget *ProviderDesiredIdentity `protobuf:"bytes,3,opt,name=provider_target,json=providerTarget,proto3,oneof"`
+}
+
+func (*ConfigSnapshotRevision_SandboxConfig) isConfigSnapshotRevision_Component() {}
+
+func (*ConfigSnapshotRevision_ProviderEnvironment) isConfigSnapshotRevision_Component() {}
+
+func (*ConfigSnapshotRevision_ProviderTarget) isConfigSnapshotRevision_Component() {}
+
+// Identity needed to correlate effective sandbox configuration with the
+// policy-history row whose apply status the gateway records.
+type SandboxConfigRevision struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ConfigRevision      uint64                 `protobuf:"varint,1,opt,name=config_revision,json=configRevision,proto3" json:"config_revision,omitempty"`
+	PolicyVersion       uint32                 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	PolicySource        sandboxv1.PolicySource `protobuf:"varint,3,opt,name=policy_source,json=policySource,proto3,enum=openshell.sandbox.v1.PolicySource" json:"policy_source,omitempty"`
+	GlobalPolicyVersion uint32                 `protobuf:"varint,4,opt,name=global_policy_version,json=globalPolicyVersion,proto3" json:"global_policy_version,omitempty"`
+	// Monotonic revision of the sandbox-scoped settings row. This disambiguates
+	// setting operations whose effective config fingerprint is equality-only.
+	SettingsRevision uint64 `protobuf:"varint,5,opt,name=settings_revision,json=settingsRevision,proto3" json:"settings_revision,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *SandboxConfigRevision) Reset() {
+	*x = SandboxConfigRevision{}
+	mi := &file_openshell_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SandboxConfigRevision) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SandboxConfigRevision) ProtoMessage() {}
+
+func (x *SandboxConfigRevision) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SandboxConfigRevision.ProtoReflect.Descriptor instead.
+func (*SandboxConfigRevision) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *SandboxConfigRevision) GetConfigRevision() uint64 {
+	if x != nil {
+		return x.ConfigRevision
+	}
+	return 0
+}
+
+func (x *SandboxConfigRevision) GetPolicyVersion() uint32 {
+	if x != nil {
+		return x.PolicyVersion
+	}
+	return 0
+}
+
+func (x *SandboxConfigRevision) GetPolicySource() sandboxv1.PolicySource {
+	if x != nil {
+		return x.PolicySource
+	}
+	return sandboxv1.PolicySource(0)
+}
+
+func (x *SandboxConfigRevision) GetGlobalPolicyVersion() uint32 {
+	if x != nil {
+		return x.GlobalPolicyVersion
+	}
+	return 0
+}
+
+func (x *SandboxConfigRevision) GetSettingsRevision() uint64 {
+	if x != nil {
+		return x.SettingsRevision
+	}
+	return 0
+}
+
+// Durable progress for one sandbox-scoped desired-state mutation. Snapshot
+// contents and credentials are never stored in this resource.
+type ConfigUpdateOperation struct {
+	state          protoimpl.MessageState     `protogen:"open.v1"`
+	OperationId    string                     `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	SandboxId      string                     `protobuf:"bytes,2,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	Component      ConfigComponent            `protobuf:"varint,3,opt,name=component,proto3,enum=openshell.v1.ConfigComponent" json:"component,omitempty"`
+	TargetRevision *ConfigSnapshotRevision    `protobuf:"bytes,4,opt,name=target_revision,json=targetRevision,proto3" json:"target_revision,omitempty"`
+	State          ConfigUpdateOperationState `protobuf:"varint,5,opt,name=state,proto3,enum=openshell.v1.ConfigUpdateOperationState" json:"state,omitempty"`
+	Outcome        ConfigApplyOutcome         `protobuf:"varint,6,opt,name=outcome,proto3,enum=openshell.v1.ConfigApplyOutcome" json:"outcome,omitempty"`
+	SanitizedError string                     `protobuf:"bytes,7,opt,name=sanitized_error,json=sanitizedError,proto3" json:"sanitized_error,omitempty"`
+	CreatedTime    *timestamppb.Timestamp     `protobuf:"bytes,108,opt,name=created_time,json=createdTime,proto3" json:"created_time,omitempty"`
+	UpdatedTime    *timestamppb.Timestamp     `protobuf:"bytes,109,opt,name=updated_time,json=updatedTime,proto3" json:"updated_time,omitempty"`
+	// Absent until the operation reaches a terminal state.
+	CompletedTime *timestamppb.Timestamp `protobuf:"bytes,110,opt,name=completed_time,json=completedTime,proto3" json:"completed_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigUpdateOperation) Reset() {
+	*x = ConfigUpdateOperation{}
+	mi := &file_openshell_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigUpdateOperation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigUpdateOperation) ProtoMessage() {}
+
+func (x *ConfigUpdateOperation) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigUpdateOperation.ProtoReflect.Descriptor instead.
+func (*ConfigUpdateOperation) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *ConfigUpdateOperation) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *ConfigUpdateOperation) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *ConfigUpdateOperation) GetComponent() ConfigComponent {
+	if x != nil {
+		return x.Component
+	}
+	return ConfigComponent_CONFIG_COMPONENT_UNSPECIFIED
+}
+
+func (x *ConfigUpdateOperation) GetTargetRevision() *ConfigSnapshotRevision {
+	if x != nil {
+		return x.TargetRevision
+	}
+	return nil
+}
+
+func (x *ConfigUpdateOperation) GetState() ConfigUpdateOperationState {
+	if x != nil {
+		return x.State
+	}
+	return ConfigUpdateOperationState_CONFIG_UPDATE_OPERATION_STATE_UNSPECIFIED
+}
+
+func (x *ConfigUpdateOperation) GetOutcome() ConfigApplyOutcome {
+	if x != nil {
+		return x.Outcome
+	}
+	return ConfigApplyOutcome_CONFIG_APPLY_OUTCOME_UNSPECIFIED
+}
+
+func (x *ConfigUpdateOperation) GetSanitizedError() string {
+	if x != nil {
+		return x.SanitizedError
+	}
+	return ""
+}
+
+func (x *ConfigUpdateOperation) GetCreatedTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedTime
+	}
+	return nil
+}
+
+func (x *ConfigUpdateOperation) GetUpdatedTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedTime
+	}
+	return nil
+}
+
+func (x *ConfigUpdateOperation) GetCompletedTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CompletedTime
+	}
+	return nil
+}
+
+// Immutable, secret-free record of one sandbox's intended provider mutation.
+type ProviderMutationReceipt struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ReceiptId string                 `protobuf:"bytes,1,opt,name=receipt_id,json=receiptId,proto3" json:"receipt_id,omitempty"`
+	// Shared by all sandbox receipts from one provider update.
+	MutationId    string                   `protobuf:"bytes,2,opt,name=mutation_id,json=mutationId,proto3" json:"mutation_id,omitempty"`
+	ProviderName  string                   `protobuf:"bytes,3,opt,name=provider_name,json=providerName,proto3" json:"provider_name,omitempty"`
+	Workspace     string                   `protobuf:"bytes,4,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	Kind          ProviderMutationKind     `protobuf:"varint,5,opt,name=kind,proto3,enum=openshell.v1.ProviderMutationKind" json:"kind,omitempty"`
+	Desired       *ProviderDesiredIdentity `protobuf:"bytes,6,opt,name=desired,proto3" json:"desired,omitempty"`
+	PersistedTime *timestamppb.Timestamp   `protobuf:"bytes,107,opt,name=persisted_time,json=persistedTime,proto3" json:"persisted_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProviderMutationReceipt) Reset() {
+	*x = ProviderMutationReceipt{}
+	mi := &file_openshell_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderMutationReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderMutationReceipt) ProtoMessage() {}
+
+func (x *ProviderMutationReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderMutationReceipt.ProtoReflect.Descriptor instead.
+func (*ProviderMutationReceipt) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *ProviderMutationReceipt) GetReceiptId() string {
+	if x != nil {
+		return x.ReceiptId
+	}
+	return ""
+}
+
+func (x *ProviderMutationReceipt) GetMutationId() string {
+	if x != nil {
+		return x.MutationId
+	}
+	return ""
+}
+
+func (x *ProviderMutationReceipt) GetProviderName() string {
+	if x != nil {
+		return x.ProviderName
+	}
+	return ""
+}
+
+func (x *ProviderMutationReceipt) GetWorkspace() string {
+	if x != nil {
+		return x.Workspace
+	}
+	return ""
+}
+
+func (x *ProviderMutationReceipt) GetKind() ProviderMutationKind {
+	if x != nil {
+		return x.Kind
+	}
+	return ProviderMutationKind_PROVIDER_MUTATION_KIND_UNSPECIFIED
+}
+
+func (x *ProviderMutationReceipt) GetDesired() *ProviderDesiredIdentity {
+	if x != nil {
+		return x.Desired
+	}
+	return nil
+}
+
+func (x *ProviderMutationReceipt) GetPersistedTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.PersistedTime
+	}
+	return nil
+}
+
+// Installed state reported by the current supervisor. Process installation is
+// acknowledged by the authenticated sandbox boundary after replacing its
+// environment for future process launches.
+type ProviderReadinessObservation struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Gateway-issued identifier from the current ConnectSupervisor response.
+	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Monotonic only within this connection; unrelated to revision fingerprints.
+	Sequence                   uint64                  `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	AttachmentEpoch            string                  `protobuf:"bytes,3,opt,name=attachment_epoch,json=attachmentEpoch,proto3" json:"attachment_epoch,omitempty"`
+	ProviderEnvRevision        uint64                  `protobuf:"varint,4,opt,name=provider_env_revision,json=providerEnvRevision,proto3" json:"provider_env_revision,omitempty"`
+	ConfigRevision             uint64                  `protobuf:"varint,5,opt,name=config_revision,json=configRevision,proto3" json:"config_revision,omitempty"`
+	PolicyHash                 string                  `protobuf:"bytes,6,opt,name=policy_hash,json=policyHash,proto3" json:"policy_hash,omitempty"`
+	CredentialsInstalled       bool                    `protobuf:"varint,7,opt,name=credentials_installed,json=credentialsInstalled,proto3" json:"credentials_installed,omitempty"`
+	PolicyActive               bool                    `protobuf:"varint,8,opt,name=policy_active,json=policyActive,proto3" json:"policy_active,omitempty"`
+	LaunchEnvironmentInstalled bool                    `protobuf:"varint,9,opt,name=launch_environment_installed,json=launchEnvironmentInstalled,proto3" json:"launch_environment_installed,omitempty"`
+	ProcessInstanceId          string                  `protobuf:"bytes,10,opt,name=process_instance_id,json=processInstanceId,proto3" json:"process_instance_id,omitempty"`
+	Reason                     ProviderReadinessReason `protobuf:"varint,11,opt,name=reason,proto3,enum=openshell.v1.ProviderReadinessReason" json:"reason,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
+}
+
+func (x *ProviderReadinessObservation) Reset() {
+	*x = ProviderReadinessObservation{}
+	mi := &file_openshell_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderReadinessObservation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderReadinessObservation) ProtoMessage() {}
+
+func (x *ProviderReadinessObservation) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderReadinessObservation.ProtoReflect.Descriptor instead.
+func (*ProviderReadinessObservation) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *ProviderReadinessObservation) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ProviderReadinessObservation) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *ProviderReadinessObservation) GetAttachmentEpoch() string {
+	if x != nil {
+		return x.AttachmentEpoch
+	}
+	return ""
+}
+
+func (x *ProviderReadinessObservation) GetProviderEnvRevision() uint64 {
+	if x != nil {
+		return x.ProviderEnvRevision
+	}
+	return 0
+}
+
+func (x *ProviderReadinessObservation) GetConfigRevision() uint64 {
+	if x != nil {
+		return x.ConfigRevision
+	}
+	return 0
+}
+
+func (x *ProviderReadinessObservation) GetPolicyHash() string {
+	if x != nil {
+		return x.PolicyHash
+	}
+	return ""
+}
+
+func (x *ProviderReadinessObservation) GetCredentialsInstalled() bool {
+	if x != nil {
+		return x.CredentialsInstalled
+	}
+	return false
+}
+
+func (x *ProviderReadinessObservation) GetPolicyActive() bool {
+	if x != nil {
+		return x.PolicyActive
+	}
+	return false
+}
+
+func (x *ProviderReadinessObservation) GetLaunchEnvironmentInstalled() bool {
+	if x != nil {
+		return x.LaunchEnvironmentInstalled
+	}
+	return false
+}
+
+func (x *ProviderReadinessObservation) GetProcessInstanceId() string {
+	if x != nil {
+		return x.ProcessInstanceId
+	}
+	return ""
+}
+
+func (x *ProviderReadinessObservation) GetReason() ProviderReadinessReason {
+	if x != nil {
+		return x.Reason
+	}
+	return ProviderReadinessReason_PROVIDER_READINESS_REASON_UNSPECIFIED
+}
+
+// Operator view of desired and observed state; contains no credential material.
+type ProviderReadinessStatus struct {
+	state             protoimpl.MessageState        `protogen:"open.v1"`
+	Receipt           *ProviderMutationReceipt      `protobuf:"bytes,1,opt,name=receipt,proto3" json:"receipt,omitempty"`
+	State             ProviderReadinessState        `protobuf:"varint,2,opt,name=state,proto3,enum=openshell.v1.ProviderReadinessState" json:"state,omitempty"`
+	Reason            ProviderReadinessReason       `protobuf:"varint,3,opt,name=reason,proto3,enum=openshell.v1.ProviderReadinessReason" json:"reason,omitempty"`
+	Observed          *ProviderReadinessObservation `protobuf:"bytes,4,opt,name=observed,proto3" json:"observed,omitempty"`
+	NetworkInstanceId string                        `protobuf:"bytes,5,opt,name=network_instance_id,json=networkInstanceId,proto3" json:"network_instance_id,omitempty"`
+	// Absent until the current supervisor session supplies accepted evidence.
+	ObservedTime  *timestamppb.Timestamp `protobuf:"bytes,106,opt,name=observed_time,json=observedTime,proto3" json:"observed_time,omitempty"`
+	EvaluatedTime *timestamppb.Timestamp `protobuf:"bytes,107,opt,name=evaluated_time,json=evaluatedTime,proto3" json:"evaluated_time,omitempty"`
+	// Durable operation for the receipt, including its terminal apply outcome.
+	Operation     *ConfigUpdateOperation `protobuf:"bytes,8,opt,name=operation,proto3" json:"operation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProviderReadinessStatus) Reset() {
+	*x = ProviderReadinessStatus{}
+	mi := &file_openshell_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderReadinessStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderReadinessStatus) ProtoMessage() {}
+
+func (x *ProviderReadinessStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderReadinessStatus.ProtoReflect.Descriptor instead.
+func (*ProviderReadinessStatus) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *ProviderReadinessStatus) GetReceipt() *ProviderMutationReceipt {
+	if x != nil {
+		return x.Receipt
+	}
+	return nil
+}
+
+func (x *ProviderReadinessStatus) GetState() ProviderReadinessState {
+	if x != nil {
+		return x.State
+	}
+	return ProviderReadinessState_PROVIDER_READINESS_STATE_UNSPECIFIED
+}
+
+func (x *ProviderReadinessStatus) GetReason() ProviderReadinessReason {
+	if x != nil {
+		return x.Reason
+	}
+	return ProviderReadinessReason_PROVIDER_READINESS_REASON_UNSPECIFIED
+}
+
+func (x *ProviderReadinessStatus) GetObserved() *ProviderReadinessObservation {
+	if x != nil {
+		return x.Observed
+	}
+	return nil
+}
+
+func (x *ProviderReadinessStatus) GetNetworkInstanceId() string {
+	if x != nil {
+		return x.NetworkInstanceId
+	}
+	return ""
+}
+
+func (x *ProviderReadinessStatus) GetObservedTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedTime
+	}
+	return nil
+}
+
+func (x *ProviderReadinessStatus) GetEvaluatedTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EvaluatedTime
+	}
+	return nil
+}
+
+func (x *ProviderReadinessStatus) GetOperation() *ConfigUpdateOperation {
+	if x != nil {
+		return x.Operation
+	}
+	return nil
+}
+
+// Query an immutable receipt, or reconstruct the current desired state when
+// receipt_id is empty. The sandbox identity must match the receipt.
+type GetSandboxProviderStatusRequest struct {
+	state          protoimpl.MessageState         `protogen:"open.v1"`
+	SandboxName    string                         `protobuf:"bytes,1,opt,name=sandbox_name,json=sandboxName,proto3" json:"sandbox_name,omitempty"`
+	ProviderName   string                         `protobuf:"bytes,2,opt,name=provider_name,json=providerName,proto3" json:"provider_name,omitempty"`
+	ReceiptId      string                         `protobuf:"bytes,3,opt,name=receipt_id,json=receiptId,proto3" json:"receipt_id,omitempty"`
+	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,4,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *GetSandboxProviderStatusRequest) Reset() {
+	*x = GetSandboxProviderStatusRequest{}
+	mi := &file_openshell_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSandboxProviderStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSandboxProviderStatusRequest) ProtoMessage() {}
+
+func (x *GetSandboxProviderStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSandboxProviderStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetSandboxProviderStatusRequest) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *GetSandboxProviderStatusRequest) GetSandboxName() string {
+	if x != nil {
+		return x.SandboxName
+	}
+	return ""
+}
+
+func (x *GetSandboxProviderStatusRequest) GetProviderName() string {
+	if x != nil {
+		return x.ProviderName
+	}
+	return ""
+}
+
+func (x *GetSandboxProviderStatusRequest) GetReceiptId() string {
+	if x != nil {
+		return x.ReceiptId
+	}
+	return ""
+}
+
+func (x *GetSandboxProviderStatusRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelector {
+	if x != nil {
+		return x.WorkspaceScope
+	}
+	return nil
+}
+
+type GetSandboxProviderStatusResponse struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Status        *ProviderReadinessStatus `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSandboxProviderStatusResponse) Reset() {
+	*x = GetSandboxProviderStatusResponse{}
+	mi := &file_openshell_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSandboxProviderStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSandboxProviderStatusResponse) ProtoMessage() {}
+
+func (x *GetSandboxProviderStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSandboxProviderStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetSandboxProviderStatusResponse) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *GetSandboxProviderStatusResponse) GetStatus() *ProviderReadinessStatus {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+// Installation evidence from the authenticated supervisor for this sandbox.
+// A caller-provided instance identifier alone never establishes authority.
+type ReportProviderReadinessRequest struct {
+	state         protoimpl.MessageState        `protogen:"open.v1"`
+	SandboxId     string                        `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	Observation   *ProviderReadinessObservation `protobuf:"bytes,2,opt,name=observation,proto3" json:"observation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportProviderReadinessRequest) Reset() {
+	*x = ReportProviderReadinessRequest{}
+	mi := &file_openshell_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportProviderReadinessRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportProviderReadinessRequest) ProtoMessage() {}
+
+func (x *ReportProviderReadinessRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportProviderReadinessRequest.ProtoReflect.Descriptor instead.
+func (*ReportProviderReadinessRequest) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *ReportProviderReadinessRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *ReportProviderReadinessRequest) GetObservation() *ProviderReadinessObservation {
+	if x != nil {
+		return x.Observation
+	}
+	return nil
+}
+
+// Acknowledges accepted evidence without granting a separate session authority.
+// Identical retries do not extend the evidence's original acceptance time.
+type ReportProviderReadinessResponse struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	AcceptedSequence uint64                 `protobuf:"varint,1,opt,name=accepted_sequence,json=acceptedSequence,proto3" json:"accepted_sequence,omitempty"`
+	ReportInterval   *durationpb.Duration   `protobuf:"bytes,102,opt,name=report_interval,json=reportInterval,proto3" json:"report_interval,omitempty"`
+	ObservationTtl   *durationpb.Duration   `protobuf:"bytes,103,opt,name=observation_ttl,json=observationTtl,proto3" json:"observation_ttl,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ReportProviderReadinessResponse) Reset() {
+	*x = ReportProviderReadinessResponse{}
+	mi := &file_openshell_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportProviderReadinessResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportProviderReadinessResponse) ProtoMessage() {}
+
+func (x *ReportProviderReadinessResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportProviderReadinessResponse.ProtoReflect.Descriptor instead.
+func (*ReportProviderReadinessResponse) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *ReportProviderReadinessResponse) GetAcceptedSequence() uint64 {
+	if x != nil {
+		return x.AcceptedSequence
+	}
+	return 0
+}
+
+func (x *ReportProviderReadinessResponse) GetReportInterval() *durationpb.Duration {
+	if x != nil {
+		return x.ReportInterval
+	}
+	return nil
+}
+
+func (x *ReportProviderReadinessResponse) GetObservationTtl() *durationpb.Duration {
+	if x != nil {
+		return x.ObservationTtl
+	}
+	return nil
+}
+
 // Delete sandbox response.
 type DeleteSandboxResponse struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
@@ -4055,7 +5591,7 @@ type DeleteSandboxResponse struct {
 
 func (x *DeleteSandboxResponse) Reset() {
 	*x = DeleteSandboxResponse{}
-	mi := &file_openshell_proto_msgTypes[54]
+	mi := &file_openshell_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4067,7 +5603,7 @@ func (x *DeleteSandboxResponse) String() string {
 func (*DeleteSandboxResponse) ProtoMessage() {}
 
 func (x *DeleteSandboxResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[54]
+	mi := &file_openshell_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4080,7 +5616,7 @@ func (x *DeleteSandboxResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSandboxResponse.ProtoReflect.Descriptor instead.
 func (*DeleteSandboxResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{54}
+	return file_openshell_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *DeleteSandboxResponse) GetOutcome() DeletionOutcome {
@@ -4108,7 +5644,7 @@ type CreateSshSessionRequest struct {
 
 func (x *CreateSshSessionRequest) Reset() {
 	*x = CreateSshSessionRequest{}
-	mi := &file_openshell_proto_msgTypes[55]
+	mi := &file_openshell_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4120,7 +5656,7 @@ func (x *CreateSshSessionRequest) String() string {
 func (*CreateSshSessionRequest) ProtoMessage() {}
 
 func (x *CreateSshSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[55]
+	mi := &file_openshell_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4133,7 +5669,7 @@ func (x *CreateSshSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSshSessionRequest.ProtoReflect.Descriptor instead.
 func (*CreateSshSessionRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{55}
+	return file_openshell_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *CreateSshSessionRequest) GetSandboxId() string {
@@ -4176,7 +5712,7 @@ type CreateSshSessionResponse struct {
 
 func (x *CreateSshSessionResponse) Reset() {
 	*x = CreateSshSessionResponse{}
-	mi := &file_openshell_proto_msgTypes[56]
+	mi := &file_openshell_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4188,7 +5724,7 @@ func (x *CreateSshSessionResponse) String() string {
 func (*CreateSshSessionResponse) ProtoMessage() {}
 
 func (x *CreateSshSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[56]
+	mi := &file_openshell_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4201,7 +5737,7 @@ func (x *CreateSshSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSshSessionResponse.ProtoReflect.Descriptor instead.
 func (*CreateSshSessionResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{56}
+	return file_openshell_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *CreateSshSessionResponse) GetSandboxId() string {
@@ -4266,13 +5802,16 @@ type ExposeServiceRequest struct {
 	Domain bool `protobuf:"varint,4,opt,name=domain,proto3" json:"domain,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,6,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,7,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExposeServiceRequest) Reset() {
 	*x = ExposeServiceRequest{}
-	mi := &file_openshell_proto_msgTypes[57]
+	mi := &file_openshell_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4284,7 +5823,7 @@ func (x *ExposeServiceRequest) String() string {
 func (*ExposeServiceRequest) ProtoMessage() {}
 
 func (x *ExposeServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[57]
+	mi := &file_openshell_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4297,7 +5836,7 @@ func (x *ExposeServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExposeServiceRequest.ProtoReflect.Descriptor instead.
 func (*ExposeServiceRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{57}
+	return file_openshell_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ExposeServiceRequest) GetSandbox() string {
@@ -4335,6 +5874,13 @@ func (x *ExposeServiceRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelecto
 	return nil
 }
 
+func (x *ExposeServiceRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Request to fetch an exposed sandbox service endpoint.
 type GetServiceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -4350,7 +5896,7 @@ type GetServiceRequest struct {
 
 func (x *GetServiceRequest) Reset() {
 	*x = GetServiceRequest{}
-	mi := &file_openshell_proto_msgTypes[58]
+	mi := &file_openshell_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4362,7 +5908,7 @@ func (x *GetServiceRequest) String() string {
 func (*GetServiceRequest) ProtoMessage() {}
 
 func (x *GetServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[58]
+	mi := &file_openshell_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4375,7 +5921,7 @@ func (x *GetServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServiceRequest.ProtoReflect.Descriptor instead.
 func (*GetServiceRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{58}
+	return file_openshell_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *GetServiceRequest) GetSandbox() string {
@@ -4418,7 +5964,7 @@ type ListServicesRequest struct {
 
 func (x *ListServicesRequest) Reset() {
 	*x = ListServicesRequest{}
-	mi := &file_openshell_proto_msgTypes[59]
+	mi := &file_openshell_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4430,7 +5976,7 @@ func (x *ListServicesRequest) String() string {
 func (*ListServicesRequest) ProtoMessage() {}
 
 func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[59]
+	mi := &file_openshell_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4443,7 +5989,7 @@ func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesRequest.ProtoReflect.Descriptor instead.
 func (*ListServicesRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{59}
+	return file_openshell_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ListServicesRequest) GetSandbox() string {
@@ -4486,7 +6032,7 @@ type ListServicesResponse struct {
 
 func (x *ListServicesResponse) Reset() {
 	*x = ListServicesResponse{}
-	mi := &file_openshell_proto_msgTypes[60]
+	mi := &file_openshell_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4498,7 +6044,7 @@ func (x *ListServicesResponse) String() string {
 func (*ListServicesResponse) ProtoMessage() {}
 
 func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[60]
+	mi := &file_openshell_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4511,7 +6057,7 @@ func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesResponse.ProtoReflect.Descriptor instead.
 func (*ListServicesResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{60}
+	return file_openshell_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ListServicesResponse) GetServices() []*ServiceEndpointResponse {
@@ -4538,13 +6084,16 @@ type DeleteServiceRequest struct {
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,4,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
 	AllowMissing   bool                           `protobuf:"varint,5,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteServiceRequest) Reset() {
 	*x = DeleteServiceRequest{}
-	mi := &file_openshell_proto_msgTypes[61]
+	mi := &file_openshell_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4556,7 +6105,7 @@ func (x *DeleteServiceRequest) String() string {
 func (*DeleteServiceRequest) ProtoMessage() {}
 
 func (x *DeleteServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[61]
+	mi := &file_openshell_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4569,7 +6118,7 @@ func (x *DeleteServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteServiceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteServiceRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{61}
+	return file_openshell_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *DeleteServiceRequest) GetSandbox() string {
@@ -4600,6 +6149,13 @@ func (x *DeleteServiceRequest) GetAllowMissing() bool {
 	return false
 }
 
+func (x *DeleteServiceRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Response for deleting an exposed sandbox service endpoint.
 type DeleteServiceResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -4610,7 +6166,7 @@ type DeleteServiceResponse struct {
 
 func (x *DeleteServiceResponse) Reset() {
 	*x = DeleteServiceResponse{}
-	mi := &file_openshell_proto_msgTypes[62]
+	mi := &file_openshell_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4622,7 +6178,7 @@ func (x *DeleteServiceResponse) String() string {
 func (*DeleteServiceResponse) ProtoMessage() {}
 
 func (x *DeleteServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[62]
+	mi := &file_openshell_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4635,7 +6191,7 @@ func (x *DeleteServiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteServiceResponse.ProtoReflect.Descriptor instead.
 func (*DeleteServiceResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{62}
+	return file_openshell_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *DeleteServiceResponse) GetOutcome() DeletionOutcome {
@@ -4666,7 +6222,7 @@ type ServiceEndpoint struct {
 
 func (x *ServiceEndpoint) Reset() {
 	*x = ServiceEndpoint{}
-	mi := &file_openshell_proto_msgTypes[63]
+	mi := &file_openshell_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4678,7 +6234,7 @@ func (x *ServiceEndpoint) String() string {
 func (*ServiceEndpoint) ProtoMessage() {}
 
 func (x *ServiceEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[63]
+	mi := &file_openshell_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4691,7 +6247,7 @@ func (x *ServiceEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceEndpoint.ProtoReflect.Descriptor instead.
 func (*ServiceEndpoint) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{63}
+	return file_openshell_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ServiceEndpoint) GetMetadata() *datamodelv1.ObjectMeta {
@@ -4747,7 +6303,7 @@ type ServiceEndpointResponse struct {
 
 func (x *ServiceEndpointResponse) Reset() {
 	*x = ServiceEndpointResponse{}
-	mi := &file_openshell_proto_msgTypes[64]
+	mi := &file_openshell_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4759,7 +6315,7 @@ func (x *ServiceEndpointResponse) String() string {
 func (*ServiceEndpointResponse) ProtoMessage() {}
 
 func (x *ServiceEndpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[64]
+	mi := &file_openshell_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4772,7 +6328,7 @@ func (x *ServiceEndpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceEndpointResponse.ProtoReflect.Descriptor instead.
 func (*ServiceEndpointResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{64}
+	return file_openshell_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ServiceEndpointResponse) GetEndpoint() *ServiceEndpoint {
@@ -4803,7 +6359,7 @@ type RevokeSshSessionRequest struct {
 
 func (x *RevokeSshSessionRequest) Reset() {
 	*x = RevokeSshSessionRequest{}
-	mi := &file_openshell_proto_msgTypes[65]
+	mi := &file_openshell_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4815,7 +6371,7 @@ func (x *RevokeSshSessionRequest) String() string {
 func (*RevokeSshSessionRequest) ProtoMessage() {}
 
 func (x *RevokeSshSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[65]
+	mi := &file_openshell_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4828,7 +6384,7 @@ func (x *RevokeSshSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeSshSessionRequest.ProtoReflect.Descriptor instead.
 func (*RevokeSshSessionRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{65}
+	return file_openshell_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *RevokeSshSessionRequest) GetToken() string {
@@ -4855,7 +6411,7 @@ type RevokeSshSessionResponse struct {
 
 func (x *RevokeSshSessionResponse) Reset() {
 	*x = RevokeSshSessionResponse{}
-	mi := &file_openshell_proto_msgTypes[66]
+	mi := &file_openshell_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4867,7 +6423,7 @@ func (x *RevokeSshSessionResponse) String() string {
 func (*RevokeSshSessionResponse) ProtoMessage() {}
 
 func (x *RevokeSshSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[66]
+	mi := &file_openshell_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4880,7 +6436,7 @@ func (x *RevokeSshSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeSshSessionResponse.ProtoReflect.Descriptor instead.
 func (*RevokeSshSessionResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{66}
+	return file_openshell_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *RevokeSshSessionResponse) GetOutcome() DeletionOutcome {
@@ -4923,7 +6479,7 @@ type ExecSandboxRequest struct {
 
 func (x *ExecSandboxRequest) Reset() {
 	*x = ExecSandboxRequest{}
-	mi := &file_openshell_proto_msgTypes[67]
+	mi := &file_openshell_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4935,7 +6491,7 @@ func (x *ExecSandboxRequest) String() string {
 func (*ExecSandboxRequest) ProtoMessage() {}
 
 func (x *ExecSandboxRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[67]
+	mi := &file_openshell_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4948,7 +6504,7 @@ func (x *ExecSandboxRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecSandboxRequest.ProtoReflect.Descriptor instead.
 func (*ExecSandboxRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{67}
+	return file_openshell_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ExecSandboxRequest) GetSandboxId() string {
@@ -5031,7 +6587,7 @@ type ExecSandboxStdout struct {
 
 func (x *ExecSandboxStdout) Reset() {
 	*x = ExecSandboxStdout{}
-	mi := &file_openshell_proto_msgTypes[68]
+	mi := &file_openshell_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5043,7 +6599,7 @@ func (x *ExecSandboxStdout) String() string {
 func (*ExecSandboxStdout) ProtoMessage() {}
 
 func (x *ExecSandboxStdout) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[68]
+	mi := &file_openshell_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5056,7 +6612,7 @@ func (x *ExecSandboxStdout) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecSandboxStdout.ProtoReflect.Descriptor instead.
 func (*ExecSandboxStdout) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{68}
+	return file_openshell_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *ExecSandboxStdout) GetData() []byte {
@@ -5076,7 +6632,7 @@ type ExecSandboxStderr struct {
 
 func (x *ExecSandboxStderr) Reset() {
 	*x = ExecSandboxStderr{}
-	mi := &file_openshell_proto_msgTypes[69]
+	mi := &file_openshell_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5088,7 +6644,7 @@ func (x *ExecSandboxStderr) String() string {
 func (*ExecSandboxStderr) ProtoMessage() {}
 
 func (x *ExecSandboxStderr) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[69]
+	mi := &file_openshell_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5101,7 +6657,7 @@ func (x *ExecSandboxStderr) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecSandboxStderr.ProtoReflect.Descriptor instead.
 func (*ExecSandboxStderr) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{69}
+	return file_openshell_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ExecSandboxStderr) GetData() []byte {
@@ -5121,7 +6677,7 @@ type ExecSandboxExit struct {
 
 func (x *ExecSandboxExit) Reset() {
 	*x = ExecSandboxExit{}
-	mi := &file_openshell_proto_msgTypes[70]
+	mi := &file_openshell_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5133,7 +6689,7 @@ func (x *ExecSandboxExit) String() string {
 func (*ExecSandboxExit) ProtoMessage() {}
 
 func (x *ExecSandboxExit) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[70]
+	mi := &file_openshell_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5146,7 +6702,7 @@ func (x *ExecSandboxExit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecSandboxExit.ProtoReflect.Descriptor instead.
 func (*ExecSandboxExit) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{70}
+	return file_openshell_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *ExecSandboxExit) GetExitCode() int32 {
@@ -5171,7 +6727,7 @@ type ExecSandboxEvent struct {
 
 func (x *ExecSandboxEvent) Reset() {
 	*x = ExecSandboxEvent{}
-	mi := &file_openshell_proto_msgTypes[71]
+	mi := &file_openshell_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5183,7 +6739,7 @@ func (x *ExecSandboxEvent) String() string {
 func (*ExecSandboxEvent) ProtoMessage() {}
 
 func (x *ExecSandboxEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[71]
+	mi := &file_openshell_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5196,7 +6752,7 @@ func (x *ExecSandboxEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecSandboxEvent.ProtoReflect.Descriptor instead.
 func (*ExecSandboxEvent) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{71}
+	return file_openshell_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *ExecSandboxEvent) GetPayload() isExecSandboxEvent_Payload {
@@ -5278,7 +6834,7 @@ type TcpForwardInit struct {
 
 func (x *TcpForwardInit) Reset() {
 	*x = TcpForwardInit{}
-	mi := &file_openshell_proto_msgTypes[72]
+	mi := &file_openshell_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5290,7 +6846,7 @@ func (x *TcpForwardInit) String() string {
 func (*TcpForwardInit) ProtoMessage() {}
 
 func (x *TcpForwardInit) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[72]
+	mi := &file_openshell_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5303,7 +6859,7 @@ func (x *TcpForwardInit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TcpForwardInit.ProtoReflect.Descriptor instead.
 func (*TcpForwardInit) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{72}
+	return file_openshell_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *TcpForwardInit) GetSandboxId() string {
@@ -5382,7 +6938,7 @@ type TcpForwardFrame struct {
 
 func (x *TcpForwardFrame) Reset() {
 	*x = TcpForwardFrame{}
-	mi := &file_openshell_proto_msgTypes[73]
+	mi := &file_openshell_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5394,7 +6950,7 @@ func (x *TcpForwardFrame) String() string {
 func (*TcpForwardFrame) ProtoMessage() {}
 
 func (x *TcpForwardFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[73]
+	mi := &file_openshell_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5407,7 +6963,7 @@ func (x *TcpForwardFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TcpForwardFrame.ProtoReflect.Descriptor instead.
 func (*TcpForwardFrame) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{73}
+	return file_openshell_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *TcpForwardFrame) GetPayload() isTcpForwardFrame_Payload {
@@ -5466,7 +7022,7 @@ type ExecSandboxInput struct {
 
 func (x *ExecSandboxInput) Reset() {
 	*x = ExecSandboxInput{}
-	mi := &file_openshell_proto_msgTypes[74]
+	mi := &file_openshell_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5478,7 +7034,7 @@ func (x *ExecSandboxInput) String() string {
 func (*ExecSandboxInput) ProtoMessage() {}
 
 func (x *ExecSandboxInput) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[74]
+	mi := &file_openshell_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5491,7 +7047,7 @@ func (x *ExecSandboxInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecSandboxInput.ProtoReflect.Descriptor instead.
 func (*ExecSandboxInput) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{74}
+	return file_openshell_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *ExecSandboxInput) GetPayload() isExecSandboxInput_Payload {
@@ -5564,7 +7120,7 @@ type ExecSandboxWindowResize struct {
 
 func (x *ExecSandboxWindowResize) Reset() {
 	*x = ExecSandboxWindowResize{}
-	mi := &file_openshell_proto_msgTypes[75]
+	mi := &file_openshell_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5576,7 +7132,7 @@ func (x *ExecSandboxWindowResize) String() string {
 func (*ExecSandboxWindowResize) ProtoMessage() {}
 
 func (x *ExecSandboxWindowResize) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[75]
+	mi := &file_openshell_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5589,7 +7145,7 @@ func (x *ExecSandboxWindowResize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecSandboxWindowResize.ProtoReflect.Descriptor instead.
 func (*ExecSandboxWindowResize) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{75}
+	return file_openshell_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *ExecSandboxWindowResize) GetCols() uint32 {
@@ -5625,7 +7181,7 @@ type SshSession struct {
 
 func (x *SshSession) Reset() {
 	*x = SshSession{}
-	mi := &file_openshell_proto_msgTypes[76]
+	mi := &file_openshell_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5637,7 +7193,7 @@ func (x *SshSession) String() string {
 func (*SshSession) ProtoMessage() {}
 
 func (x *SshSession) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[76]
+	mi := &file_openshell_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5650,7 +7206,7 @@ func (x *SshSession) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SshSession.ProtoReflect.Descriptor instead.
 func (*SshSession) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{76}
+	return file_openshell_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *SshSession) GetMetadata() *datamodelv1.ObjectMeta {
@@ -5719,7 +7275,7 @@ type WatchSandboxRequest struct {
 
 func (x *WatchSandboxRequest) Reset() {
 	*x = WatchSandboxRequest{}
-	mi := &file_openshell_proto_msgTypes[77]
+	mi := &file_openshell_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5731,7 +7287,7 @@ func (x *WatchSandboxRequest) String() string {
 func (*WatchSandboxRequest) ProtoMessage() {}
 
 func (x *WatchSandboxRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[77]
+	mi := &file_openshell_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5744,7 +7300,7 @@ func (x *WatchSandboxRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchSandboxRequest.ProtoReflect.Descriptor instead.
 func (*WatchSandboxRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{77}
+	return file_openshell_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *WatchSandboxRequest) GetId() string {
@@ -5834,7 +7390,7 @@ type SandboxStreamEvent struct {
 
 func (x *SandboxStreamEvent) Reset() {
 	*x = SandboxStreamEvent{}
-	mi := &file_openshell_proto_msgTypes[78]
+	mi := &file_openshell_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5846,7 +7402,7 @@ func (x *SandboxStreamEvent) String() string {
 func (*SandboxStreamEvent) ProtoMessage() {}
 
 func (x *SandboxStreamEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[78]
+	mi := &file_openshell_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5859,7 +7415,7 @@ func (x *SandboxStreamEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxStreamEvent.ProtoReflect.Descriptor instead.
 func (*SandboxStreamEvent) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{78}
+	return file_openshell_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *SandboxStreamEvent) GetPayload() isSandboxStreamEvent_Payload {
@@ -5972,7 +7528,7 @@ type SandboxLogLine struct {
 
 func (x *SandboxLogLine) Reset() {
 	*x = SandboxLogLine{}
-	mi := &file_openshell_proto_msgTypes[79]
+	mi := &file_openshell_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5984,7 +7540,7 @@ func (x *SandboxLogLine) String() string {
 func (*SandboxLogLine) ProtoMessage() {}
 
 func (x *SandboxLogLine) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[79]
+	mi := &file_openshell_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5997,7 +7553,7 @@ func (x *SandboxLogLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxLogLine.ProtoReflect.Descriptor instead.
 func (*SandboxLogLine) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{79}
+	return file_openshell_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *SandboxLogLine) GetSandboxId() string {
@@ -6058,7 +7614,7 @@ type SandboxStreamWarning struct {
 
 func (x *SandboxStreamWarning) Reset() {
 	*x = SandboxStreamWarning{}
-	mi := &file_openshell_proto_msgTypes[80]
+	mi := &file_openshell_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6070,7 +7626,7 @@ func (x *SandboxStreamWarning) String() string {
 func (*SandboxStreamWarning) ProtoMessage() {}
 
 func (x *SandboxStreamWarning) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[80]
+	mi := &file_openshell_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6083,7 +7639,7 @@ func (x *SandboxStreamWarning) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxStreamWarning.ProtoReflect.Descriptor instead.
 func (*SandboxStreamWarning) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{80}
+	return file_openshell_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *SandboxStreamWarning) GetMessage() string {
@@ -6099,13 +7655,16 @@ type CreateProviderRequest struct {
 	Provider *datamodelv1.Provider  `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
 	// Explicit workspace for the provider. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,3,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateProviderRequest) Reset() {
 	*x = CreateProviderRequest{}
-	mi := &file_openshell_proto_msgTypes[81]
+	mi := &file_openshell_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6117,7 +7676,7 @@ func (x *CreateProviderRequest) String() string {
 func (*CreateProviderRequest) ProtoMessage() {}
 
 func (x *CreateProviderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[81]
+	mi := &file_openshell_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6130,7 +7689,7 @@ func (x *CreateProviderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProviderRequest.ProtoReflect.Descriptor instead.
 func (*CreateProviderRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{81}
+	return file_openshell_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *CreateProviderRequest) GetProvider() *datamodelv1.Provider {
@@ -6147,6 +7706,13 @@ func (x *CreateProviderRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelect
 	return nil
 }
 
+func (x *CreateProviderRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Get provider request.
 type GetProviderRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -6159,7 +7725,7 @@ type GetProviderRequest struct {
 
 func (x *GetProviderRequest) Reset() {
 	*x = GetProviderRequest{}
-	mi := &file_openshell_proto_msgTypes[82]
+	mi := &file_openshell_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6171,7 +7737,7 @@ func (x *GetProviderRequest) String() string {
 func (*GetProviderRequest) ProtoMessage() {}
 
 func (x *GetProviderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[82]
+	mi := &file_openshell_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6184,7 +7750,7 @@ func (x *GetProviderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProviderRequest.ProtoReflect.Descriptor instead.
 func (*GetProviderRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{82}
+	return file_openshell_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *GetProviderRequest) GetName() string {
@@ -6218,7 +7784,7 @@ type ListProvidersRequest struct {
 
 func (x *ListProvidersRequest) Reset() {
 	*x = ListProvidersRequest{}
-	mi := &file_openshell_proto_msgTypes[83]
+	mi := &file_openshell_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6230,7 +7796,7 @@ func (x *ListProvidersRequest) String() string {
 func (*ListProvidersRequest) ProtoMessage() {}
 
 func (x *ListProvidersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[83]
+	mi := &file_openshell_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6243,7 +7809,7 @@ func (x *ListProvidersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProvidersRequest.ProtoReflect.Descriptor instead.
 func (*ListProvidersRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{83}
+	return file_openshell_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *ListProvidersRequest) GetPageSize() int32 {
@@ -6279,13 +7845,16 @@ type UpdateProviderRequest struct {
 	ClearCredentialExpirationKeys []string `protobuf:"bytes,103,rep,name=clear_credential_expiration_keys,json=clearCredentialExpirationKeys,proto3" json:"clear_credential_expiration_keys,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,4,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateProviderRequest) Reset() {
 	*x = UpdateProviderRequest{}
-	mi := &file_openshell_proto_msgTypes[84]
+	mi := &file_openshell_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6297,7 +7866,7 @@ func (x *UpdateProviderRequest) String() string {
 func (*UpdateProviderRequest) ProtoMessage() {}
 
 func (x *UpdateProviderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[84]
+	mi := &file_openshell_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6310,7 +7879,7 @@ func (x *UpdateProviderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateProviderRequest.ProtoReflect.Descriptor instead.
 func (*UpdateProviderRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{84}
+	return file_openshell_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *UpdateProviderRequest) GetProvider() *datamodelv1.Provider {
@@ -6341,6 +7910,13 @@ func (x *UpdateProviderRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelect
 	return nil
 }
 
+func (x *UpdateProviderRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Delete provider request.
 type DeleteProviderRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -6348,13 +7924,16 @@ type DeleteProviderRequest struct {
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,3,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
 	AllowMissing   bool                           `protobuf:"varint,4,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteProviderRequest) Reset() {
 	*x = DeleteProviderRequest{}
-	mi := &file_openshell_proto_msgTypes[85]
+	mi := &file_openshell_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6366,7 +7945,7 @@ func (x *DeleteProviderRequest) String() string {
 func (*DeleteProviderRequest) ProtoMessage() {}
 
 func (x *DeleteProviderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[85]
+	mi := &file_openshell_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6379,7 +7958,7 @@ func (x *DeleteProviderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProviderRequest.ProtoReflect.Descriptor instead.
 func (*DeleteProviderRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{85}
+	return file_openshell_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *DeleteProviderRequest) GetName() string {
@@ -6403,17 +7982,29 @@ func (x *DeleteProviderRequest) GetAllowMissing() bool {
 	return false
 }
 
+func (x *DeleteProviderRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Provider response.
 type ProviderResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Provider      *datamodelv1.Provider  `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Provider *datamodelv1.Provider  `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	// Selection-time sandbox target set for an update, with one receipt per target.
+	// Sandboxes attached later are outside this operation's readiness result.
+	TargetReceipts []*ProviderMutationReceipt `protobuf:"bytes,2,rep,name=target_receipts,json=targetReceipts,proto3" json:"target_receipts,omitempty"`
+	// Identifies the update even when its target set is empty.
+	MutationId    string `protobuf:"bytes,3,opt,name=mutation_id,json=mutationId,proto3" json:"mutation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProviderResponse) Reset() {
 	*x = ProviderResponse{}
-	mi := &file_openshell_proto_msgTypes[86]
+	mi := &file_openshell_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6425,7 +8016,7 @@ func (x *ProviderResponse) String() string {
 func (*ProviderResponse) ProtoMessage() {}
 
 func (x *ProviderResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[86]
+	mi := &file_openshell_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6438,7 +8029,7 @@ func (x *ProviderResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderResponse.ProtoReflect.Descriptor instead.
 func (*ProviderResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{86}
+	return file_openshell_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *ProviderResponse) GetProvider() *datamodelv1.Provider {
@@ -6446,6 +8037,20 @@ func (x *ProviderResponse) GetProvider() *datamodelv1.Provider {
 		return x.Provider
 	}
 	return nil
+}
+
+func (x *ProviderResponse) GetTargetReceipts() []*ProviderMutationReceipt {
+	if x != nil {
+		return x.TargetReceipts
+	}
+	return nil
+}
+
+func (x *ProviderResponse) GetMutationId() string {
+	if x != nil {
+		return x.MutationId
+	}
+	return ""
 }
 
 // List providers response.
@@ -6460,7 +8065,7 @@ type ListProvidersResponse struct {
 
 func (x *ListProvidersResponse) Reset() {
 	*x = ListProvidersResponse{}
-	mi := &file_openshell_proto_msgTypes[87]
+	mi := &file_openshell_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6472,7 +8077,7 @@ func (x *ListProvidersResponse) String() string {
 func (*ListProvidersResponse) ProtoMessage() {}
 
 func (x *ListProvidersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[87]
+	mi := &file_openshell_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6485,7 +8090,7 @@ func (x *ListProvidersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProvidersResponse.ProtoReflect.Descriptor instead.
 func (*ListProvidersResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{87}
+	return file_openshell_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *ListProvidersResponse) GetProviders() []*datamodelv1.Provider {
@@ -6520,7 +8125,7 @@ type ListProviderProfilesRequest struct {
 
 func (x *ListProviderProfilesRequest) Reset() {
 	*x = ListProviderProfilesRequest{}
-	mi := &file_openshell_proto_msgTypes[88]
+	mi := &file_openshell_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6532,7 +8137,7 @@ func (x *ListProviderProfilesRequest) String() string {
 func (*ListProviderProfilesRequest) ProtoMessage() {}
 
 func (x *ListProviderProfilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[88]
+	mi := &file_openshell_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6545,7 +8150,7 @@ func (x *ListProviderProfilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProviderProfilesRequest.ProtoReflect.Descriptor instead.
 func (*ListProviderProfilesRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{88}
+	return file_openshell_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *ListProviderProfilesRequest) GetPageSize() int32 {
@@ -6583,7 +8188,7 @@ type GetProviderProfileRequest struct {
 
 func (x *GetProviderProfileRequest) Reset() {
 	*x = GetProviderProfileRequest{}
-	mi := &file_openshell_proto_msgTypes[89]
+	mi := &file_openshell_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6595,7 +8200,7 @@ func (x *GetProviderProfileRequest) String() string {
 func (*GetProviderProfileRequest) ProtoMessage() {}
 
 func (x *GetProviderProfileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[89]
+	mi := &file_openshell_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6608,7 +8213,7 @@ func (x *GetProviderProfileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProviderProfileRequest.ProtoReflect.Descriptor instead.
 func (*GetProviderProfileRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{89}
+	return file_openshell_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *GetProviderProfileRequest) GetId() string {
@@ -6636,7 +8241,7 @@ type ProviderProfileImportItem struct {
 
 func (x *ProviderProfileImportItem) Reset() {
 	*x = ProviderProfileImportItem{}
-	mi := &file_openshell_proto_msgTypes[90]
+	mi := &file_openshell_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6648,7 +8253,7 @@ func (x *ProviderProfileImportItem) String() string {
 func (*ProviderProfileImportItem) ProtoMessage() {}
 
 func (x *ProviderProfileImportItem) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[90]
+	mi := &file_openshell_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6661,7 +8266,7 @@ func (x *ProviderProfileImportItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderProfileImportItem.ProtoReflect.Descriptor instead.
 func (*ProviderProfileImportItem) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{90}
+	return file_openshell_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *ProviderProfileImportItem) GetProfile() *ProviderProfile {
@@ -6692,7 +8297,7 @@ type ProviderProfileDiagnostic struct {
 
 func (x *ProviderProfileDiagnostic) Reset() {
 	*x = ProviderProfileDiagnostic{}
-	mi := &file_openshell_proto_msgTypes[91]
+	mi := &file_openshell_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6704,7 +8309,7 @@ func (x *ProviderProfileDiagnostic) String() string {
 func (*ProviderProfileDiagnostic) ProtoMessage() {}
 
 func (x *ProviderProfileDiagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[91]
+	mi := &file_openshell_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6717,7 +8322,7 @@ func (x *ProviderProfileDiagnostic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderProfileDiagnostic.ProtoReflect.Descriptor instead.
 func (*ProviderProfileDiagnostic) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{91}
+	return file_openshell_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *ProviderProfileDiagnostic) GetSource() string {
@@ -6774,7 +8379,7 @@ type ProviderCredentialTokenGrantAudienceOverride struct {
 
 func (x *ProviderCredentialTokenGrantAudienceOverride) Reset() {
 	*x = ProviderCredentialTokenGrantAudienceOverride{}
-	mi := &file_openshell_proto_msgTypes[92]
+	mi := &file_openshell_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6786,7 +8391,7 @@ func (x *ProviderCredentialTokenGrantAudienceOverride) String() string {
 func (*ProviderCredentialTokenGrantAudienceOverride) ProtoMessage() {}
 
 func (x *ProviderCredentialTokenGrantAudienceOverride) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[92]
+	mi := &file_openshell_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6799,7 +8404,7 @@ func (x *ProviderCredentialTokenGrantAudienceOverride) ProtoReflect() protorefle
 
 // Deprecated: Use ProviderCredentialTokenGrantAudienceOverride.ProtoReflect.Descriptor instead.
 func (*ProviderCredentialTokenGrantAudienceOverride) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{92}
+	return file_openshell_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *ProviderCredentialTokenGrantAudienceOverride) GetHost() string {
@@ -6853,7 +8458,7 @@ type ProviderCredentialTokenGrantSubjectToken struct {
 
 func (x *ProviderCredentialTokenGrantSubjectToken) Reset() {
 	*x = ProviderCredentialTokenGrantSubjectToken{}
-	mi := &file_openshell_proto_msgTypes[93]
+	mi := &file_openshell_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6865,7 +8470,7 @@ func (x *ProviderCredentialTokenGrantSubjectToken) String() string {
 func (*ProviderCredentialTokenGrantSubjectToken) ProtoMessage() {}
 
 func (x *ProviderCredentialTokenGrantSubjectToken) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[93]
+	mi := &file_openshell_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6878,7 +8483,7 @@ func (x *ProviderCredentialTokenGrantSubjectToken) ProtoReflect() protoreflect.M
 
 // Deprecated: Use ProviderCredentialTokenGrantSubjectToken.ProtoReflect.Descriptor instead.
 func (*ProviderCredentialTokenGrantSubjectToken) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{93}
+	return file_openshell_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *ProviderCredentialTokenGrantSubjectToken) GetSource() string {
@@ -6934,7 +8539,7 @@ type ProviderCredentialTokenGrant struct {
 
 func (x *ProviderCredentialTokenGrant) Reset() {
 	*x = ProviderCredentialTokenGrant{}
-	mi := &file_openshell_proto_msgTypes[94]
+	mi := &file_openshell_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6946,7 +8551,7 @@ func (x *ProviderCredentialTokenGrant) String() string {
 func (*ProviderCredentialTokenGrant) ProtoMessage() {}
 
 func (x *ProviderCredentialTokenGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[94]
+	mi := &file_openshell_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6959,7 +8564,7 @@ func (x *ProviderCredentialTokenGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderCredentialTokenGrant.ProtoReflect.Descriptor instead.
 func (*ProviderCredentialTokenGrant) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{94}
+	return file_openshell_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *ProviderCredentialTokenGrant) GetTokenEndpoint() string {
@@ -7051,7 +8656,7 @@ type ProviderProfileCredential struct {
 
 func (x *ProviderProfileCredential) Reset() {
 	*x = ProviderProfileCredential{}
-	mi := &file_openshell_proto_msgTypes[95]
+	mi := &file_openshell_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7063,7 +8668,7 @@ func (x *ProviderProfileCredential) String() string {
 func (*ProviderProfileCredential) ProtoMessage() {}
 
 func (x *ProviderProfileCredential) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[95]
+	mi := &file_openshell_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7076,7 +8681,7 @@ func (x *ProviderProfileCredential) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderProfileCredential.ProtoReflect.Descriptor instead.
 func (*ProviderProfileCredential) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{95}
+	return file_openshell_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *ProviderProfileCredential) GetName() string {
@@ -7161,7 +8766,7 @@ type ProviderCredentialRefreshMaterial struct {
 
 func (x *ProviderCredentialRefreshMaterial) Reset() {
 	*x = ProviderCredentialRefreshMaterial{}
-	mi := &file_openshell_proto_msgTypes[96]
+	mi := &file_openshell_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7173,7 +8778,7 @@ func (x *ProviderCredentialRefreshMaterial) String() string {
 func (*ProviderCredentialRefreshMaterial) ProtoMessage() {}
 
 func (x *ProviderCredentialRefreshMaterial) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[96]
+	mi := &file_openshell_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7186,7 +8791,7 @@ func (x *ProviderCredentialRefreshMaterial) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ProviderCredentialRefreshMaterial.ProtoReflect.Descriptor instead.
 func (*ProviderCredentialRefreshMaterial) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{96}
+	return file_openshell_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *ProviderCredentialRefreshMaterial) GetName() string {
@@ -7231,7 +8836,7 @@ type ProviderCredentialRefreshOutput struct {
 
 func (x *ProviderCredentialRefreshOutput) Reset() {
 	*x = ProviderCredentialRefreshOutput{}
-	mi := &file_openshell_proto_msgTypes[97]
+	mi := &file_openshell_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7243,7 +8848,7 @@ func (x *ProviderCredentialRefreshOutput) String() string {
 func (*ProviderCredentialRefreshOutput) ProtoMessage() {}
 
 func (x *ProviderCredentialRefreshOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[97]
+	mi := &file_openshell_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7256,7 +8861,7 @@ func (x *ProviderCredentialRefreshOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderCredentialRefreshOutput.ProtoReflect.Descriptor instead.
 func (*ProviderCredentialRefreshOutput) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{97}
+	return file_openshell_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *ProviderCredentialRefreshOutput) GetOutput() string {
@@ -7288,7 +8893,7 @@ type ProviderCredentialRefresh struct {
 
 func (x *ProviderCredentialRefresh) Reset() {
 	*x = ProviderCredentialRefresh{}
-	mi := &file_openshell_proto_msgTypes[98]
+	mi := &file_openshell_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7300,7 +8905,7 @@ func (x *ProviderCredentialRefresh) String() string {
 func (*ProviderCredentialRefresh) ProtoMessage() {}
 
 func (x *ProviderCredentialRefresh) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[98]
+	mi := &file_openshell_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7313,7 +8918,7 @@ func (x *ProviderCredentialRefresh) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderCredentialRefresh.ProtoReflect.Descriptor instead.
 func (*ProviderCredentialRefresh) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{98}
+	return file_openshell_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *ProviderCredentialRefresh) GetStrategy() ProviderCredentialRefreshStrategy {
@@ -7394,7 +8999,7 @@ type ProviderCredentialRefreshStatus struct {
 
 func (x *ProviderCredentialRefreshStatus) Reset() {
 	*x = ProviderCredentialRefreshStatus{}
-	mi := &file_openshell_proto_msgTypes[99]
+	mi := &file_openshell_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7406,7 +9011,7 @@ func (x *ProviderCredentialRefreshStatus) String() string {
 func (*ProviderCredentialRefreshStatus) ProtoMessage() {}
 
 func (x *ProviderCredentialRefreshStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[99]
+	mi := &file_openshell_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7419,7 +9024,7 @@ func (x *ProviderCredentialRefreshStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderCredentialRefreshStatus.ProtoReflect.Descriptor instead.
 func (*ProviderCredentialRefreshStatus) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{99}
+	return file_openshell_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *ProviderCredentialRefreshStatus) GetProviderName() string {
@@ -7524,7 +9129,7 @@ type ProviderProfileDiscovery struct {
 
 func (x *ProviderProfileDiscovery) Reset() {
 	*x = ProviderProfileDiscovery{}
-	mi := &file_openshell_proto_msgTypes[100]
+	mi := &file_openshell_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7536,7 +9141,7 @@ func (x *ProviderProfileDiscovery) String() string {
 func (*ProviderProfileDiscovery) ProtoMessage() {}
 
 func (x *ProviderProfileDiscovery) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[100]
+	mi := &file_openshell_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7549,7 +9154,7 @@ func (x *ProviderProfileDiscovery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderProfileDiscovery.ProtoReflect.Descriptor instead.
 func (*ProviderProfileDiscovery) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{100}
+	return file_openshell_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *ProviderProfileDiscovery) GetCredentials() []string {
@@ -7571,7 +9176,7 @@ type GetProviderRefreshStatusRequest struct {
 
 func (x *GetProviderRefreshStatusRequest) Reset() {
 	*x = GetProviderRefreshStatusRequest{}
-	mi := &file_openshell_proto_msgTypes[101]
+	mi := &file_openshell_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7583,7 +9188,7 @@ func (x *GetProviderRefreshStatusRequest) String() string {
 func (*GetProviderRefreshStatusRequest) ProtoMessage() {}
 
 func (x *GetProviderRefreshStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[101]
+	mi := &file_openshell_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7596,7 +9201,7 @@ func (x *GetProviderRefreshStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProviderRefreshStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetProviderRefreshStatusRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{101}
+	return file_openshell_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *GetProviderRefreshStatusRequest) GetProvider() string {
@@ -7629,7 +9234,7 @@ type GetProviderRefreshStatusResponse struct {
 
 func (x *GetProviderRefreshStatusResponse) Reset() {
 	*x = GetProviderRefreshStatusResponse{}
-	mi := &file_openshell_proto_msgTypes[102]
+	mi := &file_openshell_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7641,7 +9246,7 @@ func (x *GetProviderRefreshStatusResponse) String() string {
 func (*GetProviderRefreshStatusResponse) ProtoMessage() {}
 
 func (x *GetProviderRefreshStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[102]
+	mi := &file_openshell_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7654,7 +9259,7 @@ func (x *GetProviderRefreshStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProviderRefreshStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetProviderRefreshStatusResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{102}
+	return file_openshell_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *GetProviderRefreshStatusResponse) GetCredentials() []*ProviderCredentialRefreshStatus {
@@ -7677,13 +9282,16 @@ type ConfigureProviderRefreshRequest struct {
 	ExpirationTime     *timestamppb.Timestamp `protobuf:"bytes,106,opt,name=expiration_time,json=expirationTime,proto3" json:"expiration_time,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,8,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,9,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConfigureProviderRefreshRequest) Reset() {
 	*x = ConfigureProviderRefreshRequest{}
-	mi := &file_openshell_proto_msgTypes[103]
+	mi := &file_openshell_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7695,7 +9303,7 @@ func (x *ConfigureProviderRefreshRequest) String() string {
 func (*ConfigureProviderRefreshRequest) ProtoMessage() {}
 
 func (x *ConfigureProviderRefreshRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[103]
+	mi := &file_openshell_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7708,7 +9316,7 @@ func (x *ConfigureProviderRefreshRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureProviderRefreshRequest.ProtoReflect.Descriptor instead.
 func (*ConfigureProviderRefreshRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{103}
+	return file_openshell_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *ConfigureProviderRefreshRequest) GetProvider() string {
@@ -7760,6 +9368,13 @@ func (x *ConfigureProviderRefreshRequest) GetWorkspaceScope() *datamodelv1.Works
 	return nil
 }
 
+func (x *ConfigureProviderRefreshRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type ConfigureProviderRefreshResponse struct {
 	state         protoimpl.MessageState           `protogen:"open.v1"`
 	Status        *ProviderCredentialRefreshStatus `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
@@ -7769,7 +9384,7 @@ type ConfigureProviderRefreshResponse struct {
 
 func (x *ConfigureProviderRefreshResponse) Reset() {
 	*x = ConfigureProviderRefreshResponse{}
-	mi := &file_openshell_proto_msgTypes[104]
+	mi := &file_openshell_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7781,7 +9396,7 @@ func (x *ConfigureProviderRefreshResponse) String() string {
 func (*ConfigureProviderRefreshResponse) ProtoMessage() {}
 
 func (x *ConfigureProviderRefreshResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[104]
+	mi := &file_openshell_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7794,7 +9409,7 @@ func (x *ConfigureProviderRefreshResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureProviderRefreshResponse.ProtoReflect.Descriptor instead.
 func (*ConfigureProviderRefreshResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{104}
+	return file_openshell_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *ConfigureProviderRefreshResponse) GetStatus() *ProviderCredentialRefreshStatus {
@@ -7810,13 +9425,16 @@ type RotateProviderCredentialRequest struct {
 	CredentialKey string                 `protobuf:"bytes,2,opt,name=credential_key,json=credentialKey,proto3" json:"credential_key,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,4,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RotateProviderCredentialRequest) Reset() {
 	*x = RotateProviderCredentialRequest{}
-	mi := &file_openshell_proto_msgTypes[105]
+	mi := &file_openshell_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7828,7 +9446,7 @@ func (x *RotateProviderCredentialRequest) String() string {
 func (*RotateProviderCredentialRequest) ProtoMessage() {}
 
 func (x *RotateProviderCredentialRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[105]
+	mi := &file_openshell_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7841,7 +9459,7 @@ func (x *RotateProviderCredentialRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateProviderCredentialRequest.ProtoReflect.Descriptor instead.
 func (*RotateProviderCredentialRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{105}
+	return file_openshell_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *RotateProviderCredentialRequest) GetProvider() string {
@@ -7865,6 +9483,13 @@ func (x *RotateProviderCredentialRequest) GetWorkspaceScope() *datamodelv1.Works
 	return nil
 }
 
+func (x *RotateProviderCredentialRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type RotateProviderCredentialResponse struct {
 	state         protoimpl.MessageState           `protogen:"open.v1"`
 	Status        *ProviderCredentialRefreshStatus `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
@@ -7874,7 +9499,7 @@ type RotateProviderCredentialResponse struct {
 
 func (x *RotateProviderCredentialResponse) Reset() {
 	*x = RotateProviderCredentialResponse{}
-	mi := &file_openshell_proto_msgTypes[106]
+	mi := &file_openshell_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7886,7 +9511,7 @@ func (x *RotateProviderCredentialResponse) String() string {
 func (*RotateProviderCredentialResponse) ProtoMessage() {}
 
 func (x *RotateProviderCredentialResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[106]
+	mi := &file_openshell_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7899,7 +9524,7 @@ func (x *RotateProviderCredentialResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateProviderCredentialResponse.ProtoReflect.Descriptor instead.
 func (*RotateProviderCredentialResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{106}
+	return file_openshell_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *RotateProviderCredentialResponse) GetStatus() *ProviderCredentialRefreshStatus {
@@ -7916,13 +9541,16 @@ type DeleteProviderRefreshRequest struct {
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,4,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
 	AllowMissing   bool                           `protobuf:"varint,5,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteProviderRefreshRequest) Reset() {
 	*x = DeleteProviderRefreshRequest{}
-	mi := &file_openshell_proto_msgTypes[107]
+	mi := &file_openshell_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7934,7 +9562,7 @@ func (x *DeleteProviderRefreshRequest) String() string {
 func (*DeleteProviderRefreshRequest) ProtoMessage() {}
 
 func (x *DeleteProviderRefreshRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[107]
+	mi := &file_openshell_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7947,7 +9575,7 @@ func (x *DeleteProviderRefreshRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProviderRefreshRequest.ProtoReflect.Descriptor instead.
 func (*DeleteProviderRefreshRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{107}
+	return file_openshell_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *DeleteProviderRefreshRequest) GetProvider() string {
@@ -7978,6 +9606,13 @@ func (x *DeleteProviderRefreshRequest) GetAllowMissing() bool {
 	return false
 }
 
+func (x *DeleteProviderRefreshRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type DeleteProviderRefreshResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Outcome       DeletionOutcome        `protobuf:"varint,2,opt,name=outcome,proto3,enum=openshell.v1.DeletionOutcome" json:"outcome,omitempty"`
@@ -7987,7 +9622,7 @@ type DeleteProviderRefreshResponse struct {
 
 func (x *DeleteProviderRefreshResponse) Reset() {
 	*x = DeleteProviderRefreshResponse{}
-	mi := &file_openshell_proto_msgTypes[108]
+	mi := &file_openshell_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7999,7 +9634,7 @@ func (x *DeleteProviderRefreshResponse) String() string {
 func (*DeleteProviderRefreshResponse) ProtoMessage() {}
 
 func (x *DeleteProviderRefreshResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[108]
+	mi := &file_openshell_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8012,7 +9647,7 @@ func (x *DeleteProviderRefreshResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProviderRefreshResponse.ProtoReflect.Descriptor instead.
 func (*DeleteProviderRefreshResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{108}
+	return file_openshell_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *DeleteProviderRefreshResponse) GetOutcome() DeletionOutcome {
@@ -8052,7 +9687,7 @@ type ProviderProfile struct {
 
 func (x *ProviderProfile) Reset() {
 	*x = ProviderProfile{}
-	mi := &file_openshell_proto_msgTypes[109]
+	mi := &file_openshell_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8064,7 +9699,7 @@ func (x *ProviderProfile) String() string {
 func (*ProviderProfile) ProtoMessage() {}
 
 func (x *ProviderProfile) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[109]
+	mi := &file_openshell_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8077,7 +9712,7 @@ func (x *ProviderProfile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderProfile.ProtoReflect.Descriptor instead.
 func (*ProviderProfile) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{109}
+	return file_openshell_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *ProviderProfile) GetId() string {
@@ -8181,7 +9816,7 @@ type ProviderProfileResponse struct {
 
 func (x *ProviderProfileResponse) Reset() {
 	*x = ProviderProfileResponse{}
-	mi := &file_openshell_proto_msgTypes[110]
+	mi := &file_openshell_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8193,7 +9828,7 @@ func (x *ProviderProfileResponse) String() string {
 func (*ProviderProfileResponse) ProtoMessage() {}
 
 func (x *ProviderProfileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[110]
+	mi := &file_openshell_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8206,7 +9841,7 @@ func (x *ProviderProfileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderProfileResponse.ProtoReflect.Descriptor instead.
 func (*ProviderProfileResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{110}
+	return file_openshell_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *ProviderProfileResponse) GetProfile() *ProviderProfile {
@@ -8228,7 +9863,7 @@ type ListProviderProfilesResponse struct {
 
 func (x *ListProviderProfilesResponse) Reset() {
 	*x = ListProviderProfilesResponse{}
-	mi := &file_openshell_proto_msgTypes[111]
+	mi := &file_openshell_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8240,7 +9875,7 @@ func (x *ListProviderProfilesResponse) String() string {
 func (*ListProviderProfilesResponse) ProtoMessage() {}
 
 func (x *ListProviderProfilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[111]
+	mi := &file_openshell_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8253,7 +9888,7 @@ func (x *ListProviderProfilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProviderProfilesResponse.ProtoReflect.Descriptor instead.
 func (*ListProviderProfilesResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{111}
+	return file_openshell_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *ListProviderProfilesResponse) GetProfiles() []*ProviderProfile {
@@ -8276,14 +9911,17 @@ type ImportProviderProfilesRequest struct {
 	Profiles []*ProviderProfileImportItem `protobuf:"bytes,1,rep,name=profiles,proto3" json:"profiles,omitempty"`
 	// Workspace scope. When set, profiles are workspace-scoped (Workspace Admin).
 	// When empty, profiles are platform-scoped (Platform Admin).
-	Workspace     string `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	Workspace string `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ImportProviderProfilesRequest) Reset() {
 	*x = ImportProviderProfilesRequest{}
-	mi := &file_openshell_proto_msgTypes[112]
+	mi := &file_openshell_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8295,7 +9933,7 @@ func (x *ImportProviderProfilesRequest) String() string {
 func (*ImportProviderProfilesRequest) ProtoMessage() {}
 
 func (x *ImportProviderProfilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[112]
+	mi := &file_openshell_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8308,7 +9946,7 @@ func (x *ImportProviderProfilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportProviderProfilesRequest.ProtoReflect.Descriptor instead.
 func (*ImportProviderProfilesRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{112}
+	return file_openshell_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *ImportProviderProfilesRequest) GetProfiles() []*ProviderProfileImportItem {
@@ -8325,6 +9963,13 @@ func (x *ImportProviderProfilesRequest) GetWorkspace() string {
 	return ""
 }
 
+func (x *ImportProviderProfilesRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Import custom provider profiles response.
 type ImportProviderProfilesResponse struct {
 	state         protoimpl.MessageState       `protogen:"open.v1"`
@@ -8337,7 +9982,7 @@ type ImportProviderProfilesResponse struct {
 
 func (x *ImportProviderProfilesResponse) Reset() {
 	*x = ImportProviderProfilesResponse{}
-	mi := &file_openshell_proto_msgTypes[113]
+	mi := &file_openshell_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8349,7 +9994,7 @@ func (x *ImportProviderProfilesResponse) String() string {
 func (*ImportProviderProfilesResponse) ProtoMessage() {}
 
 func (x *ImportProviderProfilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[113]
+	mi := &file_openshell_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8362,7 +10007,7 @@ func (x *ImportProviderProfilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportProviderProfilesResponse.ProtoReflect.Descriptor instead.
 func (*ImportProviderProfilesResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{113}
+	return file_openshell_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *ImportProviderProfilesResponse) GetDiagnostics() []*ProviderProfileDiagnostic {
@@ -8399,14 +10044,17 @@ type UpdateProviderProfilesRequest struct {
 	Id string `protobuf:"bytes,3,opt,name=id,proto3" json:"id,omitempty"`
 	// Workspace scope. When set, targets workspace-scoped profile. When empty,
 	// targets platform-scoped profile.
-	Workspace     string `protobuf:"bytes,4,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	Workspace string `protobuf:"bytes,4,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateProviderProfilesRequest) Reset() {
 	*x = UpdateProviderProfilesRequest{}
-	mi := &file_openshell_proto_msgTypes[114]
+	mi := &file_openshell_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8418,7 +10066,7 @@ func (x *UpdateProviderProfilesRequest) String() string {
 func (*UpdateProviderProfilesRequest) ProtoMessage() {}
 
 func (x *UpdateProviderProfilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[114]
+	mi := &file_openshell_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8431,7 +10079,7 @@ func (x *UpdateProviderProfilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateProviderProfilesRequest.ProtoReflect.Descriptor instead.
 func (*UpdateProviderProfilesRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{114}
+	return file_openshell_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *UpdateProviderProfilesRequest) GetProfile() *ProviderProfileImportItem {
@@ -8462,6 +10110,13 @@ func (x *UpdateProviderProfilesRequest) GetWorkspace() string {
 	return ""
 }
 
+func (x *UpdateProviderProfilesRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Update one custom provider profile response.
 type UpdateProviderProfilesResponse struct {
 	state         protoimpl.MessageState       `protogen:"open.v1"`
@@ -8474,7 +10129,7 @@ type UpdateProviderProfilesResponse struct {
 
 func (x *UpdateProviderProfilesResponse) Reset() {
 	*x = UpdateProviderProfilesResponse{}
-	mi := &file_openshell_proto_msgTypes[115]
+	mi := &file_openshell_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8486,7 +10141,7 @@ func (x *UpdateProviderProfilesResponse) String() string {
 func (*UpdateProviderProfilesResponse) ProtoMessage() {}
 
 func (x *UpdateProviderProfilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[115]
+	mi := &file_openshell_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8499,7 +10154,7 @@ func (x *UpdateProviderProfilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateProviderProfilesResponse.ProtoReflect.Descriptor instead.
 func (*UpdateProviderProfilesResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{115}
+	return file_openshell_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *UpdateProviderProfilesResponse) GetDiagnostics() []*ProviderProfileDiagnostic {
@@ -8536,7 +10191,7 @@ type LintProviderProfilesRequest struct {
 
 func (x *LintProviderProfilesRequest) Reset() {
 	*x = LintProviderProfilesRequest{}
-	mi := &file_openshell_proto_msgTypes[116]
+	mi := &file_openshell_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8548,7 +10203,7 @@ func (x *LintProviderProfilesRequest) String() string {
 func (*LintProviderProfilesRequest) ProtoMessage() {}
 
 func (x *LintProviderProfilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[116]
+	mi := &file_openshell_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8561,7 +10216,7 @@ func (x *LintProviderProfilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LintProviderProfilesRequest.ProtoReflect.Descriptor instead.
 func (*LintProviderProfilesRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{116}
+	return file_openshell_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *LintProviderProfilesRequest) GetProfiles() []*ProviderProfileImportItem {
@@ -8589,7 +10244,7 @@ type LintProviderProfilesResponse struct {
 
 func (x *LintProviderProfilesResponse) Reset() {
 	*x = LintProviderProfilesResponse{}
-	mi := &file_openshell_proto_msgTypes[117]
+	mi := &file_openshell_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8601,7 +10256,7 @@ func (x *LintProviderProfilesResponse) String() string {
 func (*LintProviderProfilesResponse) ProtoMessage() {}
 
 func (x *LintProviderProfilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[117]
+	mi := &file_openshell_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8614,7 +10269,7 @@ func (x *LintProviderProfilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LintProviderProfilesResponse.ProtoReflect.Descriptor instead.
 func (*LintProviderProfilesResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{117}
+	return file_openshell_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *LintProviderProfilesResponse) GetDiagnostics() []*ProviderProfileDiagnostic {
@@ -8641,7 +10296,7 @@ type DeleteProviderResponse struct {
 
 func (x *DeleteProviderResponse) Reset() {
 	*x = DeleteProviderResponse{}
-	mi := &file_openshell_proto_msgTypes[118]
+	mi := &file_openshell_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8653,7 +10308,7 @@ func (x *DeleteProviderResponse) String() string {
 func (*DeleteProviderResponse) ProtoMessage() {}
 
 func (x *DeleteProviderResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[118]
+	mi := &file_openshell_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8666,7 +10321,7 @@ func (x *DeleteProviderResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProviderResponse.ProtoReflect.Descriptor instead.
 func (*DeleteProviderResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{118}
+	return file_openshell_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *DeleteProviderResponse) GetOutcome() DeletionOutcome {
@@ -8682,15 +10337,18 @@ type DeleteProviderProfileRequest struct {
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// Workspace scope. When set, targets workspace-scoped profile. When empty,
 	// targets platform-scoped profile.
-	Workspace     string `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
-	AllowMissing  bool   `protobuf:"varint,3,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
+	Workspace    string `protobuf:"bytes,2,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	AllowMissing bool   `protobuf:"varint,3,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteProviderProfileRequest) Reset() {
 	*x = DeleteProviderProfileRequest{}
-	mi := &file_openshell_proto_msgTypes[119]
+	mi := &file_openshell_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8702,7 +10360,7 @@ func (x *DeleteProviderProfileRequest) String() string {
 func (*DeleteProviderProfileRequest) ProtoMessage() {}
 
 func (x *DeleteProviderProfileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[119]
+	mi := &file_openshell_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8715,7 +10373,7 @@ func (x *DeleteProviderProfileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProviderProfileRequest.ProtoReflect.Descriptor instead.
 func (*DeleteProviderProfileRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{119}
+	return file_openshell_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *DeleteProviderProfileRequest) GetId() string {
@@ -8739,6 +10397,13 @@ func (x *DeleteProviderProfileRequest) GetAllowMissing() bool {
 	return false
 }
 
+func (x *DeleteProviderProfileRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Delete custom provider profile response.
 type DeleteProviderProfileResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -8749,7 +10414,7 @@ type DeleteProviderProfileResponse struct {
 
 func (x *DeleteProviderProfileResponse) Reset() {
 	*x = DeleteProviderProfileResponse{}
-	mi := &file_openshell_proto_msgTypes[120]
+	mi := &file_openshell_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8761,7 +10426,7 @@ func (x *DeleteProviderProfileResponse) String() string {
 func (*DeleteProviderProfileResponse) ProtoMessage() {}
 
 func (x *DeleteProviderProfileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[120]
+	mi := &file_openshell_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8774,7 +10439,7 @@ func (x *DeleteProviderProfileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProviderProfileResponse.ProtoReflect.Descriptor instead.
 func (*DeleteProviderProfileResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{120}
+	return file_openshell_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *DeleteProviderProfileResponse) GetOutcome() DeletionOutcome {
@@ -8799,7 +10464,7 @@ type GetSandboxProviderEnvironmentRequest struct {
 
 func (x *GetSandboxProviderEnvironmentRequest) Reset() {
 	*x = GetSandboxProviderEnvironmentRequest{}
-	mi := &file_openshell_proto_msgTypes[121]
+	mi := &file_openshell_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8811,7 +10476,7 @@ func (x *GetSandboxProviderEnvironmentRequest) String() string {
 func (*GetSandboxProviderEnvironmentRequest) ProtoMessage() {}
 
 func (x *GetSandboxProviderEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[121]
+	mi := &file_openshell_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8824,7 +10489,7 @@ func (x *GetSandboxProviderEnvironmentRequest) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use GetSandboxProviderEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*GetSandboxProviderEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{121}
+	return file_openshell_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *GetSandboxProviderEnvironmentRequest) GetSandboxId() string {
@@ -8853,7 +10518,7 @@ type StaticCredentialEndpointBinding struct {
 
 func (x *StaticCredentialEndpointBinding) Reset() {
 	*x = StaticCredentialEndpointBinding{}
-	mi := &file_openshell_proto_msgTypes[122]
+	mi := &file_openshell_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8865,7 +10530,7 @@ func (x *StaticCredentialEndpointBinding) String() string {
 func (*StaticCredentialEndpointBinding) ProtoMessage() {}
 
 func (x *StaticCredentialEndpointBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[122]
+	mi := &file_openshell_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8878,7 +10543,7 @@ func (x *StaticCredentialEndpointBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StaticCredentialEndpointBinding.ProtoReflect.Descriptor instead.
 func (*StaticCredentialEndpointBinding) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{122}
+	return file_openshell_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *StaticCredentialEndpointBinding) GetHost() string {
@@ -8922,7 +10587,7 @@ type StaticCredentialBinding struct {
 
 func (x *StaticCredentialBinding) Reset() {
 	*x = StaticCredentialBinding{}
-	mi := &file_openshell_proto_msgTypes[123]
+	mi := &file_openshell_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8934,7 +10599,7 @@ func (x *StaticCredentialBinding) String() string {
 func (*StaticCredentialBinding) ProtoMessage() {}
 
 func (x *StaticCredentialBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[123]
+	mi := &file_openshell_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8947,7 +10612,7 @@ func (x *StaticCredentialBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StaticCredentialBinding.ProtoReflect.Descriptor instead.
 func (*StaticCredentialBinding) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{123}
+	return file_openshell_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *StaticCredentialBinding) GetEndpoints() []*StaticCredentialEndpointBinding {
@@ -8992,13 +10657,19 @@ type GetSandboxProviderEnvironmentResponse struct {
 	// Environment variables that contain provider configuration rather than
 	// credentials and therefore do not require endpoint-scoped resolution.
 	NonSecretEnvironmentKeys []string `protobuf:"bytes,6,rep,name=non_secret_environment_keys,json=nonSecretEnvironmentKeys,proto3" json:"non_secret_environment_keys,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// Attachment identity captured with the returned provider records.
+	ProviderAttachmentEpoch string `protobuf:"bytes,7,opt,name=provider_attachment_epoch,json=providerAttachmentEpoch,proto3" json:"provider_attachment_epoch,omitempty"`
+	// Effective policy identity used to derive this snapshot's endpoint bindings.
+	PolicyHash string `protobuf:"bytes,8,opt,name=policy_hash,json=policyHash,proto3" json:"policy_hash,omitempty"`
+	// Nonzero when material was withheld; installing an empty map is not readiness.
+	ReadinessReason ProviderReadinessReason `protobuf:"varint,9,opt,name=readiness_reason,json=readinessReason,proto3,enum=openshell.v1.ProviderReadinessReason" json:"readiness_reason,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetSandboxProviderEnvironmentResponse) Reset() {
 	*x = GetSandboxProviderEnvironmentResponse{}
-	mi := &file_openshell_proto_msgTypes[124]
+	mi := &file_openshell_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9010,7 +10681,7 @@ func (x *GetSandboxProviderEnvironmentResponse) String() string {
 func (*GetSandboxProviderEnvironmentResponse) ProtoMessage() {}
 
 func (x *GetSandboxProviderEnvironmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[124]
+	mi := &file_openshell_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9023,7 +10694,7 @@ func (x *GetSandboxProviderEnvironmentResponse) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use GetSandboxProviderEnvironmentResponse.ProtoReflect.Descriptor instead.
 func (*GetSandboxProviderEnvironmentResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{124}
+	return file_openshell_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *GetSandboxProviderEnvironmentResponse) GetEnvironment() map[string]string {
@@ -9068,6 +10739,27 @@ func (x *GetSandboxProviderEnvironmentResponse) GetNonSecretEnvironmentKeys() []
 	return nil
 }
 
+func (x *GetSandboxProviderEnvironmentResponse) GetProviderAttachmentEpoch() string {
+	if x != nil {
+		return x.ProviderAttachmentEpoch
+	}
+	return ""
+}
+
+func (x *GetSandboxProviderEnvironmentResponse) GetPolicyHash() string {
+	if x != nil {
+		return x.PolicyHash
+	}
+	return ""
+}
+
+func (x *GetSandboxProviderEnvironmentResponse) GetReadinessReason() ProviderReadinessReason {
+	if x != nil {
+		return x.ReadinessReason
+	}
+	return ProviderReadinessReason_PROVIDER_READINESS_REASON_UNSPECIFIED
+}
+
 type ExchangeProviderSubjectTokenRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The sandbox ID. Must match the authenticated sandbox principal.
@@ -9085,7 +10777,7 @@ type ExchangeProviderSubjectTokenRequest struct {
 
 func (x *ExchangeProviderSubjectTokenRequest) Reset() {
 	*x = ExchangeProviderSubjectTokenRequest{}
-	mi := &file_openshell_proto_msgTypes[125]
+	mi := &file_openshell_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9097,7 +10789,7 @@ func (x *ExchangeProviderSubjectTokenRequest) String() string {
 func (*ExchangeProviderSubjectTokenRequest) ProtoMessage() {}
 
 func (x *ExchangeProviderSubjectTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[125]
+	mi := &file_openshell_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9110,7 +10802,7 @@ func (x *ExchangeProviderSubjectTokenRequest) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use ExchangeProviderSubjectTokenRequest.ProtoReflect.Descriptor instead.
 func (*ExchangeProviderSubjectTokenRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{125}
+	return file_openshell_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *ExchangeProviderSubjectTokenRequest) GetSandboxId() string {
@@ -9152,7 +10844,7 @@ type ExchangeProviderSubjectTokenResponse struct {
 
 func (x *ExchangeProviderSubjectTokenResponse) Reset() {
 	*x = ExchangeProviderSubjectTokenResponse{}
-	mi := &file_openshell_proto_msgTypes[126]
+	mi := &file_openshell_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9164,7 +10856,7 @@ func (x *ExchangeProviderSubjectTokenResponse) String() string {
 func (*ExchangeProviderSubjectTokenResponse) ProtoMessage() {}
 
 func (x *ExchangeProviderSubjectTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[126]
+	mi := &file_openshell_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9177,7 +10869,7 @@ func (x *ExchangeProviderSubjectTokenResponse) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use ExchangeProviderSubjectTokenResponse.ProtoReflect.Descriptor instead.
 func (*ExchangeProviderSubjectTokenResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{126}
+	return file_openshell_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *ExchangeProviderSubjectTokenResponse) GetAccessToken() string {
@@ -9243,13 +10935,16 @@ type UpdateConfigRequest struct {
 	// Explicit workspace scope for sandbox-scoped updates. Omit only when
 	// `global` is true; the all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,11,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,12,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateConfigRequest) Reset() {
 	*x = UpdateConfigRequest{}
-	mi := &file_openshell_proto_msgTypes[127]
+	mi := &file_openshell_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9261,7 +10956,7 @@ func (x *UpdateConfigRequest) String() string {
 func (*UpdateConfigRequest) ProtoMessage() {}
 
 func (x *UpdateConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[127]
+	mi := &file_openshell_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9274,7 +10969,7 @@ func (x *UpdateConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateConfigRequest.ProtoReflect.Descriptor instead.
 func (*UpdateConfigRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{127}
+	return file_openshell_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *UpdateConfigRequest) GetName() string {
@@ -9347,6 +11042,13 @@ func (x *UpdateConfigRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelector
 	return nil
 }
 
+func (x *UpdateConfigRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type PolicyMergeOperation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Operation:
@@ -9364,7 +11066,7 @@ type PolicyMergeOperation struct {
 
 func (x *PolicyMergeOperation) Reset() {
 	*x = PolicyMergeOperation{}
-	mi := &file_openshell_proto_msgTypes[128]
+	mi := &file_openshell_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9376,7 +11078,7 @@ func (x *PolicyMergeOperation) String() string {
 func (*PolicyMergeOperation) ProtoMessage() {}
 
 func (x *PolicyMergeOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[128]
+	mi := &file_openshell_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9389,7 +11091,7 @@ func (x *PolicyMergeOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyMergeOperation.ProtoReflect.Descriptor instead.
 func (*PolicyMergeOperation) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{128}
+	return file_openshell_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *PolicyMergeOperation) GetOperation() isPolicyMergeOperation_Operation {
@@ -9503,7 +11205,7 @@ type AddNetworkRule struct {
 
 func (x *AddNetworkRule) Reset() {
 	*x = AddNetworkRule{}
-	mi := &file_openshell_proto_msgTypes[129]
+	mi := &file_openshell_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9515,7 +11217,7 @@ func (x *AddNetworkRule) String() string {
 func (*AddNetworkRule) ProtoMessage() {}
 
 func (x *AddNetworkRule) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[129]
+	mi := &file_openshell_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9528,7 +11230,7 @@ func (x *AddNetworkRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddNetworkRule.ProtoReflect.Descriptor instead.
 func (*AddNetworkRule) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{129}
+	return file_openshell_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *AddNetworkRule) GetRuleName() string {
@@ -9556,7 +11258,7 @@ type RemoveNetworkEndpoint struct {
 
 func (x *RemoveNetworkEndpoint) Reset() {
 	*x = RemoveNetworkEndpoint{}
-	mi := &file_openshell_proto_msgTypes[130]
+	mi := &file_openshell_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9568,7 +11270,7 @@ func (x *RemoveNetworkEndpoint) String() string {
 func (*RemoveNetworkEndpoint) ProtoMessage() {}
 
 func (x *RemoveNetworkEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[130]
+	mi := &file_openshell_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9581,7 +11283,7 @@ func (x *RemoveNetworkEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveNetworkEndpoint.ProtoReflect.Descriptor instead.
 func (*RemoveNetworkEndpoint) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{130}
+	return file_openshell_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *RemoveNetworkEndpoint) GetRuleName() string {
@@ -9614,7 +11316,7 @@ type RemoveNetworkRule struct {
 
 func (x *RemoveNetworkRule) Reset() {
 	*x = RemoveNetworkRule{}
-	mi := &file_openshell_proto_msgTypes[131]
+	mi := &file_openshell_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9626,7 +11328,7 @@ func (x *RemoveNetworkRule) String() string {
 func (*RemoveNetworkRule) ProtoMessage() {}
 
 func (x *RemoveNetworkRule) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[131]
+	mi := &file_openshell_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9639,7 +11341,7 @@ func (x *RemoveNetworkRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveNetworkRule.ProtoReflect.Descriptor instead.
 func (*RemoveNetworkRule) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{131}
+	return file_openshell_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *RemoveNetworkRule) GetRuleName() string {
@@ -9649,18 +11351,106 @@ func (x *RemoveNetworkRule) GetRuleName() string {
 	return ""
 }
 
+// Exact endpoint and complete authorization scope affected by an L7 append.
+// All ports and binaries must match the stored target; omitted scope is invalid.
+type L7RuleTarget struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	RuleName string                 `protobuf:"bytes,1,opt,name=rule_name,json=ruleName,proto3" json:"rule_name,omitempty"`
+	Host     string                 `protobuf:"bytes,2,opt,name=host,proto3" json:"host,omitempty"`
+	Ports    []uint32               `protobuf:"varint,3,rep,packed,name=ports,proto3" json:"ports,omitempty"`
+	// An absent path requires a unique endpoint. An empty path selects an
+	// endpoint without a path selector. This is not the appended request path.
+	Path *string `protobuf:"bytes,4,opt,name=path,proto3,oneof" json:"path,omitempty"`
+	// Declare either a nonempty binary list or any_binary, never both.
+	Binaries      []*policyv1.NetworkBinary `protobuf:"bytes,5,rep,name=binaries,proto3" json:"binaries,omitempty"`
+	AnyBinary     bool                      `protobuf:"varint,6,opt,name=any_binary,json=anyBinary,proto3" json:"any_binary,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *L7RuleTarget) Reset() {
+	*x = L7RuleTarget{}
+	mi := &file_openshell_proto_msgTypes[143]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *L7RuleTarget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*L7RuleTarget) ProtoMessage() {}
+
+func (x *L7RuleTarget) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[143]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use L7RuleTarget.ProtoReflect.Descriptor instead.
+func (*L7RuleTarget) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{143}
+}
+
+func (x *L7RuleTarget) GetRuleName() string {
+	if x != nil {
+		return x.RuleName
+	}
+	return ""
+}
+
+func (x *L7RuleTarget) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *L7RuleTarget) GetPorts() []uint32 {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
+func (x *L7RuleTarget) GetPath() string {
+	if x != nil && x.Path != nil {
+		return *x.Path
+	}
+	return ""
+}
+
+func (x *L7RuleTarget) GetBinaries() []*policyv1.NetworkBinary {
+	if x != nil {
+		return x.Binaries
+	}
+	return nil
+}
+
+func (x *L7RuleTarget) GetAnyBinary() bool {
+	if x != nil {
+		return x.AnyBinary
+	}
+	return false
+}
+
 type AddDenyRules struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
-	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	DenyRules     []*policyv1.L7DenyRule `protobuf:"bytes,3,rep,name=deny_rules,json=denyRules,proto3" json:"deny_rules,omitempty"`
+	Target        *L7RuleTarget          `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddDenyRules) Reset() {
 	*x = AddDenyRules{}
-	mi := &file_openshell_proto_msgTypes[132]
+	mi := &file_openshell_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9672,7 +11462,7 @@ func (x *AddDenyRules) String() string {
 func (*AddDenyRules) ProtoMessage() {}
 
 func (x *AddDenyRules) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[132]
+	mi := &file_openshell_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9685,21 +11475,7 @@ func (x *AddDenyRules) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddDenyRules.ProtoReflect.Descriptor instead.
 func (*AddDenyRules) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{132}
-}
-
-func (x *AddDenyRules) GetHost() string {
-	if x != nil {
-		return x.Host
-	}
-	return ""
-}
-
-func (x *AddDenyRules) GetPort() uint32 {
-	if x != nil {
-		return x.Port
-	}
-	return 0
+	return file_openshell_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *AddDenyRules) GetDenyRules() []*policyv1.L7DenyRule {
@@ -9709,18 +11485,24 @@ func (x *AddDenyRules) GetDenyRules() []*policyv1.L7DenyRule {
 	return nil
 }
 
+func (x *AddDenyRules) GetTarget() *L7RuleTarget {
+	if x != nil {
+		return x.Target
+	}
+	return nil
+}
+
 type AddAllowRules struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
-	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	Rules         []*policyv1.L7Rule     `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	Target        *L7RuleTarget          `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddAllowRules) Reset() {
 	*x = AddAllowRules{}
-	mi := &file_openshell_proto_msgTypes[133]
+	mi := &file_openshell_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9732,7 +11514,7 @@ func (x *AddAllowRules) String() string {
 func (*AddAllowRules) ProtoMessage() {}
 
 func (x *AddAllowRules) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[133]
+	mi := &file_openshell_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9745,26 +11527,19 @@ func (x *AddAllowRules) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddAllowRules.ProtoReflect.Descriptor instead.
 func (*AddAllowRules) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{133}
-}
-
-func (x *AddAllowRules) GetHost() string {
-	if x != nil {
-		return x.Host
-	}
-	return ""
-}
-
-func (x *AddAllowRules) GetPort() uint32 {
-	if x != nil {
-		return x.Port
-	}
-	return 0
+	return file_openshell_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *AddAllowRules) GetRules() []*policyv1.L7Rule {
 	if x != nil {
 		return x.Rules
+	}
+	return nil
+}
+
+func (x *AddAllowRules) GetTarget() *L7RuleTarget {
+	if x != nil {
+		return x.Target
 	}
 	return nil
 }
@@ -9779,7 +11554,7 @@ type RemoveNetworkBinary struct {
 
 func (x *RemoveNetworkBinary) Reset() {
 	*x = RemoveNetworkBinary{}
-	mi := &file_openshell_proto_msgTypes[134]
+	mi := &file_openshell_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9791,7 +11566,7 @@ func (x *RemoveNetworkBinary) String() string {
 func (*RemoveNetworkBinary) ProtoMessage() {}
 
 func (x *RemoveNetworkBinary) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[134]
+	mi := &file_openshell_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9804,7 +11579,7 @@ func (x *RemoveNetworkBinary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveNetworkBinary.ProtoReflect.Descriptor instead.
 func (*RemoveNetworkBinary) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{134}
+	return file_openshell_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *RemoveNetworkBinary) GetRuleName() string {
@@ -9840,7 +11615,7 @@ type UpdateConfigResponse struct {
 
 func (x *UpdateConfigResponse) Reset() {
 	*x = UpdateConfigResponse{}
-	mi := &file_openshell_proto_msgTypes[135]
+	mi := &file_openshell_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9852,7 +11627,7 @@ func (x *UpdateConfigResponse) String() string {
 func (*UpdateConfigResponse) ProtoMessage() {}
 
 func (x *UpdateConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[135]
+	mi := &file_openshell_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9865,7 +11640,7 @@ func (x *UpdateConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateConfigResponse.ProtoReflect.Descriptor instead.
 func (*UpdateConfigResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{135}
+	return file_openshell_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *UpdateConfigResponse) GetVersion() uint32 {
@@ -9921,7 +11696,7 @@ type GetSandboxPolicyStatusRequest struct {
 
 func (x *GetSandboxPolicyStatusRequest) Reset() {
 	*x = GetSandboxPolicyStatusRequest{}
-	mi := &file_openshell_proto_msgTypes[136]
+	mi := &file_openshell_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9933,7 +11708,7 @@ func (x *GetSandboxPolicyStatusRequest) String() string {
 func (*GetSandboxPolicyStatusRequest) ProtoMessage() {}
 
 func (x *GetSandboxPolicyStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[136]
+	mi := &file_openshell_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9946,7 +11721,7 @@ func (x *GetSandboxPolicyStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSandboxPolicyStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetSandboxPolicyStatusRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{136}
+	return file_openshell_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *GetSandboxPolicyStatusRequest) GetName() string {
@@ -9990,7 +11765,7 @@ type GetSandboxPolicyStatusResponse struct {
 
 func (x *GetSandboxPolicyStatusResponse) Reset() {
 	*x = GetSandboxPolicyStatusResponse{}
-	mi := &file_openshell_proto_msgTypes[137]
+	mi := &file_openshell_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10002,7 +11777,7 @@ func (x *GetSandboxPolicyStatusResponse) String() string {
 func (*GetSandboxPolicyStatusResponse) ProtoMessage() {}
 
 func (x *GetSandboxPolicyStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[137]
+	mi := &file_openshell_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10015,7 +11790,7 @@ func (x *GetSandboxPolicyStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSandboxPolicyStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetSandboxPolicyStatusResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{137}
+	return file_openshell_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *GetSandboxPolicyStatusResponse) GetRevision() *SandboxPolicyRevision {
@@ -10054,7 +11829,7 @@ type ListSandboxPoliciesRequest struct {
 
 func (x *ListSandboxPoliciesRequest) Reset() {
 	*x = ListSandboxPoliciesRequest{}
-	mi := &file_openshell_proto_msgTypes[138]
+	mi := &file_openshell_proto_msgTypes[150]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10066,7 +11841,7 @@ func (x *ListSandboxPoliciesRequest) String() string {
 func (*ListSandboxPoliciesRequest) ProtoMessage() {}
 
 func (x *ListSandboxPoliciesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[138]
+	mi := &file_openshell_proto_msgTypes[150]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10079,7 +11854,7 @@ func (x *ListSandboxPoliciesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSandboxPoliciesRequest.ProtoReflect.Descriptor instead.
 func (*ListSandboxPoliciesRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{138}
+	return file_openshell_proto_rawDescGZIP(), []int{150}
 }
 
 func (x *ListSandboxPoliciesRequest) GetName() string {
@@ -10131,7 +11906,7 @@ type ListSandboxPoliciesResponse struct {
 
 func (x *ListSandboxPoliciesResponse) Reset() {
 	*x = ListSandboxPoliciesResponse{}
-	mi := &file_openshell_proto_msgTypes[139]
+	mi := &file_openshell_proto_msgTypes[151]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10143,7 +11918,7 @@ func (x *ListSandboxPoliciesResponse) String() string {
 func (*ListSandboxPoliciesResponse) ProtoMessage() {}
 
 func (x *ListSandboxPoliciesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[139]
+	mi := &file_openshell_proto_msgTypes[151]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10156,7 +11931,7 @@ func (x *ListSandboxPoliciesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSandboxPoliciesResponse.ProtoReflect.Descriptor instead.
 func (*ListSandboxPoliciesResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{139}
+	return file_openshell_proto_rawDescGZIP(), []int{151}
 }
 
 func (x *ListSandboxPoliciesResponse) GetRevisions() []*SandboxPolicyRevision {
@@ -10190,7 +11965,7 @@ type ReportPolicyStatusRequest struct {
 
 func (x *ReportPolicyStatusRequest) Reset() {
 	*x = ReportPolicyStatusRequest{}
-	mi := &file_openshell_proto_msgTypes[140]
+	mi := &file_openshell_proto_msgTypes[152]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10202,7 +11977,7 @@ func (x *ReportPolicyStatusRequest) String() string {
 func (*ReportPolicyStatusRequest) ProtoMessage() {}
 
 func (x *ReportPolicyStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[140]
+	mi := &file_openshell_proto_msgTypes[152]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10215,7 +11990,7 @@ func (x *ReportPolicyStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportPolicyStatusRequest.ProtoReflect.Descriptor instead.
 func (*ReportPolicyStatusRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{140}
+	return file_openshell_proto_rawDescGZIP(), []int{152}
 }
 
 func (x *ReportPolicyStatusRequest) GetSandboxId() string {
@@ -10255,7 +12030,7 @@ type ReportPolicyStatusResponse struct {
 
 func (x *ReportPolicyStatusResponse) Reset() {
 	*x = ReportPolicyStatusResponse{}
-	mi := &file_openshell_proto_msgTypes[141]
+	mi := &file_openshell_proto_msgTypes[153]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10267,7 +12042,7 @@ func (x *ReportPolicyStatusResponse) String() string {
 func (*ReportPolicyStatusResponse) ProtoMessage() {}
 
 func (x *ReportPolicyStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[141]
+	mi := &file_openshell_proto_msgTypes[153]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10280,7 +12055,196 @@ func (x *ReportPolicyStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportPolicyStatusResponse.ProtoReflect.Descriptor instead.
 func (*ReportPolicyStatusResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{141}
+	return file_openshell_proto_rawDescGZIP(), []int{153}
+}
+
+type SandboxConfigurationAdmission struct {
+	state               protoimpl.MessageState      `protogen:"open.v1"`
+	InstanceId          string                      `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	State               ConfigurationAdmissionState `protobuf:"varint,2,opt,name=state,proto3,enum=openshell.v1.ConfigurationAdmissionState" json:"state,omitempty"`
+	PolicyVersion       uint32                      `protobuf:"varint,3,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	PolicyHash          string                      `protobuf:"bytes,4,opt,name=policy_hash,json=policyHash,proto3" json:"policy_hash,omitempty"`
+	ConfigRevision      uint64                      `protobuf:"varint,5,opt,name=config_revision,json=configRevision,proto3" json:"config_revision,omitempty"`
+	ProviderEnvRevision uint64                      `protobuf:"varint,6,opt,name=provider_env_revision,json=providerEnvRevision,proto3" json:"provider_env_revision,omitempty"`
+	Error               string                      `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *SandboxConfigurationAdmission) Reset() {
+	*x = SandboxConfigurationAdmission{}
+	mi := &file_openshell_proto_msgTypes[154]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SandboxConfigurationAdmission) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SandboxConfigurationAdmission) ProtoMessage() {}
+
+func (x *SandboxConfigurationAdmission) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[154]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SandboxConfigurationAdmission.ProtoReflect.Descriptor instead.
+func (*SandboxConfigurationAdmission) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{154}
+}
+
+func (x *SandboxConfigurationAdmission) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *SandboxConfigurationAdmission) GetState() ConfigurationAdmissionState {
+	if x != nil {
+		return x.State
+	}
+	return ConfigurationAdmissionState_CONFIGURATION_ADMISSION_STATE_UNSPECIFIED
+}
+
+func (x *SandboxConfigurationAdmission) GetPolicyVersion() uint32 {
+	if x != nil {
+		return x.PolicyVersion
+	}
+	return 0
+}
+
+func (x *SandboxConfigurationAdmission) GetPolicyHash() string {
+	if x != nil {
+		return x.PolicyHash
+	}
+	return ""
+}
+
+func (x *SandboxConfigurationAdmission) GetConfigRevision() uint64 {
+	if x != nil {
+		return x.ConfigRevision
+	}
+	return 0
+}
+
+func (x *SandboxConfigurationAdmission) GetProviderEnvRevision() uint64 {
+	if x != nil {
+		return x.ProviderEnvRevision
+	}
+	return 0
+}
+
+func (x *SandboxConfigurationAdmission) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ReportSandboxConfigurationRequest struct {
+	state     protoimpl.MessageState         `protogen:"open.v1"`
+	SandboxId string                         `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	Admission *SandboxConfigurationAdmission `protobuf:"bytes,2,opt,name=admission,proto3" json:"admission,omitempty"`
+	// Pending registration replaces only this previously observed instance.
+	ExpectedInstanceId string `protobuf:"bytes,3,opt,name=expected_instance_id,json=expectedInstanceId,proto3" json:"expected_instance_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ReportSandboxConfigurationRequest) Reset() {
+	*x = ReportSandboxConfigurationRequest{}
+	mi := &file_openshell_proto_msgTypes[155]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportSandboxConfigurationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportSandboxConfigurationRequest) ProtoMessage() {}
+
+func (x *ReportSandboxConfigurationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[155]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportSandboxConfigurationRequest.ProtoReflect.Descriptor instead.
+func (*ReportSandboxConfigurationRequest) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{155}
+}
+
+func (x *ReportSandboxConfigurationRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *ReportSandboxConfigurationRequest) GetAdmission() *SandboxConfigurationAdmission {
+	if x != nil {
+		return x.Admission
+	}
+	return nil
+}
+
+func (x *ReportSandboxConfigurationRequest) GetExpectedInstanceId() string {
+	if x != nil {
+		return x.ExpectedInstanceId
+	}
+	return ""
+}
+
+type ReportSandboxConfigurationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportSandboxConfigurationResponse) Reset() {
+	*x = ReportSandboxConfigurationResponse{}
+	mi := &file_openshell_proto_msgTypes[156]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportSandboxConfigurationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportSandboxConfigurationResponse) ProtoMessage() {}
+
+func (x *ReportSandboxConfigurationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[156]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportSandboxConfigurationResponse.ProtoReflect.Descriptor instead.
+func (*ReportSandboxConfigurationResponse) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{156}
 }
 
 // A versioned policy revision with metadata.
@@ -10313,7 +12277,7 @@ type SandboxPolicyRevision struct {
 
 func (x *SandboxPolicyRevision) Reset() {
 	*x = SandboxPolicyRevision{}
-	mi := &file_openshell_proto_msgTypes[142]
+	mi := &file_openshell_proto_msgTypes[157]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10325,7 +12289,7 @@ func (x *SandboxPolicyRevision) String() string {
 func (*SandboxPolicyRevision) ProtoMessage() {}
 
 func (x *SandboxPolicyRevision) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[142]
+	mi := &file_openshell_proto_msgTypes[157]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10338,7 +12302,7 @@ func (x *SandboxPolicyRevision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxPolicyRevision.ProtoReflect.Descriptor instead.
 func (*SandboxPolicyRevision) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{142}
+	return file_openshell_proto_rawDescGZIP(), []int{157}
 }
 
 func (x *SandboxPolicyRevision) GetVersion() uint32 {
@@ -10418,7 +12382,7 @@ type GetSandboxLogsRequest struct {
 
 func (x *GetSandboxLogsRequest) Reset() {
 	*x = GetSandboxLogsRequest{}
-	mi := &file_openshell_proto_msgTypes[143]
+	mi := &file_openshell_proto_msgTypes[158]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10430,7 +12394,7 @@ func (x *GetSandboxLogsRequest) String() string {
 func (*GetSandboxLogsRequest) ProtoMessage() {}
 
 func (x *GetSandboxLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[143]
+	mi := &file_openshell_proto_msgTypes[158]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10443,7 +12407,7 @@ func (x *GetSandboxLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSandboxLogsRequest.ProtoReflect.Descriptor instead.
 func (*GetSandboxLogsRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{143}
+	return file_openshell_proto_rawDescGZIP(), []int{158}
 }
 
 func (x *GetSandboxLogsRequest) GetSandboxId() string {
@@ -10501,7 +12465,7 @@ type PushSandboxLogsRequest struct {
 
 func (x *PushSandboxLogsRequest) Reset() {
 	*x = PushSandboxLogsRequest{}
-	mi := &file_openshell_proto_msgTypes[144]
+	mi := &file_openshell_proto_msgTypes[159]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10513,7 +12477,7 @@ func (x *PushSandboxLogsRequest) String() string {
 func (*PushSandboxLogsRequest) ProtoMessage() {}
 
 func (x *PushSandboxLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[144]
+	mi := &file_openshell_proto_msgTypes[159]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10526,7 +12490,7 @@ func (x *PushSandboxLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushSandboxLogsRequest.ProtoReflect.Descriptor instead.
 func (*PushSandboxLogsRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{144}
+	return file_openshell_proto_rawDescGZIP(), []int{159}
 }
 
 func (x *PushSandboxLogsRequest) GetSandboxId() string {
@@ -10552,7 +12516,7 @@ type PushSandboxLogsResponse struct {
 
 func (x *PushSandboxLogsResponse) Reset() {
 	*x = PushSandboxLogsResponse{}
-	mi := &file_openshell_proto_msgTypes[145]
+	mi := &file_openshell_proto_msgTypes[160]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10564,7 +12528,7 @@ func (x *PushSandboxLogsResponse) String() string {
 func (*PushSandboxLogsResponse) ProtoMessage() {}
 
 func (x *PushSandboxLogsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[145]
+	mi := &file_openshell_proto_msgTypes[160]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10577,7 +12541,7 @@ func (x *PushSandboxLogsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushSandboxLogsResponse.ProtoReflect.Descriptor instead.
 func (*PushSandboxLogsResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{145}
+	return file_openshell_proto_rawDescGZIP(), []int{160}
 }
 
 // Get sandbox logs response.
@@ -10593,7 +12557,7 @@ type GetSandboxLogsResponse struct {
 
 func (x *GetSandboxLogsResponse) Reset() {
 	*x = GetSandboxLogsResponse{}
-	mi := &file_openshell_proto_msgTypes[146]
+	mi := &file_openshell_proto_msgTypes[161]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10605,7 +12569,7 @@ func (x *GetSandboxLogsResponse) String() string {
 func (*GetSandboxLogsResponse) ProtoMessage() {}
 
 func (x *GetSandboxLogsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[146]
+	mi := &file_openshell_proto_msgTypes[161]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10618,7 +12582,7 @@ func (x *GetSandboxLogsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSandboxLogsResponse.ProtoReflect.Descriptor instead.
 func (*GetSandboxLogsResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{146}
+	return file_openshell_proto_rawDescGZIP(), []int{161}
 }
 
 func (x *GetSandboxLogsResponse) GetLogs() []*SandboxLogLine {
@@ -10651,7 +12615,7 @@ type SupervisorMessage struct {
 
 func (x *SupervisorMessage) Reset() {
 	*x = SupervisorMessage{}
-	mi := &file_openshell_proto_msgTypes[147]
+	mi := &file_openshell_proto_msgTypes[162]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10663,7 +12627,7 @@ func (x *SupervisorMessage) String() string {
 func (*SupervisorMessage) ProtoMessage() {}
 
 func (x *SupervisorMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[147]
+	mi := &file_openshell_proto_msgTypes[162]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10676,7 +12640,7 @@ func (x *SupervisorMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SupervisorMessage.ProtoReflect.Descriptor instead.
 func (*SupervisorMessage) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{147}
+	return file_openshell_proto_rawDescGZIP(), []int{162}
 }
 
 func (x *SupervisorMessage) GetPayload() isSupervisorMessage_Payload {
@@ -10767,7 +12731,7 @@ type GatewayMessage struct {
 
 func (x *GatewayMessage) Reset() {
 	*x = GatewayMessage{}
-	mi := &file_openshell_proto_msgTypes[148]
+	mi := &file_openshell_proto_msgTypes[163]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10779,7 +12743,7 @@ func (x *GatewayMessage) String() string {
 func (*GatewayMessage) ProtoMessage() {}
 
 func (x *GatewayMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[148]
+	mi := &file_openshell_proto_msgTypes[163]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10792,7 +12756,7 @@ func (x *GatewayMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GatewayMessage.ProtoReflect.Descriptor instead.
 func (*GatewayMessage) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{148}
+	return file_openshell_proto_rawDescGZIP(), []int{163}
 }
 
 func (x *GatewayMessage) GetPayload() isGatewayMessage_Payload {
@@ -10887,14 +12851,16 @@ type SupervisorHello struct {
 	// Sandbox ID this supervisor manages.
 	SandboxId string `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
 	// Supervisor instance ID (e.g. boot id or process epoch).
-	InstanceId    string `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	InstanceId string `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	// The supervisor can report credential, policy, and launch-environment installation.
+	SupportsProviderReadiness bool `protobuf:"varint,4,opt,name=supports_provider_readiness,json=supportsProviderReadiness,proto3" json:"supports_provider_readiness,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *SupervisorHello) Reset() {
 	*x = SupervisorHello{}
-	mi := &file_openshell_proto_msgTypes[149]
+	mi := &file_openshell_proto_msgTypes[164]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10906,7 +12872,7 @@ func (x *SupervisorHello) String() string {
 func (*SupervisorHello) ProtoMessage() {}
 
 func (x *SupervisorHello) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[149]
+	mi := &file_openshell_proto_msgTypes[164]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10919,7 +12885,7 @@ func (x *SupervisorHello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SupervisorHello.ProtoReflect.Descriptor instead.
 func (*SupervisorHello) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{149}
+	return file_openshell_proto_rawDescGZIP(), []int{164}
 }
 
 func (x *SupervisorHello) GetSandboxId() string {
@@ -10936,6 +12902,13 @@ func (x *SupervisorHello) GetInstanceId() string {
 	return ""
 }
 
+func (x *SupervisorHello) GetSupportsProviderReadiness() bool {
+	if x != nil {
+		return x.SupportsProviderReadiness
+	}
+	return false
+}
+
 // Gateway accepts the supervisor session.
 type SessionAccepted struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -10949,7 +12922,7 @@ type SessionAccepted struct {
 
 func (x *SessionAccepted) Reset() {
 	*x = SessionAccepted{}
-	mi := &file_openshell_proto_msgTypes[150]
+	mi := &file_openshell_proto_msgTypes[165]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10961,7 +12934,7 @@ func (x *SessionAccepted) String() string {
 func (*SessionAccepted) ProtoMessage() {}
 
 func (x *SessionAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[150]
+	mi := &file_openshell_proto_msgTypes[165]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10974,7 +12947,7 @@ func (x *SessionAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionAccepted.ProtoReflect.Descriptor instead.
 func (*SessionAccepted) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{150}
+	return file_openshell_proto_rawDescGZIP(), []int{165}
 }
 
 func (x *SessionAccepted) GetSessionId() string {
@@ -11002,7 +12975,7 @@ type SessionRejected struct {
 
 func (x *SessionRejected) Reset() {
 	*x = SessionRejected{}
-	mi := &file_openshell_proto_msgTypes[151]
+	mi := &file_openshell_proto_msgTypes[166]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11014,7 +12987,7 @@ func (x *SessionRejected) String() string {
 func (*SessionRejected) ProtoMessage() {}
 
 func (x *SessionRejected) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[151]
+	mi := &file_openshell_proto_msgTypes[166]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11027,7 +13000,7 @@ func (x *SessionRejected) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionRejected.ProtoReflect.Descriptor instead.
 func (*SessionRejected) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{151}
+	return file_openshell_proto_rawDescGZIP(), []int{166}
 }
 
 func (x *SessionRejected) GetReason() string {
@@ -11046,7 +13019,7 @@ type SupervisorHeartbeat struct {
 
 func (x *SupervisorHeartbeat) Reset() {
 	*x = SupervisorHeartbeat{}
-	mi := &file_openshell_proto_msgTypes[152]
+	mi := &file_openshell_proto_msgTypes[167]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11058,7 +13031,7 @@ func (x *SupervisorHeartbeat) String() string {
 func (*SupervisorHeartbeat) ProtoMessage() {}
 
 func (x *SupervisorHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[152]
+	mi := &file_openshell_proto_msgTypes[167]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11071,7 +13044,7 @@ func (x *SupervisorHeartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SupervisorHeartbeat.ProtoReflect.Descriptor instead.
 func (*SupervisorHeartbeat) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{152}
+	return file_openshell_proto_rawDescGZIP(), []int{167}
 }
 
 // Gateway heartbeat.
@@ -11083,7 +13056,7 @@ type GatewayHeartbeat struct {
 
 func (x *GatewayHeartbeat) Reset() {
 	*x = GatewayHeartbeat{}
-	mi := &file_openshell_proto_msgTypes[153]
+	mi := &file_openshell_proto_msgTypes[168]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11095,7 +13068,7 @@ func (x *GatewayHeartbeat) String() string {
 func (*GatewayHeartbeat) ProtoMessage() {}
 
 func (x *GatewayHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[153]
+	mi := &file_openshell_proto_msgTypes[168]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11108,7 +13081,7 @@ func (x *GatewayHeartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GatewayHeartbeat.ProtoReflect.Descriptor instead.
 func (*GatewayHeartbeat) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{153}
+	return file_openshell_proto_rawDescGZIP(), []int{168}
 }
 
 // Terminal result reported before the supervisor shuts down. A successful RPC
@@ -11125,7 +13098,7 @@ type ReportMainProcessExitRequest struct {
 
 func (x *ReportMainProcessExitRequest) Reset() {
 	*x = ReportMainProcessExitRequest{}
-	mi := &file_openshell_proto_msgTypes[154]
+	mi := &file_openshell_proto_msgTypes[169]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11137,7 +13110,7 @@ func (x *ReportMainProcessExitRequest) String() string {
 func (*ReportMainProcessExitRequest) ProtoMessage() {}
 
 func (x *ReportMainProcessExitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[154]
+	mi := &file_openshell_proto_msgTypes[169]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11150,7 +13123,7 @@ func (x *ReportMainProcessExitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportMainProcessExitRequest.ProtoReflect.Descriptor instead.
 func (*ReportMainProcessExitRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{154}
+	return file_openshell_proto_rawDescGZIP(), []int{169}
 }
 
 func (x *ReportMainProcessExitRequest) GetSandboxId() string {
@@ -11182,7 +13155,7 @@ type ReportMainProcessExitResponse struct {
 
 func (x *ReportMainProcessExitResponse) Reset() {
 	*x = ReportMainProcessExitResponse{}
-	mi := &file_openshell_proto_msgTypes[155]
+	mi := &file_openshell_proto_msgTypes[170]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11194,7 +13167,7 @@ func (x *ReportMainProcessExitResponse) String() string {
 func (*ReportMainProcessExitResponse) ProtoMessage() {}
 
 func (x *ReportMainProcessExitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[155]
+	mi := &file_openshell_proto_msgTypes[170]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11207,7 +13180,7 @@ func (x *ReportMainProcessExitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportMainProcessExitResponse.ProtoReflect.Descriptor instead.
 func (*ReportMainProcessExitResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{155}
+	return file_openshell_proto_rawDescGZIP(), []int{170}
 }
 
 // Terminal-delivery completion reported after all expected foreground SSH
@@ -11222,7 +13195,7 @@ type FinalizeMainProcessExitRequest struct {
 
 func (x *FinalizeMainProcessExitRequest) Reset() {
 	*x = FinalizeMainProcessExitRequest{}
-	mi := &file_openshell_proto_msgTypes[156]
+	mi := &file_openshell_proto_msgTypes[171]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11234,7 +13207,7 @@ func (x *FinalizeMainProcessExitRequest) String() string {
 func (*FinalizeMainProcessExitRequest) ProtoMessage() {}
 
 func (x *FinalizeMainProcessExitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[156]
+	mi := &file_openshell_proto_msgTypes[171]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11247,7 +13220,7 @@ func (x *FinalizeMainProcessExitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalizeMainProcessExitRequest.ProtoReflect.Descriptor instead.
 func (*FinalizeMainProcessExitRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{156}
+	return file_openshell_proto_rawDescGZIP(), []int{171}
 }
 
 func (x *FinalizeMainProcessExitRequest) GetSandboxId() string {
@@ -11272,7 +13245,7 @@ type FinalizeMainProcessExitResponse struct {
 
 func (x *FinalizeMainProcessExitResponse) Reset() {
 	*x = FinalizeMainProcessExitResponse{}
-	mi := &file_openshell_proto_msgTypes[157]
+	mi := &file_openshell_proto_msgTypes[172]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11284,7 +13257,7 @@ func (x *FinalizeMainProcessExitResponse) String() string {
 func (*FinalizeMainProcessExitResponse) ProtoMessage() {}
 
 func (x *FinalizeMainProcessExitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[157]
+	mi := &file_openshell_proto_msgTypes[172]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11297,7 +13270,7 @@ func (x *FinalizeMainProcessExitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalizeMainProcessExitResponse.ProtoReflect.Descriptor instead.
 func (*FinalizeMainProcessExitResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{157}
+	return file_openshell_proto_rawDescGZIP(), []int{172}
 }
 
 // Gateway requests the supervisor to open a relay channel.
@@ -11326,7 +13299,7 @@ type RelayOpen struct {
 
 func (x *RelayOpen) Reset() {
 	*x = RelayOpen{}
-	mi := &file_openshell_proto_msgTypes[158]
+	mi := &file_openshell_proto_msgTypes[173]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11338,7 +13311,7 @@ func (x *RelayOpen) String() string {
 func (*RelayOpen) ProtoMessage() {}
 
 func (x *RelayOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[158]
+	mi := &file_openshell_proto_msgTypes[173]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11351,7 +13324,7 @@ func (x *RelayOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayOpen.ProtoReflect.Descriptor instead.
 func (*RelayOpen) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{158}
+	return file_openshell_proto_rawDescGZIP(), []int{173}
 }
 
 func (x *RelayOpen) GetChannelId() string {
@@ -11418,7 +13391,7 @@ type SshRelayTarget struct {
 
 func (x *SshRelayTarget) Reset() {
 	*x = SshRelayTarget{}
-	mi := &file_openshell_proto_msgTypes[159]
+	mi := &file_openshell_proto_msgTypes[174]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11430,7 +13403,7 @@ func (x *SshRelayTarget) String() string {
 func (*SshRelayTarget) ProtoMessage() {}
 
 func (x *SshRelayTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[159]
+	mi := &file_openshell_proto_msgTypes[174]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11443,7 +13416,7 @@ func (x *SshRelayTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SshRelayTarget.ProtoReflect.Descriptor instead.
 func (*SshRelayTarget) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{159}
+	return file_openshell_proto_rawDescGZIP(), []int{174}
 }
 
 // TCP target dialed by the supervisor from inside the sandbox.
@@ -11459,7 +13432,7 @@ type TcpRelayTarget struct {
 
 func (x *TcpRelayTarget) Reset() {
 	*x = TcpRelayTarget{}
-	mi := &file_openshell_proto_msgTypes[160]
+	mi := &file_openshell_proto_msgTypes[175]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11471,7 +13444,7 @@ func (x *TcpRelayTarget) String() string {
 func (*TcpRelayTarget) ProtoMessage() {}
 
 func (x *TcpRelayTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[160]
+	mi := &file_openshell_proto_msgTypes[175]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11484,7 +13457,7 @@ func (x *TcpRelayTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TcpRelayTarget.ProtoReflect.Descriptor instead.
 func (*TcpRelayTarget) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{160}
+	return file_openshell_proto_rawDescGZIP(), []int{175}
 }
 
 func (x *TcpRelayTarget) GetHost() string {
@@ -11512,7 +13485,7 @@ type RelayInit struct {
 
 func (x *RelayInit) Reset() {
 	*x = RelayInit{}
-	mi := &file_openshell_proto_msgTypes[161]
+	mi := &file_openshell_proto_msgTypes[176]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11524,7 +13497,7 @@ func (x *RelayInit) String() string {
 func (*RelayInit) ProtoMessage() {}
 
 func (x *RelayInit) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[161]
+	mi := &file_openshell_proto_msgTypes[176]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11537,7 +13510,7 @@ func (x *RelayInit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayInit.ProtoReflect.Descriptor instead.
 func (*RelayInit) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{161}
+	return file_openshell_proto_rawDescGZIP(), []int{176}
 }
 
 func (x *RelayInit) GetChannelId() string {
@@ -11564,7 +13537,7 @@ type RelayFrame struct {
 
 func (x *RelayFrame) Reset() {
 	*x = RelayFrame{}
-	mi := &file_openshell_proto_msgTypes[162]
+	mi := &file_openshell_proto_msgTypes[177]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11576,7 +13549,7 @@ func (x *RelayFrame) String() string {
 func (*RelayFrame) ProtoMessage() {}
 
 func (x *RelayFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[162]
+	mi := &file_openshell_proto_msgTypes[177]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11589,7 +13562,7 @@ func (x *RelayFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayFrame.ProtoReflect.Descriptor instead.
 func (*RelayFrame) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{162}
+	return file_openshell_proto_rawDescGZIP(), []int{177}
 }
 
 func (x *RelayFrame) GetPayload() isRelayFrame_Payload {
@@ -11648,7 +13621,7 @@ type RelayOpenResult struct {
 
 func (x *RelayOpenResult) Reset() {
 	*x = RelayOpenResult{}
-	mi := &file_openshell_proto_msgTypes[163]
+	mi := &file_openshell_proto_msgTypes[178]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11660,7 +13633,7 @@ func (x *RelayOpenResult) String() string {
 func (*RelayOpenResult) ProtoMessage() {}
 
 func (x *RelayOpenResult) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[163]
+	mi := &file_openshell_proto_msgTypes[178]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11673,7 +13646,7 @@ func (x *RelayOpenResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayOpenResult.ProtoReflect.Descriptor instead.
 func (*RelayOpenResult) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{163}
+	return file_openshell_proto_rawDescGZIP(), []int{178}
 }
 
 func (x *RelayOpenResult) GetChannelId() string {
@@ -11710,7 +13683,7 @@ type RelayClose struct {
 
 func (x *RelayClose) Reset() {
 	*x = RelayClose{}
-	mi := &file_openshell_proto_msgTypes[164]
+	mi := &file_openshell_proto_msgTypes[179]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11722,7 +13695,7 @@ func (x *RelayClose) String() string {
 func (*RelayClose) ProtoMessage() {}
 
 func (x *RelayClose) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[164]
+	mi := &file_openshell_proto_msgTypes[179]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11735,7 +13708,7 @@ func (x *RelayClose) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayClose.ProtoReflect.Descriptor instead.
 func (*RelayClose) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{164}
+	return file_openshell_proto_rawDescGZIP(), []int{179}
 }
 
 func (x *RelayClose) GetChannelId() string {
@@ -11769,7 +13742,7 @@ type L7RequestSample struct {
 
 func (x *L7RequestSample) Reset() {
 	*x = L7RequestSample{}
-	mi := &file_openshell_proto_msgTypes[165]
+	mi := &file_openshell_proto_msgTypes[180]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11781,7 +13754,7 @@ func (x *L7RequestSample) String() string {
 func (*L7RequestSample) ProtoMessage() {}
 
 func (x *L7RequestSample) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[165]
+	mi := &file_openshell_proto_msgTypes[180]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11794,7 +13767,7 @@ func (x *L7RequestSample) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use L7RequestSample.ProtoReflect.Descriptor instead.
 func (*L7RequestSample) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{165}
+	return file_openshell_proto_rawDescGZIP(), []int{180}
 }
 
 func (x *L7RequestSample) GetMethod() string {
@@ -11868,7 +13841,7 @@ type DenialSummary struct {
 
 func (x *DenialSummary) Reset() {
 	*x = DenialSummary{}
-	mi := &file_openshell_proto_msgTypes[166]
+	mi := &file_openshell_proto_msgTypes[181]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11880,7 +13853,7 @@ func (x *DenialSummary) String() string {
 func (*DenialSummary) ProtoMessage() {}
 
 func (x *DenialSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[166]
+	mi := &file_openshell_proto_msgTypes[181]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11893,7 +13866,7 @@ func (x *DenialSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DenialSummary.ProtoReflect.Descriptor instead.
 func (*DenialSummary) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{166}
+	return file_openshell_proto_rawDescGZIP(), []int{181}
 }
 
 func (x *DenialSummary) GetSandboxId() string {
@@ -12028,7 +14001,7 @@ type DenialGroupCount struct {
 
 func (x *DenialGroupCount) Reset() {
 	*x = DenialGroupCount{}
-	mi := &file_openshell_proto_msgTypes[167]
+	mi := &file_openshell_proto_msgTypes[182]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12040,7 +14013,7 @@ func (x *DenialGroupCount) String() string {
 func (*DenialGroupCount) ProtoMessage() {}
 
 func (x *DenialGroupCount) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[167]
+	mi := &file_openshell_proto_msgTypes[182]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12053,7 +14026,7 @@ func (x *DenialGroupCount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DenialGroupCount.ProtoReflect.Descriptor instead.
 func (*DenialGroupCount) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{167}
+	return file_openshell_proto_rawDescGZIP(), []int{182}
 }
 
 func (x *DenialGroupCount) GetDenyGroup() string {
@@ -12086,7 +14059,7 @@ type NetworkActivitySummary struct {
 
 func (x *NetworkActivitySummary) Reset() {
 	*x = NetworkActivitySummary{}
-	mi := &file_openshell_proto_msgTypes[168]
+	mi := &file_openshell_proto_msgTypes[183]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12098,7 +14071,7 @@ func (x *NetworkActivitySummary) String() string {
 func (*NetworkActivitySummary) ProtoMessage() {}
 
 func (x *NetworkActivitySummary) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[168]
+	mi := &file_openshell_proto_msgTypes[183]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12111,7 +14084,7 @@ func (x *NetworkActivitySummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkActivitySummary.ProtoReflect.Descriptor instead.
 func (*NetworkActivitySummary) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{168}
+	return file_openshell_proto_rawDescGZIP(), []int{183}
 }
 
 func (x *NetworkActivitySummary) GetNetworkActivityCount() uint32 {
@@ -12199,7 +14172,7 @@ type PolicyChunk struct {
 
 func (x *PolicyChunk) Reset() {
 	*x = PolicyChunk{}
-	mi := &file_openshell_proto_msgTypes[169]
+	mi := &file_openshell_proto_msgTypes[184]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12211,7 +14184,7 @@ func (x *PolicyChunk) String() string {
 func (*PolicyChunk) ProtoMessage() {}
 
 func (x *PolicyChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[169]
+	mi := &file_openshell_proto_msgTypes[184]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12224,7 +14197,7 @@ func (x *PolicyChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyChunk.ProtoReflect.Descriptor instead.
 func (*PolicyChunk) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{169}
+	return file_openshell_proto_rawDescGZIP(), []int{184}
 }
 
 func (x *PolicyChunk) GetId() string {
@@ -12412,7 +14385,7 @@ type DraftPolicyUpdate struct {
 
 func (x *DraftPolicyUpdate) Reset() {
 	*x = DraftPolicyUpdate{}
-	mi := &file_openshell_proto_msgTypes[170]
+	mi := &file_openshell_proto_msgTypes[185]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12424,7 +14397,7 @@ func (x *DraftPolicyUpdate) String() string {
 func (*DraftPolicyUpdate) ProtoMessage() {}
 
 func (x *DraftPolicyUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[170]
+	mi := &file_openshell_proto_msgTypes[185]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12437,7 +14410,7 @@ func (x *DraftPolicyUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DraftPolicyUpdate.ProtoReflect.Descriptor instead.
 func (*DraftPolicyUpdate) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{170}
+	return file_openshell_proto_rawDescGZIP(), []int{185}
 }
 
 func (x *DraftPolicyUpdate) GetDraftVersion() uint64 {
@@ -12495,7 +14468,7 @@ type SubmitPolicyAnalysisRequest struct {
 
 func (x *SubmitPolicyAnalysisRequest) Reset() {
 	*x = SubmitPolicyAnalysisRequest{}
-	mi := &file_openshell_proto_msgTypes[171]
+	mi := &file_openshell_proto_msgTypes[186]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12507,7 +14480,7 @@ func (x *SubmitPolicyAnalysisRequest) String() string {
 func (*SubmitPolicyAnalysisRequest) ProtoMessage() {}
 
 func (x *SubmitPolicyAnalysisRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[171]
+	mi := &file_openshell_proto_msgTypes[186]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12520,7 +14493,7 @@ func (x *SubmitPolicyAnalysisRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitPolicyAnalysisRequest.ProtoReflect.Descriptor instead.
 func (*SubmitPolicyAnalysisRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{171}
+	return file_openshell_proto_rawDescGZIP(), []int{186}
 }
 
 func (x *SubmitPolicyAnalysisRequest) GetSummaries() []*DenialSummary {
@@ -12583,7 +14556,7 @@ type SubmitPolicyAnalysisResponse struct {
 
 func (x *SubmitPolicyAnalysisResponse) Reset() {
 	*x = SubmitPolicyAnalysisResponse{}
-	mi := &file_openshell_proto_msgTypes[172]
+	mi := &file_openshell_proto_msgTypes[187]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12595,7 +14568,7 @@ func (x *SubmitPolicyAnalysisResponse) String() string {
 func (*SubmitPolicyAnalysisResponse) ProtoMessage() {}
 
 func (x *SubmitPolicyAnalysisResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[172]
+	mi := &file_openshell_proto_msgTypes[187]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12608,7 +14581,7 @@ func (x *SubmitPolicyAnalysisResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitPolicyAnalysisResponse.ProtoReflect.Descriptor instead.
 func (*SubmitPolicyAnalysisResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{172}
+	return file_openshell_proto_rawDescGZIP(), []int{187}
 }
 
 func (x *SubmitPolicyAnalysisResponse) GetAcceptedChunks() uint32 {
@@ -12654,7 +14627,7 @@ type GetDraftPolicyRequest struct {
 
 func (x *GetDraftPolicyRequest) Reset() {
 	*x = GetDraftPolicyRequest{}
-	mi := &file_openshell_proto_msgTypes[173]
+	mi := &file_openshell_proto_msgTypes[188]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12666,7 +14639,7 @@ func (x *GetDraftPolicyRequest) String() string {
 func (*GetDraftPolicyRequest) ProtoMessage() {}
 
 func (x *GetDraftPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[173]
+	mi := &file_openshell_proto_msgTypes[188]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12679,7 +14652,7 @@ func (x *GetDraftPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDraftPolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetDraftPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{173}
+	return file_openshell_proto_rawDescGZIP(), []int{188}
 }
 
 func (x *GetDraftPolicyRequest) GetName() string {
@@ -12719,7 +14692,7 @@ type GetDraftPolicyResponse struct {
 
 func (x *GetDraftPolicyResponse) Reset() {
 	*x = GetDraftPolicyResponse{}
-	mi := &file_openshell_proto_msgTypes[174]
+	mi := &file_openshell_proto_msgTypes[189]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12731,7 +14704,7 @@ func (x *GetDraftPolicyResponse) String() string {
 func (*GetDraftPolicyResponse) ProtoMessage() {}
 
 func (x *GetDraftPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[174]
+	mi := &file_openshell_proto_msgTypes[189]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12744,7 +14717,7 @@ func (x *GetDraftPolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDraftPolicyResponse.ProtoReflect.Descriptor instead.
 func (*GetDraftPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{174}
+	return file_openshell_proto_rawDescGZIP(), []int{189}
 }
 
 func (x *GetDraftPolicyResponse) GetChunks() []*PolicyChunk {
@@ -12787,13 +14760,16 @@ type ApproveDraftChunkRequest struct {
 	ReviewToken string `protobuf:"bytes,4,opt,name=review_token,json=reviewToken,proto3" json:"review_token,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,5,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ApproveDraftChunkRequest) Reset() {
 	*x = ApproveDraftChunkRequest{}
-	mi := &file_openshell_proto_msgTypes[175]
+	mi := &file_openshell_proto_msgTypes[190]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12805,7 +14781,7 @@ func (x *ApproveDraftChunkRequest) String() string {
 func (*ApproveDraftChunkRequest) ProtoMessage() {}
 
 func (x *ApproveDraftChunkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[175]
+	mi := &file_openshell_proto_msgTypes[190]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12818,7 +14794,7 @@ func (x *ApproveDraftChunkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveDraftChunkRequest.ProtoReflect.Descriptor instead.
 func (*ApproveDraftChunkRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{175}
+	return file_openshell_proto_rawDescGZIP(), []int{190}
 }
 
 func (x *ApproveDraftChunkRequest) GetName() string {
@@ -12849,6 +14825,13 @@ func (x *ApproveDraftChunkRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSel
 	return nil
 }
 
+func (x *ApproveDraftChunkRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type ApproveDraftChunkResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// New policy version after merge.
@@ -12861,7 +14844,7 @@ type ApproveDraftChunkResponse struct {
 
 func (x *ApproveDraftChunkResponse) Reset() {
 	*x = ApproveDraftChunkResponse{}
-	mi := &file_openshell_proto_msgTypes[176]
+	mi := &file_openshell_proto_msgTypes[191]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12873,7 +14856,7 @@ func (x *ApproveDraftChunkResponse) String() string {
 func (*ApproveDraftChunkResponse) ProtoMessage() {}
 
 func (x *ApproveDraftChunkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[176]
+	mi := &file_openshell_proto_msgTypes[191]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12886,7 +14869,7 @@ func (x *ApproveDraftChunkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveDraftChunkResponse.ProtoReflect.Descriptor instead.
 func (*ApproveDraftChunkResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{176}
+	return file_openshell_proto_rawDescGZIP(), []int{191}
 }
 
 func (x *ApproveDraftChunkResponse) GetPolicyVersion() uint32 {
@@ -12914,13 +14897,16 @@ type RejectDraftChunkRequest struct {
 	Reason string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,5,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RejectDraftChunkRequest) Reset() {
 	*x = RejectDraftChunkRequest{}
-	mi := &file_openshell_proto_msgTypes[177]
+	mi := &file_openshell_proto_msgTypes[192]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12932,7 +14918,7 @@ func (x *RejectDraftChunkRequest) String() string {
 func (*RejectDraftChunkRequest) ProtoMessage() {}
 
 func (x *RejectDraftChunkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[177]
+	mi := &file_openshell_proto_msgTypes[192]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12945,7 +14931,7 @@ func (x *RejectDraftChunkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RejectDraftChunkRequest.ProtoReflect.Descriptor instead.
 func (*RejectDraftChunkRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{177}
+	return file_openshell_proto_rawDescGZIP(), []int{192}
 }
 
 func (x *RejectDraftChunkRequest) GetName() string {
@@ -12976,6 +14962,13 @@ func (x *RejectDraftChunkRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSele
 	return nil
 }
 
+func (x *RejectDraftChunkRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type RejectDraftChunkResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -12984,7 +14977,7 @@ type RejectDraftChunkResponse struct {
 
 func (x *RejectDraftChunkResponse) Reset() {
 	*x = RejectDraftChunkResponse{}
-	mi := &file_openshell_proto_msgTypes[178]
+	mi := &file_openshell_proto_msgTypes[193]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12996,7 +14989,7 @@ func (x *RejectDraftChunkResponse) String() string {
 func (*RejectDraftChunkResponse) ProtoMessage() {}
 
 func (x *RejectDraftChunkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[178]
+	mi := &file_openshell_proto_msgTypes[193]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13009,7 +15002,7 @@ func (x *RejectDraftChunkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RejectDraftChunkResponse.ProtoReflect.Descriptor instead.
 func (*RejectDraftChunkResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{178}
+	return file_openshell_proto_rawDescGZIP(), []int{193}
 }
 
 // Approve all pending chunks.
@@ -13023,7 +15016,7 @@ type DraftChunkApproval struct {
 
 func (x *DraftChunkApproval) Reset() {
 	*x = DraftChunkApproval{}
-	mi := &file_openshell_proto_msgTypes[179]
+	mi := &file_openshell_proto_msgTypes[194]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13035,7 +15028,7 @@ func (x *DraftChunkApproval) String() string {
 func (*DraftChunkApproval) ProtoMessage() {}
 
 func (x *DraftChunkApproval) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[179]
+	mi := &file_openshell_proto_msgTypes[194]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13048,7 +15041,7 @@ func (x *DraftChunkApproval) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DraftChunkApproval.ProtoReflect.Descriptor instead.
 func (*DraftChunkApproval) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{179}
+	return file_openshell_proto_rawDescGZIP(), []int{194}
 }
 
 func (x *DraftChunkApproval) GetChunkId() string {
@@ -13076,13 +15069,16 @@ type ApproveAllDraftChunksRequest struct {
 	Approvals []*DraftChunkApproval `protobuf:"bytes,4,rep,name=approvals,proto3" json:"approvals,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,5,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ApproveAllDraftChunksRequest) Reset() {
 	*x = ApproveAllDraftChunksRequest{}
-	mi := &file_openshell_proto_msgTypes[180]
+	mi := &file_openshell_proto_msgTypes[195]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13094,7 +15090,7 @@ func (x *ApproveAllDraftChunksRequest) String() string {
 func (*ApproveAllDraftChunksRequest) ProtoMessage() {}
 
 func (x *ApproveAllDraftChunksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[180]
+	mi := &file_openshell_proto_msgTypes[195]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13107,7 +15103,7 @@ func (x *ApproveAllDraftChunksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveAllDraftChunksRequest.ProtoReflect.Descriptor instead.
 func (*ApproveAllDraftChunksRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{180}
+	return file_openshell_proto_rawDescGZIP(), []int{195}
 }
 
 func (x *ApproveAllDraftChunksRequest) GetName() string {
@@ -13138,6 +15134,13 @@ func (x *ApproveAllDraftChunksRequest) GetWorkspaceScope() *datamodelv1.Workspac
 	return nil
 }
 
+func (x *ApproveAllDraftChunksRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type ApproveAllDraftChunksResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// New policy version after merge.
@@ -13155,7 +15158,7 @@ type ApproveAllDraftChunksResponse struct {
 
 func (x *ApproveAllDraftChunksResponse) Reset() {
 	*x = ApproveAllDraftChunksResponse{}
-	mi := &file_openshell_proto_msgTypes[181]
+	mi := &file_openshell_proto_msgTypes[196]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13167,7 +15170,7 @@ func (x *ApproveAllDraftChunksResponse) String() string {
 func (*ApproveAllDraftChunksResponse) ProtoMessage() {}
 
 func (x *ApproveAllDraftChunksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[181]
+	mi := &file_openshell_proto_msgTypes[196]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13180,7 +15183,7 @@ func (x *ApproveAllDraftChunksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveAllDraftChunksResponse.ProtoReflect.Descriptor instead.
 func (*ApproveAllDraftChunksResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{181}
+	return file_openshell_proto_rawDescGZIP(), []int{196}
 }
 
 func (x *ApproveAllDraftChunksResponse) GetPolicyVersion() uint32 {
@@ -13222,13 +15225,16 @@ type EditDraftChunkRequest struct {
 	ProposedRule *policyv1.NetworkPolicyRule `protobuf:"bytes,3,opt,name=proposed_rule,json=proposedRule,proto3" json:"proposed_rule,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,5,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EditDraftChunkRequest) Reset() {
 	*x = EditDraftChunkRequest{}
-	mi := &file_openshell_proto_msgTypes[182]
+	mi := &file_openshell_proto_msgTypes[197]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13240,7 +15246,7 @@ func (x *EditDraftChunkRequest) String() string {
 func (*EditDraftChunkRequest) ProtoMessage() {}
 
 func (x *EditDraftChunkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[182]
+	mi := &file_openshell_proto_msgTypes[197]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13253,7 +15259,7 @@ func (x *EditDraftChunkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EditDraftChunkRequest.ProtoReflect.Descriptor instead.
 func (*EditDraftChunkRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{182}
+	return file_openshell_proto_rawDescGZIP(), []int{197}
 }
 
 func (x *EditDraftChunkRequest) GetName() string {
@@ -13284,6 +15290,13 @@ func (x *EditDraftChunkRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelect
 	return nil
 }
 
+func (x *EditDraftChunkRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type EditDraftChunkResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -13292,7 +15305,7 @@ type EditDraftChunkResponse struct {
 
 func (x *EditDraftChunkResponse) Reset() {
 	*x = EditDraftChunkResponse{}
-	mi := &file_openshell_proto_msgTypes[183]
+	mi := &file_openshell_proto_msgTypes[198]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13304,7 +15317,7 @@ func (x *EditDraftChunkResponse) String() string {
 func (*EditDraftChunkResponse) ProtoMessage() {}
 
 func (x *EditDraftChunkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[183]
+	mi := &file_openshell_proto_msgTypes[198]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13317,7 +15330,7 @@ func (x *EditDraftChunkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EditDraftChunkResponse.ProtoReflect.Descriptor instead.
 func (*EditDraftChunkResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{183}
+	return file_openshell_proto_rawDescGZIP(), []int{198}
 }
 
 // Reverse an approval (remove merged rule from active policy).
@@ -13329,13 +15342,16 @@ type UndoDraftChunkRequest struct {
 	ChunkId string `protobuf:"bytes,2,opt,name=chunk_id,json=chunkId,proto3" json:"chunk_id,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,4,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UndoDraftChunkRequest) Reset() {
 	*x = UndoDraftChunkRequest{}
-	mi := &file_openshell_proto_msgTypes[184]
+	mi := &file_openshell_proto_msgTypes[199]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13347,7 +15363,7 @@ func (x *UndoDraftChunkRequest) String() string {
 func (*UndoDraftChunkRequest) ProtoMessage() {}
 
 func (x *UndoDraftChunkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[184]
+	mi := &file_openshell_proto_msgTypes[199]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13360,7 +15376,7 @@ func (x *UndoDraftChunkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UndoDraftChunkRequest.ProtoReflect.Descriptor instead.
 func (*UndoDraftChunkRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{184}
+	return file_openshell_proto_rawDescGZIP(), []int{199}
 }
 
 func (x *UndoDraftChunkRequest) GetName() string {
@@ -13384,6 +15400,13 @@ func (x *UndoDraftChunkRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelect
 	return nil
 }
 
+func (x *UndoDraftChunkRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type UndoDraftChunkResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// New policy version after removal.
@@ -13396,7 +15419,7 @@ type UndoDraftChunkResponse struct {
 
 func (x *UndoDraftChunkResponse) Reset() {
 	*x = UndoDraftChunkResponse{}
-	mi := &file_openshell_proto_msgTypes[185]
+	mi := &file_openshell_proto_msgTypes[200]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13408,7 +15431,7 @@ func (x *UndoDraftChunkResponse) String() string {
 func (*UndoDraftChunkResponse) ProtoMessage() {}
 
 func (x *UndoDraftChunkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[185]
+	mi := &file_openshell_proto_msgTypes[200]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13421,7 +15444,7 @@ func (x *UndoDraftChunkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UndoDraftChunkResponse.ProtoReflect.Descriptor instead.
 func (*UndoDraftChunkResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{185}
+	return file_openshell_proto_rawDescGZIP(), []int{200}
 }
 
 func (x *UndoDraftChunkResponse) GetPolicyVersion() uint32 {
@@ -13445,13 +15468,16 @@ type ClearDraftChunksRequest struct {
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Explicit workspace scope. The all-workspaces selection is invalid.
 	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,3,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional nonzero UUID for durable at-most-once admission. Successful results
+	// can be replayed for 24 hours; see the API errors and retries reference.
+	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ClearDraftChunksRequest) Reset() {
 	*x = ClearDraftChunksRequest{}
-	mi := &file_openshell_proto_msgTypes[186]
+	mi := &file_openshell_proto_msgTypes[201]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13463,7 +15489,7 @@ func (x *ClearDraftChunksRequest) String() string {
 func (*ClearDraftChunksRequest) ProtoMessage() {}
 
 func (x *ClearDraftChunksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[186]
+	mi := &file_openshell_proto_msgTypes[201]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13476,7 +15502,7 @@ func (x *ClearDraftChunksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearDraftChunksRequest.ProtoReflect.Descriptor instead.
 func (*ClearDraftChunksRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{186}
+	return file_openshell_proto_rawDescGZIP(), []int{201}
 }
 
 func (x *ClearDraftChunksRequest) GetName() string {
@@ -13493,6 +15519,13 @@ func (x *ClearDraftChunksRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSele
 	return nil
 }
 
+func (x *ClearDraftChunksRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type ClearDraftChunksResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Number of chunks cleared.
@@ -13503,7 +15536,7 @@ type ClearDraftChunksResponse struct {
 
 func (x *ClearDraftChunksResponse) Reset() {
 	*x = ClearDraftChunksResponse{}
-	mi := &file_openshell_proto_msgTypes[187]
+	mi := &file_openshell_proto_msgTypes[202]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13515,7 +15548,7 @@ func (x *ClearDraftChunksResponse) String() string {
 func (*ClearDraftChunksResponse) ProtoMessage() {}
 
 func (x *ClearDraftChunksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[187]
+	mi := &file_openshell_proto_msgTypes[202]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13528,7 +15561,7 @@ func (x *ClearDraftChunksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearDraftChunksResponse.ProtoReflect.Descriptor instead.
 func (*ClearDraftChunksResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{187}
+	return file_openshell_proto_rawDescGZIP(), []int{202}
 }
 
 func (x *ClearDraftChunksResponse) GetChunksCleared() uint32 {
@@ -13551,7 +15584,7 @@ type GetDraftHistoryRequest struct {
 
 func (x *GetDraftHistoryRequest) Reset() {
 	*x = GetDraftHistoryRequest{}
-	mi := &file_openshell_proto_msgTypes[188]
+	mi := &file_openshell_proto_msgTypes[203]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13563,7 +15596,7 @@ func (x *GetDraftHistoryRequest) String() string {
 func (*GetDraftHistoryRequest) ProtoMessage() {}
 
 func (x *GetDraftHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[188]
+	mi := &file_openshell_proto_msgTypes[203]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13576,7 +15609,7 @@ func (x *GetDraftHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDraftHistoryRequest.ProtoReflect.Descriptor instead.
 func (*GetDraftHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{188}
+	return file_openshell_proto_rawDescGZIP(), []int{203}
 }
 
 func (x *GetDraftHistoryRequest) GetName() string {
@@ -13610,7 +15643,7 @@ type DraftHistoryEntry struct {
 
 func (x *DraftHistoryEntry) Reset() {
 	*x = DraftHistoryEntry{}
-	mi := &file_openshell_proto_msgTypes[189]
+	mi := &file_openshell_proto_msgTypes[204]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13622,7 +15655,7 @@ func (x *DraftHistoryEntry) String() string {
 func (*DraftHistoryEntry) ProtoMessage() {}
 
 func (x *DraftHistoryEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[189]
+	mi := &file_openshell_proto_msgTypes[204]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13635,7 +15668,7 @@ func (x *DraftHistoryEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DraftHistoryEntry.ProtoReflect.Descriptor instead.
 func (*DraftHistoryEntry) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{189}
+	return file_openshell_proto_rawDescGZIP(), []int{204}
 }
 
 func (x *DraftHistoryEntry) GetEventTime() *timestamppb.Timestamp {
@@ -13676,7 +15709,7 @@ type GetDraftHistoryResponse struct {
 
 func (x *GetDraftHistoryResponse) Reset() {
 	*x = GetDraftHistoryResponse{}
-	mi := &file_openshell_proto_msgTypes[190]
+	mi := &file_openshell_proto_msgTypes[205]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13688,7 +15721,7 @@ func (x *GetDraftHistoryResponse) String() string {
 func (*GetDraftHistoryResponse) ProtoMessage() {}
 
 func (x *GetDraftHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[190]
+	mi := &file_openshell_proto_msgTypes[205]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13701,7 +15734,7 @@ func (x *GetDraftHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDraftHistoryResponse.ProtoReflect.Descriptor instead.
 func (*GetDraftHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{190}
+	return file_openshell_proto_rawDescGZIP(), []int{205}
 }
 
 func (x *GetDraftHistoryResponse) GetEntries() []*DraftHistoryEntry {
@@ -13717,14 +15750,16 @@ type CreateWorkspaceRequest struct {
 	// Workspace name. Must be a valid DNS-1123 label.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Optional labels for the workspace (key-value metadata).
-	Labels        map[string]string `protobuf:"bytes,2,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Labels map[string]string `protobuf:"bytes,2,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Optional nonzero UUID. Same ID and payload replay success for 24 hours.
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateWorkspaceRequest) Reset() {
 	*x = CreateWorkspaceRequest{}
-	mi := &file_openshell_proto_msgTypes[191]
+	mi := &file_openshell_proto_msgTypes[206]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13736,7 +15771,7 @@ func (x *CreateWorkspaceRequest) String() string {
 func (*CreateWorkspaceRequest) ProtoMessage() {}
 
 func (x *CreateWorkspaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[191]
+	mi := &file_openshell_proto_msgTypes[206]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13749,7 +15784,7 @@ func (x *CreateWorkspaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateWorkspaceRequest.ProtoReflect.Descriptor instead.
 func (*CreateWorkspaceRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{191}
+	return file_openshell_proto_rawDescGZIP(), []int{206}
 }
 
 func (x *CreateWorkspaceRequest) GetName() string {
@@ -13766,6 +15801,13 @@ func (x *CreateWorkspaceRequest) GetLabels() map[string]string {
 	return nil
 }
 
+func (x *CreateWorkspaceRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Create workspace response.
 type CreateWorkspaceResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -13776,7 +15818,7 @@ type CreateWorkspaceResponse struct {
 
 func (x *CreateWorkspaceResponse) Reset() {
 	*x = CreateWorkspaceResponse{}
-	mi := &file_openshell_proto_msgTypes[192]
+	mi := &file_openshell_proto_msgTypes[207]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13788,7 +15830,7 @@ func (x *CreateWorkspaceResponse) String() string {
 func (*CreateWorkspaceResponse) ProtoMessage() {}
 
 func (x *CreateWorkspaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[192]
+	mi := &file_openshell_proto_msgTypes[207]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13801,7 +15843,7 @@ func (x *CreateWorkspaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateWorkspaceResponse.ProtoReflect.Descriptor instead.
 func (*CreateWorkspaceResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{192}
+	return file_openshell_proto_rawDescGZIP(), []int{207}
 }
 
 func (x *CreateWorkspaceResponse) GetWorkspace() *datamodelv1.Workspace {
@@ -13822,7 +15864,7 @@ type GetWorkspaceRequest struct {
 
 func (x *GetWorkspaceRequest) Reset() {
 	*x = GetWorkspaceRequest{}
-	mi := &file_openshell_proto_msgTypes[193]
+	mi := &file_openshell_proto_msgTypes[208]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13834,7 +15876,7 @@ func (x *GetWorkspaceRequest) String() string {
 func (*GetWorkspaceRequest) ProtoMessage() {}
 
 func (x *GetWorkspaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[193]
+	mi := &file_openshell_proto_msgTypes[208]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13847,7 +15889,7 @@ func (x *GetWorkspaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkspaceRequest.ProtoReflect.Descriptor instead.
 func (*GetWorkspaceRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{193}
+	return file_openshell_proto_rawDescGZIP(), []int{208}
 }
 
 func (x *GetWorkspaceRequest) GetName() string {
@@ -13867,7 +15909,7 @@ type GetWorkspaceResponse struct {
 
 func (x *GetWorkspaceResponse) Reset() {
 	*x = GetWorkspaceResponse{}
-	mi := &file_openshell_proto_msgTypes[194]
+	mi := &file_openshell_proto_msgTypes[209]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13879,7 +15921,7 @@ func (x *GetWorkspaceResponse) String() string {
 func (*GetWorkspaceResponse) ProtoMessage() {}
 
 func (x *GetWorkspaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[194]
+	mi := &file_openshell_proto_msgTypes[209]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13892,7 +15934,7 @@ func (x *GetWorkspaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkspaceResponse.ProtoReflect.Descriptor instead.
 func (*GetWorkspaceResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{194}
+	return file_openshell_proto_rawDescGZIP(), []int{209}
 }
 
 func (x *GetWorkspaceResponse) GetWorkspace() *datamodelv1.Workspace {
@@ -13919,7 +15961,7 @@ type ListWorkspacesRequest struct {
 
 func (x *ListWorkspacesRequest) Reset() {
 	*x = ListWorkspacesRequest{}
-	mi := &file_openshell_proto_msgTypes[195]
+	mi := &file_openshell_proto_msgTypes[210]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13931,7 +15973,7 @@ func (x *ListWorkspacesRequest) String() string {
 func (*ListWorkspacesRequest) ProtoMessage() {}
 
 func (x *ListWorkspacesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[195]
+	mi := &file_openshell_proto_msgTypes[210]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13944,7 +15986,7 @@ func (x *ListWorkspacesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkspacesRequest.ProtoReflect.Descriptor instead.
 func (*ListWorkspacesRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{195}
+	return file_openshell_proto_rawDescGZIP(), []int{210}
 }
 
 func (x *ListWorkspacesRequest) GetPageSize() int32 {
@@ -13980,7 +16022,7 @@ type ListWorkspacesResponse struct {
 
 func (x *ListWorkspacesResponse) Reset() {
 	*x = ListWorkspacesResponse{}
-	mi := &file_openshell_proto_msgTypes[196]
+	mi := &file_openshell_proto_msgTypes[211]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13992,7 +16034,7 @@ func (x *ListWorkspacesResponse) String() string {
 func (*ListWorkspacesResponse) ProtoMessage() {}
 
 func (x *ListWorkspacesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[196]
+	mi := &file_openshell_proto_msgTypes[211]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14005,7 +16047,7 @@ func (x *ListWorkspacesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkspacesResponse.ProtoReflect.Descriptor instead.
 func (*ListWorkspacesResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{196}
+	return file_openshell_proto_rawDescGZIP(), []int{211}
 }
 
 func (x *ListWorkspacesResponse) GetWorkspaces() []*datamodelv1.Workspace {
@@ -14026,15 +16068,17 @@ func (x *ListWorkspacesResponse) GetNextPageToken() string {
 type DeleteWorkspaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Workspace name (canonical lookup key).
-	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	AllowMissing  bool   `protobuf:"varint,2,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
+	Name         string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	AllowMissing bool   `protobuf:"varint,2,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
+	// Optional nonzero UUID. Same ID and payload replay success for 24 hours.
+	RequestId     string `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteWorkspaceRequest) Reset() {
 	*x = DeleteWorkspaceRequest{}
-	mi := &file_openshell_proto_msgTypes[197]
+	mi := &file_openshell_proto_msgTypes[212]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14046,7 +16090,7 @@ func (x *DeleteWorkspaceRequest) String() string {
 func (*DeleteWorkspaceRequest) ProtoMessage() {}
 
 func (x *DeleteWorkspaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[197]
+	mi := &file_openshell_proto_msgTypes[212]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14059,7 +16103,7 @@ func (x *DeleteWorkspaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWorkspaceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteWorkspaceRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{197}
+	return file_openshell_proto_rawDescGZIP(), []int{212}
 }
 
 func (x *DeleteWorkspaceRequest) GetName() string {
@@ -14076,6 +16120,13 @@ func (x *DeleteWorkspaceRequest) GetAllowMissing() bool {
 	return false
 }
 
+func (x *DeleteWorkspaceRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Delete workspace response.
 type DeleteWorkspaceResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -14086,7 +16137,7 @@ type DeleteWorkspaceResponse struct {
 
 func (x *DeleteWorkspaceResponse) Reset() {
 	*x = DeleteWorkspaceResponse{}
-	mi := &file_openshell_proto_msgTypes[198]
+	mi := &file_openshell_proto_msgTypes[213]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14098,7 +16149,7 @@ func (x *DeleteWorkspaceResponse) String() string {
 func (*DeleteWorkspaceResponse) ProtoMessage() {}
 
 func (x *DeleteWorkspaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[198]
+	mi := &file_openshell_proto_msgTypes[213]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14111,7 +16162,7 @@ func (x *DeleteWorkspaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWorkspaceResponse.ProtoReflect.Descriptor instead.
 func (*DeleteWorkspaceResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{198}
+	return file_openshell_proto_rawDescGZIP(), []int{213}
 }
 
 func (x *DeleteWorkspaceResponse) GetOutcome() DeletionOutcome {
@@ -14135,7 +16186,7 @@ type WorkspaceMember struct {
 
 func (x *WorkspaceMember) Reset() {
 	*x = WorkspaceMember{}
-	mi := &file_openshell_proto_msgTypes[199]
+	mi := &file_openshell_proto_msgTypes[214]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14147,7 +16198,7 @@ func (x *WorkspaceMember) String() string {
 func (*WorkspaceMember) ProtoMessage() {}
 
 func (x *WorkspaceMember) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[199]
+	mi := &file_openshell_proto_msgTypes[214]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14160,7 +16211,7 @@ func (x *WorkspaceMember) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceMember.ProtoReflect.Descriptor instead.
 func (*WorkspaceMember) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{199}
+	return file_openshell_proto_rawDescGZIP(), []int{214}
 }
 
 func (x *WorkspaceMember) GetMetadata() *datamodelv1.ObjectMeta {
@@ -14192,14 +16243,16 @@ type AddWorkspaceMemberRequest struct {
 	// OIDC subject claim identifying the principal.
 	PrincipalSubject string `protobuf:"bytes,2,opt,name=principal_subject,json=principalSubject,proto3" json:"principal_subject,omitempty"`
 	// Role to assign.
-	Role          WorkspaceRole `protobuf:"varint,3,opt,name=role,proto3,enum=openshell.v1.WorkspaceRole" json:"role,omitempty"`
+	Role WorkspaceRole `protobuf:"varint,3,opt,name=role,proto3,enum=openshell.v1.WorkspaceRole" json:"role,omitempty"`
+	// Optional nonzero UUID. Same ID and payload replay success for 24 hours.
+	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AddWorkspaceMemberRequest) Reset() {
 	*x = AddWorkspaceMemberRequest{}
-	mi := &file_openshell_proto_msgTypes[200]
+	mi := &file_openshell_proto_msgTypes[215]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14211,7 +16264,7 @@ func (x *AddWorkspaceMemberRequest) String() string {
 func (*AddWorkspaceMemberRequest) ProtoMessage() {}
 
 func (x *AddWorkspaceMemberRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[200]
+	mi := &file_openshell_proto_msgTypes[215]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14224,7 +16277,7 @@ func (x *AddWorkspaceMemberRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddWorkspaceMemberRequest.ProtoReflect.Descriptor instead.
 func (*AddWorkspaceMemberRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{200}
+	return file_openshell_proto_rawDescGZIP(), []int{215}
 }
 
 func (x *AddWorkspaceMemberRequest) GetWorkspace() string {
@@ -14248,6 +16301,13 @@ func (x *AddWorkspaceMemberRequest) GetRole() WorkspaceRole {
 	return WorkspaceRole_WORKSPACE_ROLE_UNSPECIFIED
 }
 
+func (x *AddWorkspaceMemberRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Add workspace member response.
 type AddWorkspaceMemberResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -14258,7 +16318,7 @@ type AddWorkspaceMemberResponse struct {
 
 func (x *AddWorkspaceMemberResponse) Reset() {
 	*x = AddWorkspaceMemberResponse{}
-	mi := &file_openshell_proto_msgTypes[201]
+	mi := &file_openshell_proto_msgTypes[216]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14270,7 +16330,7 @@ func (x *AddWorkspaceMemberResponse) String() string {
 func (*AddWorkspaceMemberResponse) ProtoMessage() {}
 
 func (x *AddWorkspaceMemberResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[201]
+	mi := &file_openshell_proto_msgTypes[216]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14283,7 +16343,7 @@ func (x *AddWorkspaceMemberResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddWorkspaceMemberResponse.ProtoReflect.Descriptor instead.
 func (*AddWorkspaceMemberResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{201}
+	return file_openshell_proto_rawDescGZIP(), []int{216}
 }
 
 func (x *AddWorkspaceMemberResponse) GetMember() *WorkspaceMember {
@@ -14301,13 +16361,15 @@ type RemoveWorkspaceMemberRequest struct {
 	// OIDC subject claim identifying the principal to remove.
 	PrincipalSubject string `protobuf:"bytes,2,opt,name=principal_subject,json=principalSubject,proto3" json:"principal_subject,omitempty"`
 	AllowMissing     bool   `protobuf:"varint,3,opt,name=allow_missing,json=allowMissing,proto3" json:"allow_missing,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Optional nonzero UUID. Same ID and payload replay success for 24 hours.
+	RequestId     string `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RemoveWorkspaceMemberRequest) Reset() {
 	*x = RemoveWorkspaceMemberRequest{}
-	mi := &file_openshell_proto_msgTypes[202]
+	mi := &file_openshell_proto_msgTypes[217]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14319,7 +16381,7 @@ func (x *RemoveWorkspaceMemberRequest) String() string {
 func (*RemoveWorkspaceMemberRequest) ProtoMessage() {}
 
 func (x *RemoveWorkspaceMemberRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[202]
+	mi := &file_openshell_proto_msgTypes[217]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14332,7 +16394,7 @@ func (x *RemoveWorkspaceMemberRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveWorkspaceMemberRequest.ProtoReflect.Descriptor instead.
 func (*RemoveWorkspaceMemberRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{202}
+	return file_openshell_proto_rawDescGZIP(), []int{217}
 }
 
 func (x *RemoveWorkspaceMemberRequest) GetWorkspace() string {
@@ -14356,6 +16418,13 @@ func (x *RemoveWorkspaceMemberRequest) GetAllowMissing() bool {
 	return false
 }
 
+func (x *RemoveWorkspaceMemberRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 // Remove workspace member response.
 type RemoveWorkspaceMemberResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -14366,7 +16435,7 @@ type RemoveWorkspaceMemberResponse struct {
 
 func (x *RemoveWorkspaceMemberResponse) Reset() {
 	*x = RemoveWorkspaceMemberResponse{}
-	mi := &file_openshell_proto_msgTypes[203]
+	mi := &file_openshell_proto_msgTypes[218]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14378,7 +16447,7 @@ func (x *RemoveWorkspaceMemberResponse) String() string {
 func (*RemoveWorkspaceMemberResponse) ProtoMessage() {}
 
 func (x *RemoveWorkspaceMemberResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[203]
+	mi := &file_openshell_proto_msgTypes[218]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14391,7 +16460,7 @@ func (x *RemoveWorkspaceMemberResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveWorkspaceMemberResponse.ProtoReflect.Descriptor instead.
 func (*RemoveWorkspaceMemberResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{203}
+	return file_openshell_proto_rawDescGZIP(), []int{218}
 }
 
 func (x *RemoveWorkspaceMemberResponse) GetOutcome() DeletionOutcome {
@@ -14418,7 +16487,7 @@ type ListWorkspaceMembersRequest struct {
 
 func (x *ListWorkspaceMembersRequest) Reset() {
 	*x = ListWorkspaceMembersRequest{}
-	mi := &file_openshell_proto_msgTypes[204]
+	mi := &file_openshell_proto_msgTypes[219]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14430,7 +16499,7 @@ func (x *ListWorkspaceMembersRequest) String() string {
 func (*ListWorkspaceMembersRequest) ProtoMessage() {}
 
 func (x *ListWorkspaceMembersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[204]
+	mi := &file_openshell_proto_msgTypes[219]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14443,7 +16512,7 @@ func (x *ListWorkspaceMembersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkspaceMembersRequest.ProtoReflect.Descriptor instead.
 func (*ListWorkspaceMembersRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{204}
+	return file_openshell_proto_rawDescGZIP(), []int{219}
 }
 
 func (x *ListWorkspaceMembersRequest) GetWorkspace() string {
@@ -14479,7 +16548,7 @@ type ListWorkspaceMembersResponse struct {
 
 func (x *ListWorkspaceMembersResponse) Reset() {
 	*x = ListWorkspaceMembersResponse{}
-	mi := &file_openshell_proto_msgTypes[205]
+	mi := &file_openshell_proto_msgTypes[220]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14491,7 +16560,7 @@ func (x *ListWorkspaceMembersResponse) String() string {
 func (*ListWorkspaceMembersResponse) ProtoMessage() {}
 
 func (x *ListWorkspaceMembersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[205]
+	mi := &file_openshell_proto_msgTypes[220]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14504,7 +16573,7 @@ func (x *ListWorkspaceMembersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkspaceMembersResponse.ProtoReflect.Descriptor instead.
 func (*ListWorkspaceMembersResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{205}
+	return file_openshell_proto_rawDescGZIP(), []int{220}
 }
 
 func (x *ListWorkspaceMembersResponse) GetMembers() []*WorkspaceMember {
@@ -14539,7 +16608,7 @@ type ExtensionServiceCredential struct {
 
 func (x *ExtensionServiceCredential) Reset() {
 	*x = ExtensionServiceCredential{}
-	mi := &file_openshell_proto_msgTypes[206]
+	mi := &file_openshell_proto_msgTypes[221]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14551,7 +16620,7 @@ func (x *ExtensionServiceCredential) String() string {
 func (*ExtensionServiceCredential) ProtoMessage() {}
 
 func (x *ExtensionServiceCredential) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[206]
+	mi := &file_openshell_proto_msgTypes[221]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14564,7 +16633,7 @@ func (x *ExtensionServiceCredential) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtensionServiceCredential.ProtoReflect.Descriptor instead.
 func (*ExtensionServiceCredential) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{206}
+	return file_openshell_proto_rawDescGZIP(), []int{221}
 }
 
 func (x *ExtensionServiceCredential) GetServiceName() string {
@@ -14601,7 +16670,7 @@ type EndpointObservation struct {
 
 func (x *EndpointObservation) Reset() {
 	*x = EndpointObservation{}
-	mi := &file_openshell_proto_msgTypes[207]
+	mi := &file_openshell_proto_msgTypes[222]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14613,7 +16682,7 @@ func (x *EndpointObservation) String() string {
 func (*EndpointObservation) ProtoMessage() {}
 
 func (x *EndpointObservation) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[207]
+	mi := &file_openshell_proto_msgTypes[222]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14626,7 +16695,7 @@ func (x *EndpointObservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndpointObservation.ProtoReflect.Descriptor instead.
 func (*EndpointObservation) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{207}
+	return file_openshell_proto_rawDescGZIP(), []int{222}
 }
 
 func (x *EndpointObservation) GetEndpointId() string {
@@ -14669,7 +16738,7 @@ type ReportEndpointStatusRequest struct {
 
 func (x *ReportEndpointStatusRequest) Reset() {
 	*x = ReportEndpointStatusRequest{}
-	mi := &file_openshell_proto_msgTypes[208]
+	mi := &file_openshell_proto_msgTypes[223]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14681,7 +16750,7 @@ func (x *ReportEndpointStatusRequest) String() string {
 func (*ReportEndpointStatusRequest) ProtoMessage() {}
 
 func (x *ReportEndpointStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[208]
+	mi := &file_openshell_proto_msgTypes[223]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14694,7 +16763,7 @@ func (x *ReportEndpointStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportEndpointStatusRequest.ProtoReflect.Descriptor instead.
 func (*ReportEndpointStatusRequest) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{208}
+	return file_openshell_proto_rawDescGZIP(), []int{223}
 }
 
 func (x *ReportEndpointStatusRequest) GetSandboxId() string {
@@ -14755,7 +16824,7 @@ type ReportEndpointStatusResponse struct {
 
 func (x *ReportEndpointStatusResponse) Reset() {
 	*x = ReportEndpointStatusResponse{}
-	mi := &file_openshell_proto_msgTypes[209]
+	mi := &file_openshell_proto_msgTypes[224]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14767,7 +16836,7 @@ func (x *ReportEndpointStatusResponse) String() string {
 func (*ReportEndpointStatusResponse) ProtoMessage() {}
 
 func (x *ReportEndpointStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[209]
+	mi := &file_openshell_proto_msgTypes[224]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14780,7 +16849,7 @@ func (x *ReportEndpointStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportEndpointStatusResponse.ProtoReflect.Descriptor instead.
 func (*ReportEndpointStatusResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{209}
+	return file_openshell_proto_rawDescGZIP(), []int{224}
 }
 
 // A configured endpoint and its last accepted network result in one record.
@@ -14809,7 +16878,7 @@ type EndpointStatus struct {
 
 func (x *EndpointStatus) Reset() {
 	*x = EndpointStatus{}
-	mi := &file_openshell_proto_msgTypes[210]
+	mi := &file_openshell_proto_msgTypes[225]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -14821,7 +16890,7 @@ func (x *EndpointStatus) String() string {
 func (*EndpointStatus) ProtoMessage() {}
 
 func (x *EndpointStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[210]
+	mi := &file_openshell_proto_msgTypes[225]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14834,7 +16903,7 @@ func (x *EndpointStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndpointStatus.ProtoReflect.Descriptor instead.
 func (*EndpointStatus) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{210}
+	return file_openshell_proto_rawDescGZIP(), []int{225}
 }
 
 func (x *EndpointStatus) GetEndpointId() string {
@@ -14875,6 +16944,136 @@ func (x *EndpointStatus) GetLastResult() EndpointResult {
 func (x *EndpointStatus) GetLastReportedTime() *timestamppb.Timestamp {
 	if x != nil {
 		return x.LastReportedTime
+	}
+	return nil
+}
+
+// Durable provisioning attempt, independent of supervisor registration and polling.
+type SandboxProvisioning struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	AttemptId               string                 `protobuf:"bytes,1,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	ConfigurationChangeId   string                 `protobuf:"bytes,2,opt,name=configuration_change_id,json=configurationChangeId,proto3" json:"configuration_change_id,omitempty"`
+	ConfigurationChangeTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=configuration_change_time,json=configurationChangeTime,proto3" json:"configuration_change_time,omitempty"`
+	FirstRejectionTime      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=first_rejection_time,json=firstRejectionTime,proto3" json:"first_rejection_time,omitempty"`
+	// Present only while the repair window is armed.
+	Deadline    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=deadline,proto3" json:"deadline,omitempty"`
+	TimeoutTime *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=timeout_time,json=timeoutTime,proto3" json:"timeout_time,omitempty"`
+	// Set only after both supervisor and workload compute have been reclaimed.
+	CleanupCompletedTime *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=cleanup_completed_time,json=cleanupCompletedTime,proto3" json:"cleanup_completed_time,omitempty"`
+	// A safe gateway-authored diagnostic; never a raw driver error.
+	CleanupError string `protobuf:"bytes,8,opt,name=cleanup_error,json=cleanupError,proto3" json:"cleanup_error,omitempty"`
+	// Durable backoff for interrupted or failed reclamation.
+	CleanupRetryTime *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=cleanup_retry_time,json=cleanupRetryTime,proto3" json:"cleanup_retry_time,omitempty"`
+	// Attachment edits have their own durable clock; status writes do not change it.
+	AttachmentChangeId   string                 `protobuf:"bytes,10,opt,name=attachment_change_id,json=attachmentChangeId,proto3" json:"attachment_change_id,omitempty"`
+	AttachmentChangeTime *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=attachment_change_time,json=attachmentChangeTime,proto3" json:"attachment_change_time,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *SandboxProvisioning) Reset() {
+	*x = SandboxProvisioning{}
+	mi := &file_openshell_proto_msgTypes[226]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SandboxProvisioning) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SandboxProvisioning) ProtoMessage() {}
+
+func (x *SandboxProvisioning) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[226]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SandboxProvisioning.ProtoReflect.Descriptor instead.
+func (*SandboxProvisioning) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{226}
+}
+
+func (x *SandboxProvisioning) GetAttemptId() string {
+	if x != nil {
+		return x.AttemptId
+	}
+	return ""
+}
+
+func (x *SandboxProvisioning) GetConfigurationChangeId() string {
+	if x != nil {
+		return x.ConfigurationChangeId
+	}
+	return ""
+}
+
+func (x *SandboxProvisioning) GetConfigurationChangeTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ConfigurationChangeTime
+	}
+	return nil
+}
+
+func (x *SandboxProvisioning) GetFirstRejectionTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FirstRejectionTime
+	}
+	return nil
+}
+
+func (x *SandboxProvisioning) GetDeadline() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Deadline
+	}
+	return nil
+}
+
+func (x *SandboxProvisioning) GetTimeoutTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.TimeoutTime
+	}
+	return nil
+}
+
+func (x *SandboxProvisioning) GetCleanupCompletedTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CleanupCompletedTime
+	}
+	return nil
+}
+
+func (x *SandboxProvisioning) GetCleanupError() string {
+	if x != nil {
+		return x.CleanupError
+	}
+	return ""
+}
+
+func (x *SandboxProvisioning) GetCleanupRetryTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CleanupRetryTime
+	}
+	return nil
+}
+
+func (x *SandboxProvisioning) GetAttachmentChangeId() string {
+	if x != nil {
+		return x.AttachmentChangeId
+	}
+	return ""
+}
+
+func (x *SandboxProvisioning) GetAttachmentChangeTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.AttachmentChangeTime
 	}
 	return nil
 }
@@ -14938,7 +17137,7 @@ const file_openshell_proto_rawDesc = "" +
 	"\bmetadata\x18\x01 \x01(\v2\".openshell.datamodel.v1.ObjectMetaR\bmetadata\x12-\n" +
 	"\x04spec\x18\x02 \x01(\v2\x19.openshell.v1.SandboxSpecR\x04spec\x123\n" +
 	"\x06status\x18\x03 \x01(\v2\x1b.openshell.v1.SandboxStatusR\x06status\x12t\n" +
-	"\x1ecreated_from_workload_template\x18\x14 \x01(\v2/.openshell.v1.SandboxWorkloadTemplateProvenanceR\x1bcreatedFromWorkloadTemplateJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x05phaseR\x16current_policy_version\"\x82\x04\n" +
+	"\x1ecreated_from_workload_template\x18\x14 \x01(\v2/.openshell.v1.SandboxWorkloadTemplateProvenanceR\x1bcreatedFromWorkloadTemplateJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x05phaseR\x16current_policy_version\"\xbe\x04\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\tlog_level\x18\x01 \x01(\tR\blogLevel\x12L\n" +
 	"\venvironment\x18\x05 \x03(\v2*.openshell.v1.SandboxSpec.EnvironmentEntryR\venvironment\x129\n" +
@@ -14947,7 +17146,8 @@ const file_openshell_proto_rawDesc = "" +
 	"\tproviders\x18\b \x03(\tR\tproviders\x12W\n" +
 	"\x15resource_requirements\x18\t \x01(\v2\".openshell.v1.ResourceRequirementsR\x14resourceRequirements\x12\x18\n" +
 	"\acommand\x18\f \x03(\tR\acommand\x12\x10\n" +
-	"\x03tty\x18\r \x01(\bR\x03tty\x1a>\n" +
+	"\x03tty\x18\r \x01(\bR\x03tty\x12:\n" +
+	"\x19provider_attachment_epoch\x18\x0e \x01(\tR\x17providerAttachmentEpoch\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\n" +
@@ -15005,7 +17205,7 @@ const file_openshell_proto_rawDesc = "" +
 	"\tmax_burst\x18\x02 \x01(\rR\bmaxBurst\"b\n" +
 	"!SandboxWorkloadTemplateProvenance\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12)\n" +
-	"\x10resource_version\x18\x02 \x01(\tR\x0fresourceVersion\"\xe5\x03\n" +
+	"\x10resource_version\x18\x02 \x01(\tR\x0fresourceVersion\"\xec\x05\n" +
 	"\rSandboxStatus\x12!\n" +
 	"\fsandbox_name\x18\x01 \x01(\tR\vsandboxName\x12\x1b\n" +
 	"\tagent_pod\x18\x02 \x01(\tR\bagentPod\x12\x19\n" +
@@ -15020,9 +17220,13 @@ const file_openshell_proto_rawDesc = "" +
 	"\x18main_process_instance_id\x18\b \x01(\tR\x15mainProcessInstanceId\x12 \n" +
 	"\texit_code\x18\t \x01(\x05H\x00R\bexitCode\x88\x01\x01\x12I\n" +
 	"\x11endpoint_statuses\x18\n" +
-	" \x03(\v2\x1c.openshell.v1.EndpointStatusR\x10endpointStatusesB\f\n" +
+	" \x03(\v2\x1c.openshell.v1.EndpointStatusR\x10endpointStatuses\x12d\n" +
+	"\x17configuration_admission\x18\v \x01(\v2+.openshell.v1.SandboxConfigurationAdmissionR\x16configurationAdmission\x12<\n" +
+	"\x17configuration_activated\x18\f \x01(\bH\x01R\x16configurationActivated\x88\x01\x01\x12E\n" +
+	"\fprovisioning\x18\r \x01(\v2!.openshell.v1.SandboxProvisioningR\fprovisioningB\f\n" +
 	"\n" +
-	"_exit_code\"\xd1\x01\n" +
+	"_exit_codeB\x1a\n" +
+	"\x18_configuration_activated\"\xd1\x01\n" +
 	"\x10SandboxCondition\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +
@@ -15039,7 +17243,7 @@ const file_openshell_proto_rawDesc = "" +
 	"\bmetadata\x18\x06 \x03(\v2).openshell.v1.PlatformEvent.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x01\x10\x02R\ftimestamp_ms\"\xd1\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x01\x10\x02R\ftimestamp_ms\"\xf0\x04\n" +
 	"\x14CreateSandboxRequest\x12-\n" +
 	"\x04spec\x18\x01 \x01(\v2\x19.openshell.v1.SandboxSpecR\x04spec\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12F\n" +
@@ -15047,16 +17251,20 @@ const file_openshell_proto_rawDesc = "" +
 	"\vannotations\x18\x04 \x03(\v23.openshell.v1.CreateSandboxRequest.AnnotationsEntryR\vannotations\x12A\n" +
 	"\x1dawait_main_process_attachment\x18\x06 \x01(\bR\x1aawaitMainProcessAttachment\x124\n" +
 	"\x16workload_template_name\x18\a \x01(\tR\x14workloadTemplateName\x12R\n" +
-	"\x0fworkspace_scope\x18\b \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x1a9\n" +
+	"\x0fworkspace_scope\x18\b \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\t \x01(\tR\trequestId\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x05\x10\x06R\tworkspace\"\xc6\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x05\x10\x06R\tworkspace\"\xe5\x01\n" +
 	"\x1cCreateSandboxTemplateRequest\x12A\n" +
 	"\btemplate\x18\x01 \x01(\v2%.openshell.v1.SandboxWorkloadTemplateR\btemplate\x12R\n" +
-	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x02\x10\x03R\tworkspace\"\x94\x01\n" +
+	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestIdJ\x04\b\x02\x10\x03R\tworkspace\"\x94\x01\n" +
 	"\x19GetSandboxTemplateRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12R\n" +
 	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x02\x10\x03R\tworkspace\"\xfb\x01\n" +
@@ -15065,11 +17273,13 @@ const file_openshell_proto_rawDesc = "" +
 	"\n" +
 	"page_token\x18\x02 \x01(\tR\tpageToken\x12%\n" +
 	"\x0elabel_selector\x18\x05 \x01(\tR\rlabelSelector\x12R\n" +
-	"\x0fworkspace_scope\x18\x06 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\tworkspaceR\x0eall_workspaces\"\xbc\x01\n" +
+	"\x0fworkspace_scope\x18\x06 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\tworkspaceR\x0eall_workspaces\"\xdb\x01\n" +
 	"\x1cDeleteSandboxTemplateRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12R\n" +
 	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12#\n" +
-	"\rallow_missing\x18\x04 \x01(\bR\fallowMissingJ\x04\b\x02\x10\x03R\tworkspace\"\\\n" +
+	"\rallow_missing\x18\x04 \x01(\bR\fallowMissing\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestIdJ\x04\b\x02\x10\x03R\tworkspace\"\\\n" +
 	"\x17SandboxTemplateResponse\x12A\n" +
 	"\btemplate\x18\x01 \x01(\v2%.openshell.v1.SandboxWorkloadTemplateR\btemplate\"\x8b\x01\n" +
 	"\x1cListSandboxTemplatesResponse\x12C\n" +
@@ -15099,40 +17309,139 @@ const file_openshell_proto_rawDesc = "" +
 	"\x0fworkspace_scope\x18\x06 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\tworkspaceR\x0eall_workspaces\"\xa5\x01\n" +
 	"\x1bListSandboxProvidersRequest\x12!\n" +
 	"\fsandbox_name\x18\x01 \x01(\tR\vsandboxName\x12R\n" +
-	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x02\x10\x03R\tworkspace\"\x87\x02\n" +
+	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x02\x10\x03R\tworkspace\"\xa6\x02\n" +
 	"\x1cAttachSandboxProviderRequest\x12!\n" +
 	"\fsandbox_name\x18\x01 \x01(\tR\vsandboxName\x12#\n" +
 	"\rprovider_name\x18\x02 \x01(\tR\fproviderName\x12:\n" +
 	"\x19expected_resource_version\x18\x03 \x01(\x04R\x17expectedResourceVersion\x12R\n" +
-	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x04\x10\x05R\tworkspace\"\x87\x02\n" +
+	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x06 \x01(\tR\trequestIdJ\x04\b\x04\x10\x05R\tworkspace\"\xa6\x02\n" +
 	"\x1cDetachSandboxProviderRequest\x12!\n" +
 	"\fsandbox_name\x18\x01 \x01(\tR\vsandboxName\x12#\n" +
 	"\rprovider_name\x18\x02 \x01(\tR\fproviderName\x12:\n" +
 	"\x19expected_resource_version\x18\x03 \x01(\x04R\x17expectedResourceVersion\x12R\n" +
-	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x04\x10\x05R\tworkspace\"\xb4\x01\n" +
+	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x06 \x01(\tR\trequestIdJ\x04\b\x04\x10\x05R\tworkspace\"\xd3\x01\n" +
 	"\x14DeleteSandboxRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12R\n" +
 	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12#\n" +
-	"\rallow_missing\x18\x04 \x01(\bR\fallowMissingJ\x04\b\x02\x10\x03R\tworkspace\"\x8d\x01\n" +
+	"\rallow_missing\x18\x04 \x01(\bR\fallowMissing\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestIdJ\x04\b\x02\x10\x03R\tworkspace\"\xac\x01\n" +
 	"\x12StopSandboxRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12R\n" +
-	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x02\x10\x03R\tworkspace\"\x8e\x01\n" +
+	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestIdJ\x04\b\x02\x10\x03R\tworkspace\"\xad\x01\n" +
 	"\x13StartSandboxRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12R\n" +
-	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x02\x10\x03R\tworkspace\"B\n" +
+	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestIdJ\x04\b\x02\x10\x03R\tworkspace\"B\n" +
 	"\x0fSandboxResponse\x12/\n" +
 	"\asandbox\x18\x01 \x01(\v2\x15.openshell.v1.SandboxR\asandbox\"t\n" +
 	"\x15ListSandboxesResponse\x123\n" +
 	"\tsandboxes\x18\x01 \x03(\v2\x15.openshell.v1.SandboxR\tsandboxes\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"^\n" +
 	"\x1cListSandboxProvidersResponse\x12>\n" +
-	"\tproviders\x18\x01 \x03(\v2 .openshell.datamodel.v1.ProviderR\tproviders\"l\n" +
+	"\tproviders\x18\x01 \x03(\v2 .openshell.datamodel.v1.ProviderR\tproviders\"\xad\x01\n" +
 	"\x1dAttachSandboxProviderResponse\x12/\n" +
 	"\asandbox\x18\x01 \x01(\v2\x15.openshell.v1.SandboxR\asandbox\x12\x1a\n" +
-	"\battached\x18\x02 \x01(\bR\battached\"l\n" +
+	"\battached\x18\x02 \x01(\bR\battached\x12?\n" +
+	"\areceipt\x18\x03 \x01(\v2%.openshell.v1.ProviderMutationReceiptR\areceipt\"\xad\x01\n" +
 	"\x1dDetachSandboxProviderResponse\x12/\n" +
 	"\asandbox\x18\x01 \x01(\v2\x15.openshell.v1.SandboxR\asandbox\x12\x1a\n" +
-	"\bdetached\x18\x02 \x01(\bR\bdetached\"~\n" +
+	"\bdetached\x18\x02 \x01(\bR\bdetached\x12?\n" +
+	"\areceipt\x18\x03 \x01(\v2%.openshell.v1.ProviderMutationReceiptR\areceipt\"\xe1\x02\n" +
+	"\x17ProviderDesiredIdentity\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12!\n" +
+	"\fsandbox_name\x18\x02 \x01(\tR\vsandboxName\x12)\n" +
+	"\x10attachment_epoch\x18\x03 \x01(\tR\x0fattachmentEpoch\x12\x1f\n" +
+	"\vprovider_id\x18\x04 \x01(\tR\n" +
+	"providerId\x12:\n" +
+	"\x19provider_resource_version\x18\x05 \x01(\x04R\x17providerResourceVersion\x122\n" +
+	"\x15provider_env_revision\x18\x06 \x01(\x04R\x13providerEnvRevision\x12'\n" +
+	"\x0fconfig_revision\x18\a \x01(\x04R\x0econfigRevision\x12\x1f\n" +
+	"\vpolicy_hash\x18\b \x01(\tR\n" +
+	"policyHash\"\xfa\x01\n" +
+	"\x16ConfigSnapshotRevision\x12L\n" +
+	"\x0esandbox_config\x18\x01 \x01(\v2#.openshell.v1.SandboxConfigRevisionH\x00R\rsandboxConfig\x123\n" +
+	"\x14provider_environment\x18\x02 \x01(\x04H\x00R\x13providerEnvironment\x12P\n" +
+	"\x0fprovider_target\x18\x03 \x01(\v2%.openshell.v1.ProviderDesiredIdentityH\x00R\x0eproviderTargetB\v\n" +
+	"\tcomponent\"\x91\x02\n" +
+	"\x15SandboxConfigRevision\x12'\n" +
+	"\x0fconfig_revision\x18\x01 \x01(\x04R\x0econfigRevision\x12%\n" +
+	"\x0epolicy_version\x18\x02 \x01(\rR\rpolicyVersion\x12G\n" +
+	"\rpolicy_source\x18\x03 \x01(\x0e2\".openshell.sandbox.v1.PolicySourceR\fpolicySource\x122\n" +
+	"\x15global_policy_version\x18\x04 \x01(\rR\x13globalPolicyVersion\x12+\n" +
+	"\x11settings_revision\x18\x05 \x01(\x04R\x10settingsRevision\"\x8c\x05\n" +
+	"\x15ConfigUpdateOperation\x12!\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x02 \x01(\tR\tsandboxId\x12;\n" +
+	"\tcomponent\x18\x03 \x01(\x0e2\x1d.openshell.v1.ConfigComponentR\tcomponent\x12M\n" +
+	"\x0ftarget_revision\x18\x04 \x01(\v2$.openshell.v1.ConfigSnapshotRevisionR\x0etargetRevision\x12>\n" +
+	"\x05state\x18\x05 \x01(\x0e2(.openshell.v1.ConfigUpdateOperationStateR\x05state\x12:\n" +
+	"\aoutcome\x18\x06 \x01(\x0e2 .openshell.v1.ConfigApplyOutcomeR\aoutcome\x12'\n" +
+	"\x0fsanitized_error\x18\a \x01(\tR\x0esanitizedError\x12=\n" +
+	"\fcreated_time\x18l \x01(\v2\x1a.google.protobuf.TimestampR\vcreatedTime\x12=\n" +
+	"\fupdated_time\x18m \x01(\v2\x1a.google.protobuf.TimestampR\vupdatedTime\x12A\n" +
+	"\x0ecompleted_time\x18n \x01(\v2\x1a.google.protobuf.TimestampR\rcompletedTimeJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"J\x04\b\n" +
+	"\x10\vR\rcreated_at_msR\rupdated_at_msR\x0fcompleted_at_ms\"\xef\x02\n" +
+	"\x17ProviderMutationReceipt\x12\x1d\n" +
+	"\n" +
+	"receipt_id\x18\x01 \x01(\tR\treceiptId\x12\x1f\n" +
+	"\vmutation_id\x18\x02 \x01(\tR\n" +
+	"mutationId\x12#\n" +
+	"\rprovider_name\x18\x03 \x01(\tR\fproviderName\x12\x1c\n" +
+	"\tworkspace\x18\x04 \x01(\tR\tworkspace\x126\n" +
+	"\x04kind\x18\x05 \x01(\x0e2\".openshell.v1.ProviderMutationKindR\x04kind\x12?\n" +
+	"\adesired\x18\x06 \x01(\v2%.openshell.v1.ProviderDesiredIdentityR\adesired\x12A\n" +
+	"\x0epersisted_time\x18k \x01(\v2\x1a.google.protobuf.TimestampR\rpersistedTimeJ\x04\b\a\x10\bR\x0fpersisted_at_ms\"\x8d\x04\n" +
+	"\x1cProviderReadinessObservation\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1a\n" +
+	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12)\n" +
+	"\x10attachment_epoch\x18\x03 \x01(\tR\x0fattachmentEpoch\x122\n" +
+	"\x15provider_env_revision\x18\x04 \x01(\x04R\x13providerEnvRevision\x12'\n" +
+	"\x0fconfig_revision\x18\x05 \x01(\x04R\x0econfigRevision\x12\x1f\n" +
+	"\vpolicy_hash\x18\x06 \x01(\tR\n" +
+	"policyHash\x123\n" +
+	"\x15credentials_installed\x18\a \x01(\bR\x14credentialsInstalled\x12#\n" +
+	"\rpolicy_active\x18\b \x01(\bR\fpolicyActive\x12@\n" +
+	"\x1claunch_environment_installed\x18\t \x01(\bR\x1alaunchEnvironmentInstalled\x12.\n" +
+	"\x13process_instance_id\x18\n" +
+	" \x01(\tR\x11processInstanceId\x12=\n" +
+	"\x06reason\x18\v \x01(\x0e2%.openshell.v1.ProviderReadinessReasonR\x06reason\"\xc1\x04\n" +
+	"\x17ProviderReadinessStatus\x12?\n" +
+	"\areceipt\x18\x01 \x01(\v2%.openshell.v1.ProviderMutationReceiptR\areceipt\x12:\n" +
+	"\x05state\x18\x02 \x01(\x0e2$.openshell.v1.ProviderReadinessStateR\x05state\x12=\n" +
+	"\x06reason\x18\x03 \x01(\x0e2%.openshell.v1.ProviderReadinessReasonR\x06reason\x12F\n" +
+	"\bobserved\x18\x04 \x01(\v2*.openshell.v1.ProviderReadinessObservationR\bobserved\x12.\n" +
+	"\x13network_instance_id\x18\x05 \x01(\tR\x11networkInstanceId\x12?\n" +
+	"\robserved_time\x18j \x01(\v2\x1a.google.protobuf.TimestampR\fobservedTime\x12A\n" +
+	"\x0eevaluated_time\x18k \x01(\v2\x1a.google.protobuf.TimestampR\revaluatedTime\x12A\n" +
+	"\toperation\x18\b \x01(\v2#.openshell.v1.ConfigUpdateOperationR\toperationJ\x04\b\x06\x10\aJ\x04\b\a\x10\bR\x0eobserved_at_msR\x0fevaluated_at_ms\"\xdc\x01\n" +
+	"\x1fGetSandboxProviderStatusRequest\x12!\n" +
+	"\fsandbox_name\x18\x01 \x01(\tR\vsandboxName\x12#\n" +
+	"\rprovider_name\x18\x02 \x01(\tR\fproviderName\x12\x1d\n" +
+	"\n" +
+	"receipt_id\x18\x03 \x01(\tR\treceiptId\x12R\n" +
+	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\"a\n" +
+	" GetSandboxProviderStatusResponse\x12=\n" +
+	"\x06status\x18\x01 \x01(\v2%.openshell.v1.ProviderReadinessStatusR\x06status\"\x8d\x01\n" +
+	"\x1eReportProviderReadinessRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12L\n" +
+	"\vobservation\x18\x02 \x01(\v2*.openshell.v1.ProviderReadinessObservationR\vobservation\"\x94\x02\n" +
+	"\x1fReportProviderReadinessResponse\x12+\n" +
+	"\x11accepted_sequence\x18\x01 \x01(\x04R\x10acceptedSequence\x12B\n" +
+	"\x0freport_interval\x18f \x01(\v2\x19.google.protobuf.DurationR\x0ereportInterval\x12B\n" +
+	"\x0fobservation_ttl\x18g \x01(\v2\x19.google.protobuf.DurationR\x0eobservationTtlJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x17report_interval_secondsR\x17observation_ttl_seconds\"~\n" +
 	"\x15DeleteSandboxResponse\x127\n" +
 	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcome\x12\x1d\n" +
 	"\n" +
@@ -15148,14 +17457,16 @@ const file_openshell_proto_rawDesc = "" +
 	"\fgateway_port\x18\x04 \x01(\rR\vgatewayPort\x12%\n" +
 	"\x0egateway_scheme\x18\x05 \x01(\tR\rgatewayScheme\x120\n" +
 	"\x14host_key_fingerprint\x18\a \x01(\tR\x12hostKeyFingerprint\x12C\n" +
-	"\x0fexpiration_time\x18l \x01(\v2\x1a.google.protobuf.TimestampR\x0eexpirationTimeJ\x04\b\b\x10\tR\rexpires_at_ms\"\xe8\x01\n" +
+	"\x0fexpiration_time\x18l \x01(\v2\x1a.google.protobuf.TimestampR\x0eexpirationTimeJ\x04\b\b\x10\tR\rexpires_at_ms\"\x87\x02\n" +
 	"\x14ExposeServiceRequest\x12\x18\n" +
 	"\asandbox\x18\x01 \x01(\tR\asandbox\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x1f\n" +
 	"\vtarget_port\x18\x03 \x01(\rR\n" +
 	"targetPort\x12\x16\n" +
 	"\x06domain\x18\x04 \x01(\bR\x06domain\x12R\n" +
-	"\x0fworkspace_scope\x18\x06 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x05\x10\x06R\tworkspace\"\xac\x01\n" +
+	"\x0fworkspace_scope\x18\x06 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\a \x01(\tR\trequestIdJ\x04\b\x05\x10\x06R\tworkspace\"\xac\x01\n" +
 	"\x11GetServiceRequest\x12\x18\n" +
 	"\asandbox\x18\x01 \x01(\tR\asandbox\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12R\n" +
@@ -15168,12 +17479,14 @@ const file_openshell_proto_rawDesc = "" +
 	"\x0fworkspace_scope\x18\x06 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\tworkspaceR\x0eall_workspaces\"\x81\x01\n" +
 	"\x14ListServicesResponse\x12A\n" +
 	"\bservices\x18\x01 \x03(\v2%.openshell.v1.ServiceEndpointResponseR\bservices\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xd4\x01\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xf3\x01\n" +
 	"\x14DeleteServiceRequest\x12\x18\n" +
 	"\asandbox\x18\x01 \x01(\tR\asandbox\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12R\n" +
 	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12#\n" +
-	"\rallow_missing\x18\x05 \x01(\bR\fallowMissingJ\x04\b\x03\x10\x04R\tworkspace\"_\n" +
+	"\rallow_missing\x18\x05 \x01(\bR\fallowMissing\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x06 \x01(\tR\trequestIdJ\x04\b\x03\x10\x04R\tworkspace\"_\n" +
 	"\x15DeleteServiceResponse\x127\n" +
 	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\adeleted\"\xef\x01\n" +
 	"\x0fServiceEndpoint\x12>\n" +
@@ -15286,10 +17599,12 @@ const file_openshell_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x02\x10\x03R\ftimestamp_ms\"0\n" +
 	"\x14SandboxStreamWarning\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage\"\xba\x01\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage\"\xd9\x01\n" +
 	"\x15CreateProviderRequest\x12<\n" +
 	"\bprovider\x18\x01 \x01(\v2 .openshell.datamodel.v1.ProviderR\bprovider\x12R\n" +
-	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x02\x10\x03R\tworkspace\"\x8d\x01\n" +
+	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestIdJ\x04\b\x02\x10\x03R\tworkspace\"\x8d\x01\n" +
 	"\x12GetProviderRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12R\n" +
 	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x02\x10\x03R\tworkspace\"\xcd\x01\n" +
@@ -15297,21 +17612,28 @@ const file_openshell_proto_rawDesc = "" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
 	"page_token\x18\x02 \x01(\tR\tpageToken\x12R\n" +
-	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\tworkspaceR\x0eall_workspaces\"\x92\x04\n" +
+	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\tworkspaceR\x0eall_workspaces\"\xb1\x04\n" +
 	"\x15UpdateProviderRequest\x12<\n" +
 	"\bprovider\x18\x01 \x01(\v2 .openshell.datamodel.v1.ProviderR\bprovider\x12\x82\x01\n" +
 	"\x1bcredential_expiration_times\x18f \x03(\v2B.openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntryR\x19credentialExpirationTimes\x12G\n" +
 	" clear_credential_expiration_keys\x18g \x03(\tR\x1dclearCredentialExpirationKeys\x12R\n" +
-	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x1ah\n" +
+	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestId\x1ah\n" +
 	"\x1eCredentialExpirationTimesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x120\n" +
-	"\x05value\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x05value:\x028\x01J\x04\b\x03\x10\x04J\x04\b\x02\x10\x03R\tworkspaceR\x18credential_expires_at_ms\"\xb5\x01\n" +
+	"\x05value\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x05value:\x028\x01J\x04\b\x03\x10\x04J\x04\b\x02\x10\x03R\tworkspaceR\x18credential_expires_at_ms\"\xd4\x01\n" +
 	"\x15DeleteProviderRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12R\n" +
 	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12#\n" +
-	"\rallow_missing\x18\x04 \x01(\bR\fallowMissingJ\x04\b\x02\x10\x03R\tworkspace\"P\n" +
+	"\rallow_missing\x18\x04 \x01(\bR\fallowMissing\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestIdJ\x04\b\x02\x10\x03R\tworkspace\"\xc1\x01\n" +
 	"\x10ProviderResponse\x12<\n" +
-	"\bprovider\x18\x01 \x01(\v2 .openshell.datamodel.v1.ProviderR\bprovider\"\x7f\n" +
+	"\bprovider\x18\x01 \x01(\v2 .openshell.datamodel.v1.ProviderR\bprovider\x12N\n" +
+	"\x0ftarget_receipts\x18\x02 \x03(\v2%.openshell.v1.ProviderMutationReceiptR\x0etargetReceipts\x12\x1f\n" +
+	"\vmutation_id\x18\x03 \x01(\tR\n" +
+	"mutationId\"\x7f\n" +
 	"\x15ListProvidersResponse\x12>\n" +
 	"\tproviders\x18\x01 \x03(\v2 .openshell.datamodel.v1.ProviderR\tproviders\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"w\n" +
@@ -15416,7 +17738,7 @@ const file_openshell_proto_rawDesc = "" +
 	"\x0ecredential_key\x18\x02 \x01(\tR\rcredentialKey\x12R\n" +
 	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x03\x10\x04R\tworkspace\"s\n" +
 	" GetProviderRefreshStatusResponse\x12O\n" +
-	"\vcredentials\x18\x01 \x03(\v2-.openshell.v1.ProviderCredentialRefreshStatusR\vcredentials\"\xbe\x04\n" +
+	"\vcredentials\x18\x01 \x03(\v2-.openshell.v1.ProviderCredentialRefreshStatusR\vcredentials\"\xdd\x04\n" +
 	"\x1fConfigureProviderRefreshRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12%\n" +
 	"\x0ecredential_key\x18\x02 \x01(\tR\rcredentialKey\x12K\n" +
@@ -15424,23 +17746,29 @@ const file_openshell_proto_rawDesc = "" +
 	"\bmaterial\x18\x04 \x03(\v2;.openshell.v1.ConfigureProviderRefreshRequest.MaterialEntryB\x04\x88\xb5\x18\x01R\bmaterial\x120\n" +
 	"\x14secret_material_keys\x18\x05 \x03(\tR\x12secretMaterialKeys\x12C\n" +
 	"\x0fexpiration_time\x18j \x01(\v2\x1a.google.protobuf.TimestampR\x0eexpirationTime\x12R\n" +
-	"\x0fworkspace_scope\x18\b \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x1a;\n" +
+	"\x0fworkspace_scope\x18\b \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\t \x01(\tR\trequestId\x1a;\n" +
 	"\rMaterialEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\a\x10\bJ\x04\b\x06\x10\aR\tworkspaceR\rexpires_at_ms\"i\n" +
 	" ConfigureProviderRefreshResponse\x12E\n" +
-	"\x06status\x18\x01 \x01(\v2-.openshell.v1.ProviderCredentialRefreshStatusR\x06status\"\xc9\x01\n" +
+	"\x06status\x18\x01 \x01(\v2-.openshell.v1.ProviderCredentialRefreshStatusR\x06status\"\xe8\x01\n" +
 	"\x1fRotateProviderCredentialRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12%\n" +
 	"\x0ecredential_key\x18\x02 \x01(\tR\rcredentialKey\x12R\n" +
-	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x03\x10\x04R\tworkspace\"i\n" +
+	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestIdJ\x04\b\x03\x10\x04R\tworkspace\"i\n" +
 	" RotateProviderCredentialResponse\x12E\n" +
-	"\x06status\x18\x01 \x01(\v2-.openshell.v1.ProviderCredentialRefreshStatusR\x06status\"\xeb\x01\n" +
+	"\x06status\x18\x01 \x01(\v2-.openshell.v1.ProviderCredentialRefreshStatusR\x06status\"\x8a\x02\n" +
 	"\x1cDeleteProviderRefreshRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12%\n" +
 	"\x0ecredential_key\x18\x02 \x01(\tR\rcredentialKey\x12R\n" +
 	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12#\n" +
-	"\rallow_missing\x18\x05 \x01(\bR\fallowMissingJ\x04\b\x03\x10\x04R\tworkspace\"g\n" +
+	"\rallow_missing\x18\x05 \x01(\bR\fallowMissing\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x06 \x01(\tR\trequestIdJ\x04\b\x03\x10\x04R\tworkspace\"g\n" +
 	"\x1dDeleteProviderRefreshResponse\x127\n" +
 	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\adeleted\"\xd6\x05\n" +
 	"\x0fProviderProfile\x12\x0e\n" +
@@ -15465,19 +17793,23 @@ const file_openshell_proto_rawDesc = "" +
 	"\aprofile\x18\x01 \x01(\v2\x1d.openshell.v1.ProviderProfileR\aprofile\"\x81\x01\n" +
 	"\x1cListProviderProfilesResponse\x129\n" +
 	"\bprofiles\x18\x01 \x03(\v2\x1d.openshell.v1.ProviderProfileR\bprofiles\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x82\x01\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xa1\x01\n" +
 	"\x1dImportProviderProfilesRequest\x12C\n" +
 	"\bprofiles\x18\x01 \x03(\v2'.openshell.v1.ProviderProfileImportItemR\bprofiles\x12\x1c\n" +
-	"\tworkspace\x18\x02 \x01(\tR\tworkspace\"\xc2\x01\n" +
+	"\tworkspace\x18\x02 \x01(\tR\tworkspace\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\"\xc2\x01\n" +
 	"\x1eImportProviderProfilesResponse\x12I\n" +
 	"\vdiagnostics\x18\x01 \x03(\v2'.openshell.v1.ProviderProfileDiagnosticR\vdiagnostics\x129\n" +
 	"\bprofiles\x18\x02 \x03(\v2\x1d.openshell.v1.ProviderProfileR\bprofiles\x12\x1a\n" +
-	"\bimported\x18\x03 \x01(\bR\bimported\"\xcc\x01\n" +
+	"\bimported\x18\x03 \x01(\bR\bimported\"\xeb\x01\n" +
 	"\x1dUpdateProviderProfilesRequest\x12A\n" +
 	"\aprofile\x18\x01 \x01(\v2'.openshell.v1.ProviderProfileImportItemR\aprofile\x12:\n" +
 	"\x19expected_resource_version\x18\x02 \x01(\x04R\x17expectedResourceVersion\x12\x0e\n" +
 	"\x02id\x18\x03 \x01(\tR\x02id\x12\x1c\n" +
-	"\tworkspace\x18\x04 \x01(\tR\tworkspace\"\xbe\x01\n" +
+	"\tworkspace\x18\x04 \x01(\tR\tworkspace\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestId\"\xbe\x01\n" +
 	"\x1eUpdateProviderProfilesResponse\x12I\n" +
 	"\vdiagnostics\x18\x01 \x03(\v2'.openshell.v1.ProviderProfileDiagnosticR\vdiagnostics\x127\n" +
 	"\aprofile\x18\x02 \x01(\v2\x1d.openshell.v1.ProviderProfileR\aprofile\x12\x18\n" +
@@ -15489,11 +17821,13 @@ const file_openshell_proto_rawDesc = "" +
 	"\vdiagnostics\x18\x01 \x03(\v2'.openshell.v1.ProviderProfileDiagnosticR\vdiagnostics\x12\x14\n" +
 	"\x05valid\x18\x02 \x01(\bR\x05valid\"`\n" +
 	"\x16DeleteProviderResponse\x127\n" +
-	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\adeleted\"q\n" +
+	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\adeleted\"\x90\x01\n" +
 	"\x1cDeleteProviderProfileRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1c\n" +
 	"\tworkspace\x18\x02 \x01(\tR\tworkspace\x12#\n" +
-	"\rallow_missing\x18\x03 \x01(\bR\fallowMissing\"g\n" +
+	"\rallow_missing\x18\x03 \x01(\bR\fallowMissing\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestId\"g\n" +
 	"\x1dDeleteProviderProfileResponse\x127\n" +
 	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\adeleted\"\x94\x01\n" +
 	"$GetSandboxProviderEnvironmentRequest\x12\x1d\n" +
@@ -15507,14 +17841,19 @@ const file_openshell_proto_rawDesc = "" +
 	"\x17StaticCredentialBinding\x12K\n" +
 	"\tendpoints\x18\x01 \x03(\v2-.openshell.v1.StaticCredentialEndpointBindingR\tendpoints\x12/\n" +
 	"\x13credential_identity\x18\x02 \x01(\tR\x12credentialIdentity\x12<\n" +
-	"\x1aworkload_credential_handle\x18\x03 \x01(\tR\x18workloadCredentialHandle\"\xdb\b\n" +
+	"\x1aworkload_credential_handle\x18\x03 \x01(\tR\x18workloadCredentialHandle\"\x8a\n" +
+	"\n" +
 	"%GetSandboxProviderEnvironmentResponse\x12l\n" +
 	"\venvironment\x18\x01 \x03(\v2D.openshell.v1.GetSandboxProviderEnvironmentResponse.EnvironmentEntryB\x04\x88\xb5\x18\x01R\venvironment\x122\n" +
 	"\x15provider_env_revision\x18\x02 \x01(\x04R\x13providerEnvRevision\x12\x92\x01\n" +
 	"\x1bcredential_expiration_times\x18g \x03(\v2R.openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntryR\x19credentialExpirationTimes\x12|\n" +
 	"\x13dynamic_credentials\x18\x04 \x03(\v2K.openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntryR\x12dynamicCredentials\x12\x8f\x01\n" +
 	"\x1astatic_credential_bindings\x18\x05 \x03(\v2Q.openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntryR\x18staticCredentialBindings\x12=\n" +
-	"\x1bnon_secret_environment_keys\x18\x06 \x03(\tR\x18nonSecretEnvironmentKeys\x1a>\n" +
+	"\x1bnon_secret_environment_keys\x18\x06 \x03(\tR\x18nonSecretEnvironmentKeys\x12:\n" +
+	"\x19provider_attachment_epoch\x18\a \x01(\tR\x17providerAttachmentEpoch\x12\x1f\n" +
+	"\vpolicy_hash\x18\b \x01(\tR\n" +
+	"policyHash\x12P\n" +
+	"\x10readiness_reason\x18\t \x01(\x0e2%.openshell.v1.ProviderReadinessReasonR\x0freadinessReason\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1ah\n" +
@@ -15538,7 +17877,7 @@ const file_openshell_proto_rawDesc = "" +
 	"\rexpires_after\x18f \x01(\v2\x19.google.protobuf.DurationR\fexpiresAfter\x12\x1d\n" +
 	"\n" +
 	"token_type\x18\x03 \x01(\tR\ttokenTypeJ\x04\b\x02\x10\x03R\n" +
-	"expires_in\"\x94\x05\n" +
+	"expires_in\"\xb3\x05\n" +
 	"\x13UpdateConfigRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12:\n" +
 	"\x06policy\x18\x02 \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x06policy\x12\x1f\n" +
@@ -15550,7 +17889,9 @@ const file_openshell_proto_rawDesc = "" +
 	"\x10merge_operations\x18\a \x03(\v2\".openshell.v1.PolicyMergeOperationR\x0fmergeOperations\x12:\n" +
 	"\x19expected_resource_version\x18\b \x01(\x04R\x17expectedResourceVersion\x12T\n" +
 	"\vannotations\x18\t \x03(\v22.openshell.v1.UpdateConfigRequest.AnnotationsEntryR\vannotations\x12R\n" +
-	"\x0fworkspace_scope\x18\v \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x1a>\n" +
+	"\x0fworkspace_scope\x18\v \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\f \x01(\tR\trequestId\x1a>\n" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\n" +
@@ -15572,16 +17913,23 @@ const file_openshell_proto_rawDesc = "" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x03 \x01(\rR\x04port\"0\n" +
 	"\x11RemoveNetworkRule\x12\x1b\n" +
-	"\trule_name\x18\x01 \x01(\tR\bruleName\"v\n" +
-	"\fAddDenyRules\x12\x12\n" +
-	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\x12>\n" +
+	"\trule_name\x18\x01 \x01(\tR\bruleName\"\xd6\x01\n" +
+	"\fL7RuleTarget\x12\x1b\n" +
+	"\trule_name\x18\x01 \x01(\tR\bruleName\x12\x12\n" +
+	"\x04host\x18\x02 \x01(\tR\x04host\x12\x14\n" +
+	"\x05ports\x18\x03 \x03(\rR\x05ports\x12\x17\n" +
+	"\x04path\x18\x04 \x01(\tH\x00R\x04path\x88\x01\x01\x12>\n" +
+	"\bbinaries\x18\x05 \x03(\v2\".openshell.policy.v1.NetworkBinaryR\bbinaries\x12\x1d\n" +
 	"\n" +
-	"deny_rules\x18\x03 \x03(\v2\x1f.openshell.policy.v1.L7DenyRuleR\tdenyRules\"j\n" +
-	"\rAddAllowRules\x12\x12\n" +
-	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\x121\n" +
-	"\x05rules\x18\x03 \x03(\v2\x1b.openshell.policy.v1.L7RuleR\x05rules\"S\n" +
+	"any_binary\x18\x06 \x01(\bR\tanyBinaryB\a\n" +
+	"\x05_path\"\x9a\x01\n" +
+	"\fAddDenyRules\x12>\n" +
+	"\n" +
+	"deny_rules\x18\x03 \x03(\v2\x1f.openshell.policy.v1.L7DenyRuleR\tdenyRules\x122\n" +
+	"\x06target\x18\x04 \x01(\v2\x1a.openshell.v1.L7RuleTargetR\x06targetJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\x04hostR\x04port\"\x8e\x01\n" +
+	"\rAddAllowRules\x121\n" +
+	"\x05rules\x18\x03 \x03(\v2\x1b.openshell.policy.v1.L7RuleR\x05rules\x122\n" +
+	"\x06target\x18\x04 \x01(\v2\x1a.openshell.v1.L7RuleTargetR\x06targetJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\x04hostR\x04port\"S\n" +
 	"\x13RemoveNetworkBinary\x12\x1b\n" +
 	"\trule_name\x18\x01 \x01(\tR\bruleName\x12\x1f\n" +
 	"\vbinary_path\x18\x02 \x01(\tR\n" +
@@ -15621,7 +17969,23 @@ const file_openshell_proto_rawDesc = "" +
 	"\x06status\x18\x03 \x01(\x0e2\x1a.openshell.v1.PolicyStatusR\x06status\x12\x1d\n" +
 	"\n" +
 	"load_error\x18\x04 \x01(\tR\tloadError\"\x1c\n" +
-	"\x1aReportPolicyStatusResponse\"\x9a\x04\n" +
+	"\x1aReportPolicyStatusResponse\"\xbc\x02\n" +
+	"\x1dSandboxConfigurationAdmission\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\tR\n" +
+	"instanceId\x12?\n" +
+	"\x05state\x18\x02 \x01(\x0e2).openshell.v1.ConfigurationAdmissionStateR\x05state\x12%\n" +
+	"\x0epolicy_version\x18\x03 \x01(\rR\rpolicyVersion\x12\x1f\n" +
+	"\vpolicy_hash\x18\x04 \x01(\tR\n" +
+	"policyHash\x12'\n" +
+	"\x0fconfig_revision\x18\x05 \x01(\x04R\x0econfigRevision\x122\n" +
+	"\x15provider_env_revision\x18\x06 \x01(\x04R\x13providerEnvRevision\x12\x14\n" +
+	"\x05error\x18\a \x01(\tR\x05error\"\xbf\x01\n" +
+	"!ReportSandboxConfigurationRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12I\n" +
+	"\tadmission\x18\x02 \x01(\v2+.openshell.v1.SandboxConfigurationAdmissionR\tadmission\x120\n" +
+	"\x14expected_instance_id\x18\x03 \x01(\tR\x12expectedInstanceId\"$\n" +
+	"\"ReportSandboxConfigurationResponse\"\x9a\x04\n" +
 	"\x15SandboxPolicyRevision\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12\x1f\n" +
 	"\vpolicy_hash\x18\x02 \x01(\tR\n" +
@@ -15671,12 +18035,13 @@ const file_openshell_proto_rawDesc = "" +
 	"relay_open\x18\x04 \x01(\v2\x17.openshell.v1.RelayOpenH\x00R\trelayOpen\x12;\n" +
 	"\vrelay_close\x18\x05 \x01(\v2\x18.openshell.v1.RelayCloseH\x00R\n" +
 	"relayCloseB\t\n" +
-	"\apayload\"Q\n" +
+	"\apayload\"\x91\x01\n" +
 	"\x0fSupervisorHello\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x1f\n" +
 	"\vinstance_id\x18\x02 \x01(\tR\n" +
-	"instanceId\"\x99\x01\n" +
+	"instanceId\x12>\n" +
+	"\x1bsupports_provider_readiness\x18\x04 \x01(\bR\x19supportsProviderReadiness\"\x99\x01\n" +
 	"\x0fSessionAccepted\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12H\n" +
@@ -15820,53 +18185,65 @@ const file_openshell_proto_rawDesc = "" +
 	"\x06chunks\x18\x01 \x03(\v2\x19.openshell.v1.PolicyChunkR\x06chunks\x12'\n" +
 	"\x0frolling_summary\x18\x02 \x01(\tR\x0erollingSummary\x12#\n" +
 	"\rdraft_version\x18\x03 \x01(\x04R\fdraftVersion\x12H\n" +
-	"\x12last_analyzed_time\x18h \x01(\v2\x1a.google.protobuf.TimestampR\x10lastAnalyzedTimeJ\x04\b\x04\x10\x05R\x13last_analyzed_at_ms\"\xd1\x01\n" +
+	"\x12last_analyzed_time\x18h \x01(\v2\x1a.google.protobuf.TimestampR\x10lastAnalyzedTimeJ\x04\b\x04\x10\x05R\x13last_analyzed_at_ms\"\xf0\x01\n" +
 	"\x18ApproveDraftChunkRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\bchunk_id\x18\x02 \x01(\tR\achunkId\x12!\n" +
 	"\freview_token\x18\x04 \x01(\tR\vreviewToken\x12R\n" +
-	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x03\x10\x04R\tworkspace\"c\n" +
+	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x06 \x01(\tR\trequestIdJ\x04\b\x03\x10\x04R\tworkspace\"c\n" +
 	"\x19ApproveDraftChunkResponse\x12%\n" +
 	"\x0epolicy_version\x18\x01 \x01(\rR\rpolicyVersion\x12\x1f\n" +
 	"\vpolicy_hash\x18\x02 \x01(\tR\n" +
-	"policyHash\"\xc5\x01\n" +
+	"policyHash\"\xe4\x01\n" +
 	"\x17RejectDraftChunkRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\bchunk_id\x18\x02 \x01(\tR\achunkId\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12R\n" +
-	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x04\x10\x05R\tworkspace\"\x1a\n" +
+	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x06 \x01(\tR\trequestIdJ\x04\b\x04\x10\x05R\tworkspace\"\x1a\n" +
 	"\x18RejectDraftChunkResponse\"R\n" +
 	"\x12DraftChunkApproval\x12\x19\n" +
 	"\bchunk_id\x18\x01 \x01(\tR\achunkId\x12!\n" +
-	"\freview_token\x18\x02 \x01(\tR\vreviewToken\"\x91\x02\n" +
+	"\freview_token\x18\x02 \x01(\tR\vreviewToken\"\xb0\x02\n" +
 	"\x1cApproveAllDraftChunksRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x128\n" +
 	"\x18include_security_flagged\x18\x02 \x01(\bR\x16includeSecurityFlagged\x12>\n" +
 	"\tapprovals\x18\x04 \x03(\v2 .openshell.v1.DraftChunkApprovalR\tapprovals\x12R\n" +
-	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x03\x10\x04R\tworkspace\"\xb7\x01\n" +
+	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x06 \x01(\tR\trequestIdJ\x04\b\x03\x10\x04R\tworkspace\"\xb7\x01\n" +
 	"\x1dApproveAllDraftChunksResponse\x12%\n" +
 	"\x0epolicy_version\x18\x01 \x01(\rR\rpolicyVersion\x12\x1f\n" +
 	"\vpolicy_hash\x18\x02 \x01(\tR\n" +
 	"policyHash\x12'\n" +
 	"\x0fchunks_approved\x18\x03 \x01(\rR\x0echunksApproved\x12%\n" +
-	"\x0echunks_skipped\x18\x04 \x01(\rR\rchunksSkipped\"\xf8\x01\n" +
+	"\x0echunks_skipped\x18\x04 \x01(\rR\rchunksSkipped\"\x97\x02\n" +
 	"\x15EditDraftChunkRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\bchunk_id\x18\x02 \x01(\tR\achunkId\x12K\n" +
 	"\rproposed_rule\x18\x03 \x01(\v2&.openshell.policy.v1.NetworkPolicyRuleR\fproposedRule\x12R\n" +
-	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x04\x10\x05R\tworkspace\"\x18\n" +
-	"\x16EditDraftChunkResponse\"\xab\x01\n" +
+	"\x0fworkspace_scope\x18\x05 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x06 \x01(\tR\trequestIdJ\x04\b\x04\x10\x05R\tworkspace\"\x18\n" +
+	"\x16EditDraftChunkResponse\"\xca\x01\n" +
 	"\x15UndoDraftChunkRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\bchunk_id\x18\x02 \x01(\tR\achunkId\x12R\n" +
-	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x03\x10\x04R\tworkspace\"`\n" +
+	"\x0fworkspace_scope\x18\x04 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestIdJ\x04\b\x03\x10\x04R\tworkspace\"`\n" +
 	"\x16UndoDraftChunkResponse\x12%\n" +
 	"\x0epolicy_version\x18\x01 \x01(\rR\rpolicyVersion\x12\x1f\n" +
 	"\vpolicy_hash\x18\x02 \x01(\tR\n" +
-	"policyHash\"\x92\x01\n" +
+	"policyHash\"\xb1\x01\n" +
 	"\x17ClearDraftChunksRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12R\n" +
-	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScopeJ\x04\b\x02\x10\x03R\tworkspace\"A\n" +
+	"\x0fworkspace_scope\x18\x03 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestIdJ\x04\b\x02\x10\x03R\tworkspace\"A\n" +
 	"\x18ClearDraftChunksResponse\x12%\n" +
 	"\x0echunks_cleared\x18\x01 \x01(\rR\rchunksCleared\"\x91\x01\n" +
 	"\x16GetDraftHistoryRequest\x12\x12\n" +
@@ -15880,10 +18257,12 @@ const file_openshell_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x19\n" +
 	"\bchunk_id\x18\x04 \x01(\tR\achunkIdJ\x04\b\x01\x10\x02R\ftimestamp_ms\"T\n" +
 	"\x17GetDraftHistoryResponse\x129\n" +
-	"\aentries\x18\x01 \x03(\v2\x1f.openshell.v1.DraftHistoryEntryR\aentries\"\xb1\x01\n" +
+	"\aentries\x18\x01 \x03(\v2\x1f.openshell.v1.DraftHistoryEntryR\aentries\"\xd0\x01\n" +
 	"\x16CreateWorkspaceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12H\n" +
-	"\x06labels\x18\x02 \x03(\v20.openshell.v1.CreateWorkspaceRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"\x06labels\x18\x02 \x03(\v20.openshell.v1.CreateWorkspaceRequest.LabelsEntryR\x06labels\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Z\n" +
@@ -15902,26 +18281,32 @@ const file_openshell_proto_rawDesc = "" +
 	"\n" +
 	"workspaces\x18\x01 \x03(\v2!.openshell.datamodel.v1.WorkspaceR\n" +
 	"workspaces\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"Q\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"p\n" +
 	"\x16DeleteWorkspaceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
-	"\rallow_missing\x18\x02 \x01(\bR\fallowMissing\"a\n" +
+	"\rallow_missing\x18\x02 \x01(\bR\fallowMissing\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\"a\n" +
 	"\x17DeleteWorkspaceResponse\x127\n" +
 	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\adeleted\"\xaf\x01\n" +
 	"\x0fWorkspaceMember\x12>\n" +
 	"\bmetadata\x18\x01 \x01(\v2\".openshell.datamodel.v1.ObjectMetaR\bmetadata\x12+\n" +
 	"\x11principal_subject\x18\x02 \x01(\tR\x10principalSubject\x12/\n" +
-	"\x04role\x18\x03 \x01(\x0e2\x1b.openshell.v1.WorkspaceRoleR\x04role\"\x97\x01\n" +
+	"\x04role\x18\x03 \x01(\x0e2\x1b.openshell.v1.WorkspaceRoleR\x04role\"\xb6\x01\n" +
 	"\x19AddWorkspaceMemberRequest\x12\x1c\n" +
 	"\tworkspace\x18\x01 \x01(\tR\tworkspace\x12+\n" +
 	"\x11principal_subject\x18\x02 \x01(\tR\x10principalSubject\x12/\n" +
-	"\x04role\x18\x03 \x01(\x0e2\x1b.openshell.v1.WorkspaceRoleR\x04role\"S\n" +
+	"\x04role\x18\x03 \x01(\x0e2\x1b.openshell.v1.WorkspaceRoleR\x04role\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestId\"S\n" +
 	"\x1aAddWorkspaceMemberResponse\x125\n" +
-	"\x06member\x18\x01 \x01(\v2\x1d.openshell.v1.WorkspaceMemberR\x06member\"\x8e\x01\n" +
+	"\x06member\x18\x01 \x01(\v2\x1d.openshell.v1.WorkspaceMemberR\x06member\"\xad\x01\n" +
 	"\x1cRemoveWorkspaceMemberRequest\x12\x1c\n" +
 	"\tworkspace\x18\x01 \x01(\tR\tworkspace\x12+\n" +
 	"\x11principal_subject\x18\x02 \x01(\tR\x10principalSubject\x12#\n" +
-	"\rallow_missing\x18\x03 \x01(\bR\fallowMissing\"g\n" +
+	"\rallow_missing\x18\x03 \x01(\bR\fallowMissing\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestId\"g\n" +
 	"\x1dRemoveWorkspaceMemberResponse\x127\n" +
 	"\aoutcome\x18\x02 \x01(\x0e2\x1d.openshell.v1.DeletionOutcomeR\aoutcomeJ\x04\b\x01\x10\x02R\aremoved\"w\n" +
 	"\x1bListWorkspaceMembersRequest\x12\x1c\n" +
@@ -15959,7 +18344,21 @@ const file_openshell_proto_rawDesc = "" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x12=\n" +
 	"\vlast_result\x18\x05 \x01(\x0e2\x1c.openshell.v1.EndpointResultR\n" +
 	"lastResult\x12H\n" +
-	"\x12last_reported_time\x18j \x01(\v2\x1a.google.protobuf.TimestampR\x10lastReportedTimeJ\x04\b\x06\x10\aR\x10last_reported_at*\xa6\x02\n" +
+	"\x12last_reported_time\x18j \x01(\v2\x1a.google.protobuf.TimestampR\x10lastReportedTimeJ\x04\b\x06\x10\aR\x10last_reported_at\"\xce\x05\n" +
+	"\x13SandboxProvisioning\x12\x1d\n" +
+	"\n" +
+	"attempt_id\x18\x01 \x01(\tR\tattemptId\x126\n" +
+	"\x17configuration_change_id\x18\x02 \x01(\tR\x15configurationChangeId\x12V\n" +
+	"\x19configuration_change_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x17configurationChangeTime\x12L\n" +
+	"\x14first_rejection_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x12firstRejectionTime\x126\n" +
+	"\bdeadline\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x12=\n" +
+	"\ftimeout_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\vtimeoutTime\x12P\n" +
+	"\x16cleanup_completed_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x14cleanupCompletedTime\x12#\n" +
+	"\rcleanup_error\x18\b \x01(\tR\fcleanupError\x12H\n" +
+	"\x12cleanup_retry_time\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\x10cleanupRetryTime\x120\n" +
+	"\x14attachment_change_id\x18\n" +
+	" \x01(\tR\x12attachmentChangeId\x12P\n" +
+	"\x16attachment_change_time\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x14attachmentChangeTime*\xa6\x02\n" +
 	"\fSandboxPhase\x12\x1d\n" +
 	"\x19SANDBOX_PHASE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aSANDBOX_PHASE_PROVISIONING\x10\x01\x12\x17\n" +
@@ -15970,7 +18369,62 @@ const file_openshell_proto_rawDesc = "" +
 	"\x16SANDBOX_PHASE_STOPPING\x10\x06\x12\x19\n" +
 	"\x15SANDBOX_PHASE_STOPPED\x10\a\x12\x1a\n" +
 	"\x16SANDBOX_PHASE_STARTING\x10\b\x12\x1b\n" +
-	"\x17SANDBOX_PHASE_COMPLETED\x10\t*\xce\x01\n" +
+	"\x17SANDBOX_PHASE_COMPLETED\x10\t*\xcb\x01\n" +
+	"\x14ProviderMutationKind\x12&\n" +
+	"\"PROVIDER_MUTATION_KIND_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dPROVIDER_MUTATION_KIND_ATTACH\x10\x01\x12!\n" +
+	"\x1dPROVIDER_MUTATION_KIND_DETACH\x10\x02\x12!\n" +
+	"\x1dPROVIDER_MUTATION_KIND_UPDATE\x10\x03\x12\"\n" +
+	"\x1ePROVIDER_MUTATION_KIND_OBSERVE\x10\x04*\xcf\x02\n" +
+	"\x16ProviderReadinessState\x12(\n" +
+	"$PROVIDER_READINESS_STATE_UNSPECIFIED\x10\x00\x12&\n" +
+	"\"PROVIDER_READINESS_STATE_PERSISTED\x10\x01\x12$\n" +
+	" PROVIDER_READINESS_STATE_PENDING\x10\x02\x12\"\n" +
+	"\x1ePROVIDER_READINESS_STATE_READY\x10\x03\x12%\n" +
+	"!PROVIDER_READINESS_STATE_WITHHELD\x10\x04\x12$\n" +
+	" PROVIDER_READINESS_STATE_REVOKED\x10\x05\x12#\n" +
+	"\x1fPROVIDER_READINESS_STATE_FAILED\x10\x06\x12'\n" +
+	"#PROVIDER_READINESS_STATE_SUPERSEDED\x10\a*\xda\x06\n" +
+	"\x17ProviderReadinessReason\x12)\n" +
+	"%PROVIDER_READINESS_REASON_UNSPECIFIED\x10\x00\x124\n" +
+	"0PROVIDER_READINESS_REASON_WAITING_FOR_SUPERVISOR\x10\x01\x125\n" +
+	"1PROVIDER_READINESS_REASON_WAITING_FOR_CREDENTIALS\x10\x02\x120\n" +
+	",PROVIDER_READINESS_REASON_WAITING_FOR_POLICY\x10\x03\x121\n" +
+	"-PROVIDER_READINESS_REASON_WAITING_FOR_PROCESS\x10\x04\x124\n" +
+	"0PROVIDER_READINESS_REASON_UNSUPPORTED_SUPERVISOR\x10\x05\x122\n" +
+	".PROVIDER_READINESS_REASON_CREDENTIALS_WITHHELD\x10\x06\x127\n" +
+	"3PROVIDER_READINESS_REASON_CREDENTIAL_INSTALL_FAILED\x10\a\x126\n" +
+	"2PROVIDER_READINESS_REASON_POLICY_ACTIVATION_FAILED\x10\b\x124\n" +
+	"0PROVIDER_READINESS_REASON_PROCESS_INSTALL_FAILED\x10\t\x125\n" +
+	"1PROVIDER_READINESS_REASON_SUPERVISOR_DISCONNECTED\x10\n" +
+	"\x126\n" +
+	"2PROVIDER_READINESS_REASON_SUPERVISOR_LEASE_EXPIRED\x10\v\x123\n" +
+	"/PROVIDER_READINESS_REASON_DESIRED_STATE_CHANGED\x10\f\x120\n" +
+	",PROVIDER_READINESS_REASON_CREDENTIAL_EXPIRED\x10\r\x12*\n" +
+	"&PROVIDER_READINESS_REASON_LOCAL_POLICY\x10\x0e\x12/\n" +
+	"+PROVIDER_READINESS_REASON_SNAPSHOT_MISMATCH\x10\x0f*\x83\x01\n" +
+	"\x0fConfigComponent\x12 \n" +
+	"\x1cCONFIG_COMPONENT_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fCONFIG_COMPONENT_SANDBOX_CONFIG\x10\x01\x12)\n" +
+	"%CONFIG_COMPONENT_PROVIDER_ENVIRONMENT\x10\x02*\x8d\x03\n" +
+	"\x12ConfigApplyOutcome\x12$\n" +
+	" CONFIG_APPLY_OUTCOME_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cCONFIG_APPLY_OUTCOME_APPLIED\x10\x01\x12*\n" +
+	"&CONFIG_APPLY_OUTCOME_IGNORED_DUPLICATE\x10\x02\x12&\n" +
+	"\"CONFIG_APPLY_OUTCOME_IGNORED_STALE\x10\x03\x120\n" +
+	",CONFIG_APPLY_OUTCOME_RETAINED_LOCAL_OVERRIDE\x10\x04\x12!\n" +
+	"\x1dCONFIG_APPLY_OUTCOME_DEGRADED\x10\x05\x128\n" +
+	"4CONFIG_APPLY_OUTCOME_FAILED_RETAINED_LAST_KNOWN_GOOD\x10\x06\x12&\n" +
+	"\"CONFIG_APPLY_OUTCOME_FAILED_CLOSED\x10\a\x12$\n" +
+	" CONFIG_APPLY_OUTCOME_UNSUPPORTED\x10\b*\xd2\x02\n" +
+	"\x1aConfigUpdateOperationState\x12-\n" +
+	")CONFIG_UPDATE_OPERATION_STATE_UNSPECIFIED\x10\x00\x12)\n" +
+	"%CONFIG_UPDATE_OPERATION_STATE_PENDING\x10\x01\x12)\n" +
+	"%CONFIG_UPDATE_OPERATION_STATE_APPLIED\x10\x02\x12*\n" +
+	"&CONFIG_UPDATE_OPERATION_STATE_INACTIVE\x10\x03\x12(\n" +
+	"$CONFIG_UPDATE_OPERATION_STATE_FAILED\x10\x04\x12,\n" +
+	"(CONFIG_UPDATE_OPERATION_STATE_SUPERSEDED\x10\x05\x12+\n" +
+	"'CONFIG_UPDATE_OPERATION_STATE_CANCELLED\x10\x06*\xce\x01\n" +
 	" ProviderCredentialTokenGrantType\x124\n" +
 	"0PROVIDER_CREDENTIAL_TOKEN_GRANT_TYPE_UNSPECIFIED\x10\x00\x12;\n" +
 	"7PROVIDER_CREDENTIAL_TOKEN_GRANT_TYPE_CLIENT_CREDENTIALS\x10\x01\x127\n" +
@@ -15991,7 +18445,12 @@ const file_openshell_proto_rawDesc = "" +
 	"(PROVIDER_PROFILE_CATEGORY_SOURCE_CONTROL\x10\x04\x12'\n" +
 	"#PROVIDER_PROFILE_CATEGORY_MESSAGING\x10\x05\x12\"\n" +
 	"\x1ePROVIDER_PROFILE_CATEGORY_DATA\x10\x06\x12'\n" +
-	"#PROVIDER_PROFILE_CATEGORY_KNOWLEDGE\x10\a*\x9a\x01\n" +
+	"#PROVIDER_PROFILE_CATEGORY_KNOWLEDGE\x10\a*\xcf\x01\n" +
+	"\x1bConfigurationAdmissionState\x12-\n" +
+	")CONFIGURATION_ADMISSION_STATE_UNSPECIFIED\x10\x00\x12)\n" +
+	"%CONFIGURATION_ADMISSION_STATE_PENDING\x10\x01\x12*\n" +
+	"&CONFIGURATION_ADMISSION_STATE_ACCEPTED\x10\x02\x12*\n" +
+	"&CONFIGURATION_ADMISSION_STATE_REJECTED\x10\x03*\x9a\x01\n" +
 	"\fPolicyStatus\x12\x1d\n" +
 	"\x19POLICY_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15POLICY_STATUS_PENDING\x10\x01\x12\x18\n" +
@@ -16026,7 +18485,7 @@ const file_openshell_proto_rawDesc = "" +
 	"&ENDPOINT_RESULT_CREDENTIAL_UNAVAILABLE\x10\x04\x12\x1e\n" +
 	"\x1aENDPOINT_RESULT_TLS_FAILED\x10\x05\x12$\n" +
 	" ENDPOINT_RESULT_TRANSPORT_FAILED\x10\x06\x12%\n" +
-	"!ENDPOINT_RESULT_UPSTREAM_REJECTED\x10\a2\x8bN\n" +
+	"!ENDPOINT_RESULT_UPSTREAM_REJECTED\x10\a2\xc2Q\n" +
 	"\tOpenShell\x12Z\n" +
 	"\x06Health\x12\x1b.openshell.v1.HealthRequest\x1a\x1c.openshell.v1.HealthResponse\"\x15\x82\xb5\x18\x11\n" +
 	"\x0funauthenticated\x12i\n" +
@@ -16056,7 +18515,9 @@ const file_openshell_proto_rawDesc = "" +
 	"\x15AttachSandboxProvider\x12*.openshell.v1.AttachSandboxProviderRequest\x1a+.openshell.v1.AttachSandboxProviderResponse\"!\x82\xb5\x18\x1d\n" +
 	"\x06bearer\x12\x04user\"\rsandbox:write\x12\x93\x01\n" +
 	"\x15DetachSandboxProvider\x12*.openshell.v1.DetachSandboxProviderRequest\x1a+.openshell.v1.DetachSandboxProviderResponse\"!\x82\xb5\x18\x1d\n" +
-	"\x06bearer\x12\x04user\"\rsandbox:write\x12{\n" +
+	"\x06bearer\x12\x04user\"\rsandbox:write\x12\x9b\x01\n" +
+	"\x18GetSandboxProviderStatus\x12-.openshell.v1.GetSandboxProviderStatusRequest\x1a..openshell.v1.GetSandboxProviderStatusResponse\" \x82\xb5\x18\x1c\n" +
+	"\x06bearer\x12\x04user\"\fsandbox:read\x12{\n" +
 	"\rDeleteSandbox\x12\".openshell.v1.DeleteSandboxRequest\x1a#.openshell.v1.DeleteSandboxResponse\"!\x82\xb5\x18\x1d\n" +
 	"\x06bearer\x12\x04user\"\rsandbox:write\x12q\n" +
 	"\vStopSandbox\x12 .openshell.v1.StopSandboxRequest\x1a\x1d.openshell.v1.SandboxResponse\"!\x82\xb5\x18\x1d\n" +
@@ -16126,6 +18587,10 @@ const file_openshell_proto_rawDesc = "" +
 	"\x12ReportPolicyStatus\x12'.openshell.v1.ReportPolicyStatusRequest\x1a(.openshell.v1.ReportPolicyStatusResponse\"\r\x82\xb5\x18\t\n" +
 	"\asandbox\x12|\n" +
 	"\x14ReportEndpointStatus\x12).openshell.v1.ReportEndpointStatusRequest\x1a*.openshell.v1.ReportEndpointStatusResponse\"\r\x82\xb5\x18\t\n" +
+	"\asandbox\x12\x85\x01\n" +
+	"\x17ReportProviderReadiness\x12,.openshell.v1.ReportProviderReadinessRequest\x1a-.openshell.v1.ReportProviderReadinessResponse\"\r\x82\xb5\x18\t\n" +
+	"\asandbox\x12\x8e\x01\n" +
+	"\x1aReportSandboxConfiguration\x12/.openshell.v1.ReportSandboxConfigurationRequest\x1a0.openshell.v1.ReportSandboxConfigurationResponse\"\r\x82\xb5\x18\t\n" +
 	"\asandbox\x12\x97\x01\n" +
 	"\x1dGetSandboxProviderEnvironment\x122.openshell.v1.GetSandboxProviderEnvironmentRequest\x1a3.openshell.v1.GetSandboxProviderEnvironmentResponse\"\r\x82\xb5\x18\t\n" +
 	"\asandbox\x12\x94\x01\n" +
@@ -16194,679 +18659,753 @@ func file_openshell_proto_rawDescGZIP() []byte {
 	return file_openshell_proto_rawDescData
 }
 
-var file_openshell_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
-var file_openshell_proto_msgTypes = make([]protoimpl.MessageInfo, 232)
+var file_openshell_proto_enumTypes = make([]protoimpl.EnumInfo, 17)
+var file_openshell_proto_msgTypes = make([]protoimpl.MessageInfo, 248)
 var file_openshell_proto_goTypes = []any{
 	(SandboxPhase)(0),                                    // 0: openshell.v1.SandboxPhase
-	(ProviderCredentialTokenGrantType)(0),                // 1: openshell.v1.ProviderCredentialTokenGrantType
-	(ProviderCredentialRefreshStrategy)(0),               // 2: openshell.v1.ProviderCredentialRefreshStrategy
-	(ProviderProfileCategory)(0),                         // 3: openshell.v1.ProviderProfileCategory
-	(PolicyStatus)(0),                                    // 4: openshell.v1.PolicyStatus
-	(ServiceStatus)(0),                                   // 5: openshell.v1.ServiceStatus
-	(WorkspaceRole)(0),                                   // 6: openshell.v1.WorkspaceRole
-	(ProviderCredentialRefreshRecoveryAction)(0),         // 7: openshell.v1.ProviderCredentialRefreshRecoveryAction
-	(DeletionOutcome)(0),                                 // 8: openshell.v1.DeletionOutcome
-	(EndpointResult)(0),                                  // 9: openshell.v1.EndpointResult
-	(*IssueSandboxTokenRequest)(nil),                     // 10: openshell.v1.IssueSandboxTokenRequest
-	(*IssueSandboxTokenResponse)(nil),                    // 11: openshell.v1.IssueSandboxTokenResponse
-	(*RefreshSandboxTokenRequest)(nil),                   // 12: openshell.v1.RefreshSandboxTokenRequest
-	(*RefreshSandboxTokenResponse)(nil),                  // 13: openshell.v1.RefreshSandboxTokenResponse
-	(*HealthRequest)(nil),                                // 14: openshell.v1.HealthRequest
-	(*HealthResponse)(nil),                               // 15: openshell.v1.HealthResponse
-	(*GetCurrentUserRequest)(nil),                        // 16: openshell.v1.GetCurrentUserRequest
-	(*GetCurrentUserResponse)(nil),                       // 17: openshell.v1.GetCurrentUserResponse
-	(*GetGatewayInfoRequest)(nil),                        // 18: openshell.v1.GetGatewayInfoRequest
-	(*GetGatewayInfoResponse)(nil),                       // 19: openshell.v1.GetGatewayInfoResponse
-	(*ComputeDriverInfo)(nil),                            // 20: openshell.v1.ComputeDriverInfo
-	(*ComputeDriverCapabilities)(nil),                    // 21: openshell.v1.ComputeDriverCapabilities
-	(*ResourceCapabilities)(nil),                         // 22: openshell.v1.ResourceCapabilities
-	(*CpuResourceCapabilities)(nil),                      // 23: openshell.v1.CpuResourceCapabilities
-	(*MemoryResourceCapabilities)(nil),                   // 24: openshell.v1.MemoryResourceCapabilities
-	(*GpuResourceCapabilities)(nil),                      // 25: openshell.v1.GpuResourceCapabilities
-	(*Sandbox)(nil),                                      // 26: openshell.v1.Sandbox
-	(*SandboxSpec)(nil),                                  // 27: openshell.v1.SandboxSpec
-	(*ResourceRequirements)(nil),                         // 28: openshell.v1.ResourceRequirements
-	(*GpuResourceRequirements)(nil),                      // 29: openshell.v1.GpuResourceRequirements
-	(*SandboxTemplate)(nil),                              // 30: openshell.v1.SandboxTemplate
-	(*SandboxWorkloadTemplate)(nil),                      // 31: openshell.v1.SandboxWorkloadTemplate
-	(*SandboxWorkloadTemplateSpec)(nil),                  // 32: openshell.v1.SandboxWorkloadTemplateSpec
-	(*SandboxWorkloadConfig)(nil),                        // 33: openshell.v1.SandboxWorkloadConfig
-	(*SandboxResources)(nil),                             // 34: openshell.v1.SandboxResources
-	(*SandboxServiceLevel)(nil),                          // 35: openshell.v1.SandboxServiceLevel
-	(*SandboxStartup)(nil),                               // 36: openshell.v1.SandboxStartup
-	(*SandboxWorkloadTemplateProvenance)(nil),            // 37: openshell.v1.SandboxWorkloadTemplateProvenance
-	(*SandboxStatus)(nil),                                // 38: openshell.v1.SandboxStatus
-	(*SandboxCondition)(nil),                             // 39: openshell.v1.SandboxCondition
-	(*PlatformEvent)(nil),                                // 40: openshell.v1.PlatformEvent
-	(*CreateSandboxRequest)(nil),                         // 41: openshell.v1.CreateSandboxRequest
-	(*CreateSandboxTemplateRequest)(nil),                 // 42: openshell.v1.CreateSandboxTemplateRequest
-	(*GetSandboxTemplateRequest)(nil),                    // 43: openshell.v1.GetSandboxTemplateRequest
-	(*ListSandboxTemplatesRequest)(nil),                  // 44: openshell.v1.ListSandboxTemplatesRequest
-	(*DeleteSandboxTemplateRequest)(nil),                 // 45: openshell.v1.DeleteSandboxTemplateRequest
-	(*SandboxTemplateResponse)(nil),                      // 46: openshell.v1.SandboxTemplateResponse
-	(*ListSandboxTemplatesResponse)(nil),                 // 47: openshell.v1.ListSandboxTemplatesResponse
-	(*DeleteSandboxTemplateResponse)(nil),                // 48: openshell.v1.DeleteSandboxTemplateResponse
-	(*BeginRootfsTarStagingRequest)(nil),                 // 49: openshell.v1.BeginRootfsTarStagingRequest
-	(*BeginRootfsTarStagingResponse)(nil),                // 50: openshell.v1.BeginRootfsTarStagingResponse
-	(*GetSandboxRequest)(nil),                            // 51: openshell.v1.GetSandboxRequest
-	(*ListSandboxesRequest)(nil),                         // 52: openshell.v1.ListSandboxesRequest
-	(*ListSandboxProvidersRequest)(nil),                  // 53: openshell.v1.ListSandboxProvidersRequest
-	(*AttachSandboxProviderRequest)(nil),                 // 54: openshell.v1.AttachSandboxProviderRequest
-	(*DetachSandboxProviderRequest)(nil),                 // 55: openshell.v1.DetachSandboxProviderRequest
-	(*DeleteSandboxRequest)(nil),                         // 56: openshell.v1.DeleteSandboxRequest
-	(*StopSandboxRequest)(nil),                           // 57: openshell.v1.StopSandboxRequest
-	(*StartSandboxRequest)(nil),                          // 58: openshell.v1.StartSandboxRequest
-	(*SandboxResponse)(nil),                              // 59: openshell.v1.SandboxResponse
-	(*ListSandboxesResponse)(nil),                        // 60: openshell.v1.ListSandboxesResponse
-	(*ListSandboxProvidersResponse)(nil),                 // 61: openshell.v1.ListSandboxProvidersResponse
-	(*AttachSandboxProviderResponse)(nil),                // 62: openshell.v1.AttachSandboxProviderResponse
-	(*DetachSandboxProviderResponse)(nil),                // 63: openshell.v1.DetachSandboxProviderResponse
-	(*DeleteSandboxResponse)(nil),                        // 64: openshell.v1.DeleteSandboxResponse
-	(*CreateSshSessionRequest)(nil),                      // 65: openshell.v1.CreateSshSessionRequest
-	(*CreateSshSessionResponse)(nil),                     // 66: openshell.v1.CreateSshSessionResponse
-	(*ExposeServiceRequest)(nil),                         // 67: openshell.v1.ExposeServiceRequest
-	(*GetServiceRequest)(nil),                            // 68: openshell.v1.GetServiceRequest
-	(*ListServicesRequest)(nil),                          // 69: openshell.v1.ListServicesRequest
-	(*ListServicesResponse)(nil),                         // 70: openshell.v1.ListServicesResponse
-	(*DeleteServiceRequest)(nil),                         // 71: openshell.v1.DeleteServiceRequest
-	(*DeleteServiceResponse)(nil),                        // 72: openshell.v1.DeleteServiceResponse
-	(*ServiceEndpoint)(nil),                              // 73: openshell.v1.ServiceEndpoint
-	(*ServiceEndpointResponse)(nil),                      // 74: openshell.v1.ServiceEndpointResponse
-	(*RevokeSshSessionRequest)(nil),                      // 75: openshell.v1.RevokeSshSessionRequest
-	(*RevokeSshSessionResponse)(nil),                     // 76: openshell.v1.RevokeSshSessionResponse
-	(*ExecSandboxRequest)(nil),                           // 77: openshell.v1.ExecSandboxRequest
-	(*ExecSandboxStdout)(nil),                            // 78: openshell.v1.ExecSandboxStdout
-	(*ExecSandboxStderr)(nil),                            // 79: openshell.v1.ExecSandboxStderr
-	(*ExecSandboxExit)(nil),                              // 80: openshell.v1.ExecSandboxExit
-	(*ExecSandboxEvent)(nil),                             // 81: openshell.v1.ExecSandboxEvent
-	(*TcpForwardInit)(nil),                               // 82: openshell.v1.TcpForwardInit
-	(*TcpForwardFrame)(nil),                              // 83: openshell.v1.TcpForwardFrame
-	(*ExecSandboxInput)(nil),                             // 84: openshell.v1.ExecSandboxInput
-	(*ExecSandboxWindowResize)(nil),                      // 85: openshell.v1.ExecSandboxWindowResize
-	(*SshSession)(nil),                                   // 86: openshell.v1.SshSession
-	(*WatchSandboxRequest)(nil),                          // 87: openshell.v1.WatchSandboxRequest
-	(*SandboxStreamEvent)(nil),                           // 88: openshell.v1.SandboxStreamEvent
-	(*SandboxLogLine)(nil),                               // 89: openshell.v1.SandboxLogLine
-	(*SandboxStreamWarning)(nil),                         // 90: openshell.v1.SandboxStreamWarning
-	(*CreateProviderRequest)(nil),                        // 91: openshell.v1.CreateProviderRequest
-	(*GetProviderRequest)(nil),                           // 92: openshell.v1.GetProviderRequest
-	(*ListProvidersRequest)(nil),                         // 93: openshell.v1.ListProvidersRequest
-	(*UpdateProviderRequest)(nil),                        // 94: openshell.v1.UpdateProviderRequest
-	(*DeleteProviderRequest)(nil),                        // 95: openshell.v1.DeleteProviderRequest
-	(*ProviderResponse)(nil),                             // 96: openshell.v1.ProviderResponse
-	(*ListProvidersResponse)(nil),                        // 97: openshell.v1.ListProvidersResponse
-	(*ListProviderProfilesRequest)(nil),                  // 98: openshell.v1.ListProviderProfilesRequest
-	(*GetProviderProfileRequest)(nil),                    // 99: openshell.v1.GetProviderProfileRequest
-	(*ProviderProfileImportItem)(nil),                    // 100: openshell.v1.ProviderProfileImportItem
-	(*ProviderProfileDiagnostic)(nil),                    // 101: openshell.v1.ProviderProfileDiagnostic
-	(*ProviderCredentialTokenGrantAudienceOverride)(nil), // 102: openshell.v1.ProviderCredentialTokenGrantAudienceOverride
-	(*ProviderCredentialTokenGrantSubjectToken)(nil),     // 103: openshell.v1.ProviderCredentialTokenGrantSubjectToken
-	(*ProviderCredentialTokenGrant)(nil),                 // 104: openshell.v1.ProviderCredentialTokenGrant
-	(*ProviderProfileCredential)(nil),                    // 105: openshell.v1.ProviderProfileCredential
-	(*ProviderCredentialRefreshMaterial)(nil),            // 106: openshell.v1.ProviderCredentialRefreshMaterial
-	(*ProviderCredentialRefreshOutput)(nil),              // 107: openshell.v1.ProviderCredentialRefreshOutput
-	(*ProviderCredentialRefresh)(nil),                    // 108: openshell.v1.ProviderCredentialRefresh
-	(*ProviderCredentialRefreshStatus)(nil),              // 109: openshell.v1.ProviderCredentialRefreshStatus
-	(*ProviderProfileDiscovery)(nil),                     // 110: openshell.v1.ProviderProfileDiscovery
-	(*GetProviderRefreshStatusRequest)(nil),              // 111: openshell.v1.GetProviderRefreshStatusRequest
-	(*GetProviderRefreshStatusResponse)(nil),             // 112: openshell.v1.GetProviderRefreshStatusResponse
-	(*ConfigureProviderRefreshRequest)(nil),              // 113: openshell.v1.ConfigureProviderRefreshRequest
-	(*ConfigureProviderRefreshResponse)(nil),             // 114: openshell.v1.ConfigureProviderRefreshResponse
-	(*RotateProviderCredentialRequest)(nil),              // 115: openshell.v1.RotateProviderCredentialRequest
-	(*RotateProviderCredentialResponse)(nil),             // 116: openshell.v1.RotateProviderCredentialResponse
-	(*DeleteProviderRefreshRequest)(nil),                 // 117: openshell.v1.DeleteProviderRefreshRequest
-	(*DeleteProviderRefreshResponse)(nil),                // 118: openshell.v1.DeleteProviderRefreshResponse
-	(*ProviderProfile)(nil),                              // 119: openshell.v1.ProviderProfile
-	(*ProviderProfileResponse)(nil),                      // 120: openshell.v1.ProviderProfileResponse
-	(*ListProviderProfilesResponse)(nil),                 // 121: openshell.v1.ListProviderProfilesResponse
-	(*ImportProviderProfilesRequest)(nil),                // 122: openshell.v1.ImportProviderProfilesRequest
-	(*ImportProviderProfilesResponse)(nil),               // 123: openshell.v1.ImportProviderProfilesResponse
-	(*UpdateProviderProfilesRequest)(nil),                // 124: openshell.v1.UpdateProviderProfilesRequest
-	(*UpdateProviderProfilesResponse)(nil),               // 125: openshell.v1.UpdateProviderProfilesResponse
-	(*LintProviderProfilesRequest)(nil),                  // 126: openshell.v1.LintProviderProfilesRequest
-	(*LintProviderProfilesResponse)(nil),                 // 127: openshell.v1.LintProviderProfilesResponse
-	(*DeleteProviderResponse)(nil),                       // 128: openshell.v1.DeleteProviderResponse
-	(*DeleteProviderProfileRequest)(nil),                 // 129: openshell.v1.DeleteProviderProfileRequest
-	(*DeleteProviderProfileResponse)(nil),                // 130: openshell.v1.DeleteProviderProfileResponse
-	(*GetSandboxProviderEnvironmentRequest)(nil),         // 131: openshell.v1.GetSandboxProviderEnvironmentRequest
-	(*StaticCredentialEndpointBinding)(nil),              // 132: openshell.v1.StaticCredentialEndpointBinding
-	(*StaticCredentialBinding)(nil),                      // 133: openshell.v1.StaticCredentialBinding
-	(*GetSandboxProviderEnvironmentResponse)(nil),        // 134: openshell.v1.GetSandboxProviderEnvironmentResponse
-	(*ExchangeProviderSubjectTokenRequest)(nil),          // 135: openshell.v1.ExchangeProviderSubjectTokenRequest
-	(*ExchangeProviderSubjectTokenResponse)(nil),         // 136: openshell.v1.ExchangeProviderSubjectTokenResponse
-	(*UpdateConfigRequest)(nil),                          // 137: openshell.v1.UpdateConfigRequest
-	(*PolicyMergeOperation)(nil),                         // 138: openshell.v1.PolicyMergeOperation
-	(*AddNetworkRule)(nil),                               // 139: openshell.v1.AddNetworkRule
-	(*RemoveNetworkEndpoint)(nil),                        // 140: openshell.v1.RemoveNetworkEndpoint
-	(*RemoveNetworkRule)(nil),                            // 141: openshell.v1.RemoveNetworkRule
-	(*AddDenyRules)(nil),                                 // 142: openshell.v1.AddDenyRules
-	(*AddAllowRules)(nil),                                // 143: openshell.v1.AddAllowRules
-	(*RemoveNetworkBinary)(nil),                          // 144: openshell.v1.RemoveNetworkBinary
-	(*UpdateConfigResponse)(nil),                         // 145: openshell.v1.UpdateConfigResponse
-	(*GetSandboxPolicyStatusRequest)(nil),                // 146: openshell.v1.GetSandboxPolicyStatusRequest
-	(*GetSandboxPolicyStatusResponse)(nil),               // 147: openshell.v1.GetSandboxPolicyStatusResponse
-	(*ListSandboxPoliciesRequest)(nil),                   // 148: openshell.v1.ListSandboxPoliciesRequest
-	(*ListSandboxPoliciesResponse)(nil),                  // 149: openshell.v1.ListSandboxPoliciesResponse
-	(*ReportPolicyStatusRequest)(nil),                    // 150: openshell.v1.ReportPolicyStatusRequest
-	(*ReportPolicyStatusResponse)(nil),                   // 151: openshell.v1.ReportPolicyStatusResponse
-	(*SandboxPolicyRevision)(nil),                        // 152: openshell.v1.SandboxPolicyRevision
-	(*GetSandboxLogsRequest)(nil),                        // 153: openshell.v1.GetSandboxLogsRequest
-	(*PushSandboxLogsRequest)(nil),                       // 154: openshell.v1.PushSandboxLogsRequest
-	(*PushSandboxLogsResponse)(nil),                      // 155: openshell.v1.PushSandboxLogsResponse
-	(*GetSandboxLogsResponse)(nil),                       // 156: openshell.v1.GetSandboxLogsResponse
-	(*SupervisorMessage)(nil),                            // 157: openshell.v1.SupervisorMessage
-	(*GatewayMessage)(nil),                               // 158: openshell.v1.GatewayMessage
-	(*SupervisorHello)(nil),                              // 159: openshell.v1.SupervisorHello
-	(*SessionAccepted)(nil),                              // 160: openshell.v1.SessionAccepted
-	(*SessionRejected)(nil),                              // 161: openshell.v1.SessionRejected
-	(*SupervisorHeartbeat)(nil),                          // 162: openshell.v1.SupervisorHeartbeat
-	(*GatewayHeartbeat)(nil),                             // 163: openshell.v1.GatewayHeartbeat
-	(*ReportMainProcessExitRequest)(nil),                 // 164: openshell.v1.ReportMainProcessExitRequest
-	(*ReportMainProcessExitResponse)(nil),                // 165: openshell.v1.ReportMainProcessExitResponse
-	(*FinalizeMainProcessExitRequest)(nil),               // 166: openshell.v1.FinalizeMainProcessExitRequest
-	(*FinalizeMainProcessExitResponse)(nil),              // 167: openshell.v1.FinalizeMainProcessExitResponse
-	(*RelayOpen)(nil),                                    // 168: openshell.v1.RelayOpen
-	(*SshRelayTarget)(nil),                               // 169: openshell.v1.SshRelayTarget
-	(*TcpRelayTarget)(nil),                               // 170: openshell.v1.TcpRelayTarget
-	(*RelayInit)(nil),                                    // 171: openshell.v1.RelayInit
-	(*RelayFrame)(nil),                                   // 172: openshell.v1.RelayFrame
-	(*RelayOpenResult)(nil),                              // 173: openshell.v1.RelayOpenResult
-	(*RelayClose)(nil),                                   // 174: openshell.v1.RelayClose
-	(*L7RequestSample)(nil),                              // 175: openshell.v1.L7RequestSample
-	(*DenialSummary)(nil),                                // 176: openshell.v1.DenialSummary
-	(*DenialGroupCount)(nil),                             // 177: openshell.v1.DenialGroupCount
-	(*NetworkActivitySummary)(nil),                       // 178: openshell.v1.NetworkActivitySummary
-	(*PolicyChunk)(nil),                                  // 179: openshell.v1.PolicyChunk
-	(*DraftPolicyUpdate)(nil),                            // 180: openshell.v1.DraftPolicyUpdate
-	(*SubmitPolicyAnalysisRequest)(nil),                  // 181: openshell.v1.SubmitPolicyAnalysisRequest
-	(*SubmitPolicyAnalysisResponse)(nil),                 // 182: openshell.v1.SubmitPolicyAnalysisResponse
-	(*GetDraftPolicyRequest)(nil),                        // 183: openshell.v1.GetDraftPolicyRequest
-	(*GetDraftPolicyResponse)(nil),                       // 184: openshell.v1.GetDraftPolicyResponse
-	(*ApproveDraftChunkRequest)(nil),                     // 185: openshell.v1.ApproveDraftChunkRequest
-	(*ApproveDraftChunkResponse)(nil),                    // 186: openshell.v1.ApproveDraftChunkResponse
-	(*RejectDraftChunkRequest)(nil),                      // 187: openshell.v1.RejectDraftChunkRequest
-	(*RejectDraftChunkResponse)(nil),                     // 188: openshell.v1.RejectDraftChunkResponse
-	(*DraftChunkApproval)(nil),                           // 189: openshell.v1.DraftChunkApproval
-	(*ApproveAllDraftChunksRequest)(nil),                 // 190: openshell.v1.ApproveAllDraftChunksRequest
-	(*ApproveAllDraftChunksResponse)(nil),                // 191: openshell.v1.ApproveAllDraftChunksResponse
-	(*EditDraftChunkRequest)(nil),                        // 192: openshell.v1.EditDraftChunkRequest
-	(*EditDraftChunkResponse)(nil),                       // 193: openshell.v1.EditDraftChunkResponse
-	(*UndoDraftChunkRequest)(nil),                        // 194: openshell.v1.UndoDraftChunkRequest
-	(*UndoDraftChunkResponse)(nil),                       // 195: openshell.v1.UndoDraftChunkResponse
-	(*ClearDraftChunksRequest)(nil),                      // 196: openshell.v1.ClearDraftChunksRequest
-	(*ClearDraftChunksResponse)(nil),                     // 197: openshell.v1.ClearDraftChunksResponse
-	(*GetDraftHistoryRequest)(nil),                       // 198: openshell.v1.GetDraftHistoryRequest
-	(*DraftHistoryEntry)(nil),                            // 199: openshell.v1.DraftHistoryEntry
-	(*GetDraftHistoryResponse)(nil),                      // 200: openshell.v1.GetDraftHistoryResponse
-	(*CreateWorkspaceRequest)(nil),                       // 201: openshell.v1.CreateWorkspaceRequest
-	(*CreateWorkspaceResponse)(nil),                      // 202: openshell.v1.CreateWorkspaceResponse
-	(*GetWorkspaceRequest)(nil),                          // 203: openshell.v1.GetWorkspaceRequest
-	(*GetWorkspaceResponse)(nil),                         // 204: openshell.v1.GetWorkspaceResponse
-	(*ListWorkspacesRequest)(nil),                        // 205: openshell.v1.ListWorkspacesRequest
-	(*ListWorkspacesResponse)(nil),                       // 206: openshell.v1.ListWorkspacesResponse
-	(*DeleteWorkspaceRequest)(nil),                       // 207: openshell.v1.DeleteWorkspaceRequest
-	(*DeleteWorkspaceResponse)(nil),                      // 208: openshell.v1.DeleteWorkspaceResponse
-	(*WorkspaceMember)(nil),                              // 209: openshell.v1.WorkspaceMember
-	(*AddWorkspaceMemberRequest)(nil),                    // 210: openshell.v1.AddWorkspaceMemberRequest
-	(*AddWorkspaceMemberResponse)(nil),                   // 211: openshell.v1.AddWorkspaceMemberResponse
-	(*RemoveWorkspaceMemberRequest)(nil),                 // 212: openshell.v1.RemoveWorkspaceMemberRequest
-	(*RemoveWorkspaceMemberResponse)(nil),                // 213: openshell.v1.RemoveWorkspaceMemberResponse
-	(*ListWorkspaceMembersRequest)(nil),                  // 214: openshell.v1.ListWorkspaceMembersRequest
-	(*ListWorkspaceMembersResponse)(nil),                 // 215: openshell.v1.ListWorkspaceMembersResponse
-	(*ExtensionServiceCredential)(nil),                   // 216: openshell.v1.ExtensionServiceCredential
-	(*EndpointObservation)(nil),                          // 217: openshell.v1.EndpointObservation
-	(*ReportEndpointStatusRequest)(nil),                  // 218: openshell.v1.ReportEndpointStatusRequest
-	(*ReportEndpointStatusResponse)(nil),                 // 219: openshell.v1.ReportEndpointStatusResponse
-	(*EndpointStatus)(nil),                               // 220: openshell.v1.EndpointStatus
-	nil,                                                  // 221: openshell.v1.SandboxSpec.EnvironmentEntry
-	nil,                                                  // 222: openshell.v1.SandboxTemplate.LabelsEntry
-	nil,                                                  // 223: openshell.v1.SandboxTemplate.AnnotationsEntry
-	nil,                                                  // 224: openshell.v1.SandboxTemplate.EnvironmentEntry
-	nil,                                                  // 225: openshell.v1.SandboxWorkloadConfig.EnvironmentEntry
-	nil,                                                  // 226: openshell.v1.PlatformEvent.MetadataEntry
-	nil,                                                  // 227: openshell.v1.CreateSandboxRequest.LabelsEntry
-	nil,                                                  // 228: openshell.v1.CreateSandboxRequest.AnnotationsEntry
-	nil,                                                  // 229: openshell.v1.ExecSandboxRequest.EnvironmentEntry
-	nil,                                                  // 230: openshell.v1.SandboxLogLine.FieldsEntry
-	nil,                                                  // 231: openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry
-	nil,                                                  // 232: openshell.v1.ConfigureProviderRefreshRequest.MaterialEntry
-	nil,                                                  // 233: openshell.v1.ProviderProfile.AnnotationsEntry
-	nil,                                                  // 234: openshell.v1.GetSandboxProviderEnvironmentResponse.EnvironmentEntry
-	nil,                                                  // 235: openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry
-	nil,                                                  // 236: openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry
-	nil,                                                  // 237: openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry
-	nil,                                                  // 238: openshell.v1.UpdateConfigRequest.AnnotationsEntry
-	nil,                                                  // 239: openshell.v1.UpdateConfigResponse.AnnotationsEntry
-	nil,                                                  // 240: openshell.v1.SandboxPolicyRevision.ProvenanceEntry
-	nil,                                                  // 241: openshell.v1.CreateWorkspaceRequest.LabelsEntry
-	(*timestamppb.Timestamp)(nil),                        // 242: google.protobuf.Timestamp
-	(*datamodelv1.ObjectMeta)(nil),                       // 243: openshell.datamodel.v1.ObjectMeta
-	(*policyv1.SandboxPolicy)(nil),                       // 244: openshell.policy.v1.SandboxPolicy
-	(*structpb.Struct)(nil),                              // 245: google.protobuf.Struct
-	(*durationpb.Duration)(nil),                          // 246: google.protobuf.Duration
-	(*datamodelv1.WorkspaceSelector)(nil),                // 247: openshell.datamodel.v1.WorkspaceSelector
-	(*datamodelv1.Provider)(nil),                         // 248: openshell.datamodel.v1.Provider
-	(*policyv1.NetworkEndpoint)(nil),                     // 249: openshell.policy.v1.NetworkEndpoint
-	(*policyv1.NetworkBinary)(nil),                       // 250: openshell.policy.v1.NetworkBinary
-	(*sandboxv1.SettingValue)(nil),                       // 251: openshell.sandbox.v1.SettingValue
-	(*policyv1.NetworkPolicyRule)(nil),                   // 252: openshell.policy.v1.NetworkPolicyRule
-	(*policyv1.L7DenyRule)(nil),                          // 253: openshell.policy.v1.L7DenyRule
-	(*policyv1.L7Rule)(nil),                              // 254: openshell.policy.v1.L7Rule
-	(*datamodelv1.Workspace)(nil),                        // 255: openshell.datamodel.v1.Workspace
-	(*sandboxv1.GetSandboxConfigRequest)(nil),            // 256: openshell.sandbox.v1.GetSandboxConfigRequest
-	(*sandboxv1.GetGatewayConfigRequest)(nil),            // 257: openshell.sandbox.v1.GetGatewayConfigRequest
-	(*sandboxv1.GetSandboxConfigResponse)(nil),           // 258: openshell.sandbox.v1.GetSandboxConfigResponse
-	(*sandboxv1.GetGatewayConfigResponse)(nil),           // 259: openshell.sandbox.v1.GetGatewayConfigResponse
+	(ProviderMutationKind)(0),                            // 1: openshell.v1.ProviderMutationKind
+	(ProviderReadinessState)(0),                          // 2: openshell.v1.ProviderReadinessState
+	(ProviderReadinessReason)(0),                         // 3: openshell.v1.ProviderReadinessReason
+	(ConfigComponent)(0),                                 // 4: openshell.v1.ConfigComponent
+	(ConfigApplyOutcome)(0),                              // 5: openshell.v1.ConfigApplyOutcome
+	(ConfigUpdateOperationState)(0),                      // 6: openshell.v1.ConfigUpdateOperationState
+	(ProviderCredentialTokenGrantType)(0),                // 7: openshell.v1.ProviderCredentialTokenGrantType
+	(ProviderCredentialRefreshStrategy)(0),               // 8: openshell.v1.ProviderCredentialRefreshStrategy
+	(ProviderProfileCategory)(0),                         // 9: openshell.v1.ProviderProfileCategory
+	(ConfigurationAdmissionState)(0),                     // 10: openshell.v1.ConfigurationAdmissionState
+	(PolicyStatus)(0),                                    // 11: openshell.v1.PolicyStatus
+	(ServiceStatus)(0),                                   // 12: openshell.v1.ServiceStatus
+	(WorkspaceRole)(0),                                   // 13: openshell.v1.WorkspaceRole
+	(ProviderCredentialRefreshRecoveryAction)(0),         // 14: openshell.v1.ProviderCredentialRefreshRecoveryAction
+	(DeletionOutcome)(0),                                 // 15: openshell.v1.DeletionOutcome
+	(EndpointResult)(0),                                  // 16: openshell.v1.EndpointResult
+	(*IssueSandboxTokenRequest)(nil),                     // 17: openshell.v1.IssueSandboxTokenRequest
+	(*IssueSandboxTokenResponse)(nil),                    // 18: openshell.v1.IssueSandboxTokenResponse
+	(*RefreshSandboxTokenRequest)(nil),                   // 19: openshell.v1.RefreshSandboxTokenRequest
+	(*RefreshSandboxTokenResponse)(nil),                  // 20: openshell.v1.RefreshSandboxTokenResponse
+	(*HealthRequest)(nil),                                // 21: openshell.v1.HealthRequest
+	(*HealthResponse)(nil),                               // 22: openshell.v1.HealthResponse
+	(*GetCurrentUserRequest)(nil),                        // 23: openshell.v1.GetCurrentUserRequest
+	(*GetCurrentUserResponse)(nil),                       // 24: openshell.v1.GetCurrentUserResponse
+	(*GetGatewayInfoRequest)(nil),                        // 25: openshell.v1.GetGatewayInfoRequest
+	(*GetGatewayInfoResponse)(nil),                       // 26: openshell.v1.GetGatewayInfoResponse
+	(*ComputeDriverInfo)(nil),                            // 27: openshell.v1.ComputeDriverInfo
+	(*ComputeDriverCapabilities)(nil),                    // 28: openshell.v1.ComputeDriverCapabilities
+	(*ResourceCapabilities)(nil),                         // 29: openshell.v1.ResourceCapabilities
+	(*CpuResourceCapabilities)(nil),                      // 30: openshell.v1.CpuResourceCapabilities
+	(*MemoryResourceCapabilities)(nil),                   // 31: openshell.v1.MemoryResourceCapabilities
+	(*GpuResourceCapabilities)(nil),                      // 32: openshell.v1.GpuResourceCapabilities
+	(*Sandbox)(nil),                                      // 33: openshell.v1.Sandbox
+	(*SandboxSpec)(nil),                                  // 34: openshell.v1.SandboxSpec
+	(*ResourceRequirements)(nil),                         // 35: openshell.v1.ResourceRequirements
+	(*GpuResourceRequirements)(nil),                      // 36: openshell.v1.GpuResourceRequirements
+	(*SandboxTemplate)(nil),                              // 37: openshell.v1.SandboxTemplate
+	(*SandboxWorkloadTemplate)(nil),                      // 38: openshell.v1.SandboxWorkloadTemplate
+	(*SandboxWorkloadTemplateSpec)(nil),                  // 39: openshell.v1.SandboxWorkloadTemplateSpec
+	(*SandboxWorkloadConfig)(nil),                        // 40: openshell.v1.SandboxWorkloadConfig
+	(*SandboxResources)(nil),                             // 41: openshell.v1.SandboxResources
+	(*SandboxServiceLevel)(nil),                          // 42: openshell.v1.SandboxServiceLevel
+	(*SandboxStartup)(nil),                               // 43: openshell.v1.SandboxStartup
+	(*SandboxWorkloadTemplateProvenance)(nil),            // 44: openshell.v1.SandboxWorkloadTemplateProvenance
+	(*SandboxStatus)(nil),                                // 45: openshell.v1.SandboxStatus
+	(*SandboxCondition)(nil),                             // 46: openshell.v1.SandboxCondition
+	(*PlatformEvent)(nil),                                // 47: openshell.v1.PlatformEvent
+	(*CreateSandboxRequest)(nil),                         // 48: openshell.v1.CreateSandboxRequest
+	(*CreateSandboxTemplateRequest)(nil),                 // 49: openshell.v1.CreateSandboxTemplateRequest
+	(*GetSandboxTemplateRequest)(nil),                    // 50: openshell.v1.GetSandboxTemplateRequest
+	(*ListSandboxTemplatesRequest)(nil),                  // 51: openshell.v1.ListSandboxTemplatesRequest
+	(*DeleteSandboxTemplateRequest)(nil),                 // 52: openshell.v1.DeleteSandboxTemplateRequest
+	(*SandboxTemplateResponse)(nil),                      // 53: openshell.v1.SandboxTemplateResponse
+	(*ListSandboxTemplatesResponse)(nil),                 // 54: openshell.v1.ListSandboxTemplatesResponse
+	(*DeleteSandboxTemplateResponse)(nil),                // 55: openshell.v1.DeleteSandboxTemplateResponse
+	(*BeginRootfsTarStagingRequest)(nil),                 // 56: openshell.v1.BeginRootfsTarStagingRequest
+	(*BeginRootfsTarStagingResponse)(nil),                // 57: openshell.v1.BeginRootfsTarStagingResponse
+	(*GetSandboxRequest)(nil),                            // 58: openshell.v1.GetSandboxRequest
+	(*ListSandboxesRequest)(nil),                         // 59: openshell.v1.ListSandboxesRequest
+	(*ListSandboxProvidersRequest)(nil),                  // 60: openshell.v1.ListSandboxProvidersRequest
+	(*AttachSandboxProviderRequest)(nil),                 // 61: openshell.v1.AttachSandboxProviderRequest
+	(*DetachSandboxProviderRequest)(nil),                 // 62: openshell.v1.DetachSandboxProviderRequest
+	(*DeleteSandboxRequest)(nil),                         // 63: openshell.v1.DeleteSandboxRequest
+	(*StopSandboxRequest)(nil),                           // 64: openshell.v1.StopSandboxRequest
+	(*StartSandboxRequest)(nil),                          // 65: openshell.v1.StartSandboxRequest
+	(*SandboxResponse)(nil),                              // 66: openshell.v1.SandboxResponse
+	(*ListSandboxesResponse)(nil),                        // 67: openshell.v1.ListSandboxesResponse
+	(*ListSandboxProvidersResponse)(nil),                 // 68: openshell.v1.ListSandboxProvidersResponse
+	(*AttachSandboxProviderResponse)(nil),                // 69: openshell.v1.AttachSandboxProviderResponse
+	(*DetachSandboxProviderResponse)(nil),                // 70: openshell.v1.DetachSandboxProviderResponse
+	(*ProviderDesiredIdentity)(nil),                      // 71: openshell.v1.ProviderDesiredIdentity
+	(*ConfigSnapshotRevision)(nil),                       // 72: openshell.v1.ConfigSnapshotRevision
+	(*SandboxConfigRevision)(nil),                        // 73: openshell.v1.SandboxConfigRevision
+	(*ConfigUpdateOperation)(nil),                        // 74: openshell.v1.ConfigUpdateOperation
+	(*ProviderMutationReceipt)(nil),                      // 75: openshell.v1.ProviderMutationReceipt
+	(*ProviderReadinessObservation)(nil),                 // 76: openshell.v1.ProviderReadinessObservation
+	(*ProviderReadinessStatus)(nil),                      // 77: openshell.v1.ProviderReadinessStatus
+	(*GetSandboxProviderStatusRequest)(nil),              // 78: openshell.v1.GetSandboxProviderStatusRequest
+	(*GetSandboxProviderStatusResponse)(nil),             // 79: openshell.v1.GetSandboxProviderStatusResponse
+	(*ReportProviderReadinessRequest)(nil),               // 80: openshell.v1.ReportProviderReadinessRequest
+	(*ReportProviderReadinessResponse)(nil),              // 81: openshell.v1.ReportProviderReadinessResponse
+	(*DeleteSandboxResponse)(nil),                        // 82: openshell.v1.DeleteSandboxResponse
+	(*CreateSshSessionRequest)(nil),                      // 83: openshell.v1.CreateSshSessionRequest
+	(*CreateSshSessionResponse)(nil),                     // 84: openshell.v1.CreateSshSessionResponse
+	(*ExposeServiceRequest)(nil),                         // 85: openshell.v1.ExposeServiceRequest
+	(*GetServiceRequest)(nil),                            // 86: openshell.v1.GetServiceRequest
+	(*ListServicesRequest)(nil),                          // 87: openshell.v1.ListServicesRequest
+	(*ListServicesResponse)(nil),                         // 88: openshell.v1.ListServicesResponse
+	(*DeleteServiceRequest)(nil),                         // 89: openshell.v1.DeleteServiceRequest
+	(*DeleteServiceResponse)(nil),                        // 90: openshell.v1.DeleteServiceResponse
+	(*ServiceEndpoint)(nil),                              // 91: openshell.v1.ServiceEndpoint
+	(*ServiceEndpointResponse)(nil),                      // 92: openshell.v1.ServiceEndpointResponse
+	(*RevokeSshSessionRequest)(nil),                      // 93: openshell.v1.RevokeSshSessionRequest
+	(*RevokeSshSessionResponse)(nil),                     // 94: openshell.v1.RevokeSshSessionResponse
+	(*ExecSandboxRequest)(nil),                           // 95: openshell.v1.ExecSandboxRequest
+	(*ExecSandboxStdout)(nil),                            // 96: openshell.v1.ExecSandboxStdout
+	(*ExecSandboxStderr)(nil),                            // 97: openshell.v1.ExecSandboxStderr
+	(*ExecSandboxExit)(nil),                              // 98: openshell.v1.ExecSandboxExit
+	(*ExecSandboxEvent)(nil),                             // 99: openshell.v1.ExecSandboxEvent
+	(*TcpForwardInit)(nil),                               // 100: openshell.v1.TcpForwardInit
+	(*TcpForwardFrame)(nil),                              // 101: openshell.v1.TcpForwardFrame
+	(*ExecSandboxInput)(nil),                             // 102: openshell.v1.ExecSandboxInput
+	(*ExecSandboxWindowResize)(nil),                      // 103: openshell.v1.ExecSandboxWindowResize
+	(*SshSession)(nil),                                   // 104: openshell.v1.SshSession
+	(*WatchSandboxRequest)(nil),                          // 105: openshell.v1.WatchSandboxRequest
+	(*SandboxStreamEvent)(nil),                           // 106: openshell.v1.SandboxStreamEvent
+	(*SandboxLogLine)(nil),                               // 107: openshell.v1.SandboxLogLine
+	(*SandboxStreamWarning)(nil),                         // 108: openshell.v1.SandboxStreamWarning
+	(*CreateProviderRequest)(nil),                        // 109: openshell.v1.CreateProviderRequest
+	(*GetProviderRequest)(nil),                           // 110: openshell.v1.GetProviderRequest
+	(*ListProvidersRequest)(nil),                         // 111: openshell.v1.ListProvidersRequest
+	(*UpdateProviderRequest)(nil),                        // 112: openshell.v1.UpdateProviderRequest
+	(*DeleteProviderRequest)(nil),                        // 113: openshell.v1.DeleteProviderRequest
+	(*ProviderResponse)(nil),                             // 114: openshell.v1.ProviderResponse
+	(*ListProvidersResponse)(nil),                        // 115: openshell.v1.ListProvidersResponse
+	(*ListProviderProfilesRequest)(nil),                  // 116: openshell.v1.ListProviderProfilesRequest
+	(*GetProviderProfileRequest)(nil),                    // 117: openshell.v1.GetProviderProfileRequest
+	(*ProviderProfileImportItem)(nil),                    // 118: openshell.v1.ProviderProfileImportItem
+	(*ProviderProfileDiagnostic)(nil),                    // 119: openshell.v1.ProviderProfileDiagnostic
+	(*ProviderCredentialTokenGrantAudienceOverride)(nil), // 120: openshell.v1.ProviderCredentialTokenGrantAudienceOverride
+	(*ProviderCredentialTokenGrantSubjectToken)(nil),     // 121: openshell.v1.ProviderCredentialTokenGrantSubjectToken
+	(*ProviderCredentialTokenGrant)(nil),                 // 122: openshell.v1.ProviderCredentialTokenGrant
+	(*ProviderProfileCredential)(nil),                    // 123: openshell.v1.ProviderProfileCredential
+	(*ProviderCredentialRefreshMaterial)(nil),            // 124: openshell.v1.ProviderCredentialRefreshMaterial
+	(*ProviderCredentialRefreshOutput)(nil),              // 125: openshell.v1.ProviderCredentialRefreshOutput
+	(*ProviderCredentialRefresh)(nil),                    // 126: openshell.v1.ProviderCredentialRefresh
+	(*ProviderCredentialRefreshStatus)(nil),              // 127: openshell.v1.ProviderCredentialRefreshStatus
+	(*ProviderProfileDiscovery)(nil),                     // 128: openshell.v1.ProviderProfileDiscovery
+	(*GetProviderRefreshStatusRequest)(nil),              // 129: openshell.v1.GetProviderRefreshStatusRequest
+	(*GetProviderRefreshStatusResponse)(nil),             // 130: openshell.v1.GetProviderRefreshStatusResponse
+	(*ConfigureProviderRefreshRequest)(nil),              // 131: openshell.v1.ConfigureProviderRefreshRequest
+	(*ConfigureProviderRefreshResponse)(nil),             // 132: openshell.v1.ConfigureProviderRefreshResponse
+	(*RotateProviderCredentialRequest)(nil),              // 133: openshell.v1.RotateProviderCredentialRequest
+	(*RotateProviderCredentialResponse)(nil),             // 134: openshell.v1.RotateProviderCredentialResponse
+	(*DeleteProviderRefreshRequest)(nil),                 // 135: openshell.v1.DeleteProviderRefreshRequest
+	(*DeleteProviderRefreshResponse)(nil),                // 136: openshell.v1.DeleteProviderRefreshResponse
+	(*ProviderProfile)(nil),                              // 137: openshell.v1.ProviderProfile
+	(*ProviderProfileResponse)(nil),                      // 138: openshell.v1.ProviderProfileResponse
+	(*ListProviderProfilesResponse)(nil),                 // 139: openshell.v1.ListProviderProfilesResponse
+	(*ImportProviderProfilesRequest)(nil),                // 140: openshell.v1.ImportProviderProfilesRequest
+	(*ImportProviderProfilesResponse)(nil),               // 141: openshell.v1.ImportProviderProfilesResponse
+	(*UpdateProviderProfilesRequest)(nil),                // 142: openshell.v1.UpdateProviderProfilesRequest
+	(*UpdateProviderProfilesResponse)(nil),               // 143: openshell.v1.UpdateProviderProfilesResponse
+	(*LintProviderProfilesRequest)(nil),                  // 144: openshell.v1.LintProviderProfilesRequest
+	(*LintProviderProfilesResponse)(nil),                 // 145: openshell.v1.LintProviderProfilesResponse
+	(*DeleteProviderResponse)(nil),                       // 146: openshell.v1.DeleteProviderResponse
+	(*DeleteProviderProfileRequest)(nil),                 // 147: openshell.v1.DeleteProviderProfileRequest
+	(*DeleteProviderProfileResponse)(nil),                // 148: openshell.v1.DeleteProviderProfileResponse
+	(*GetSandboxProviderEnvironmentRequest)(nil),         // 149: openshell.v1.GetSandboxProviderEnvironmentRequest
+	(*StaticCredentialEndpointBinding)(nil),              // 150: openshell.v1.StaticCredentialEndpointBinding
+	(*StaticCredentialBinding)(nil),                      // 151: openshell.v1.StaticCredentialBinding
+	(*GetSandboxProviderEnvironmentResponse)(nil),        // 152: openshell.v1.GetSandboxProviderEnvironmentResponse
+	(*ExchangeProviderSubjectTokenRequest)(nil),          // 153: openshell.v1.ExchangeProviderSubjectTokenRequest
+	(*ExchangeProviderSubjectTokenResponse)(nil),         // 154: openshell.v1.ExchangeProviderSubjectTokenResponse
+	(*UpdateConfigRequest)(nil),                          // 155: openshell.v1.UpdateConfigRequest
+	(*PolicyMergeOperation)(nil),                         // 156: openshell.v1.PolicyMergeOperation
+	(*AddNetworkRule)(nil),                               // 157: openshell.v1.AddNetworkRule
+	(*RemoveNetworkEndpoint)(nil),                        // 158: openshell.v1.RemoveNetworkEndpoint
+	(*RemoveNetworkRule)(nil),                            // 159: openshell.v1.RemoveNetworkRule
+	(*L7RuleTarget)(nil),                                 // 160: openshell.v1.L7RuleTarget
+	(*AddDenyRules)(nil),                                 // 161: openshell.v1.AddDenyRules
+	(*AddAllowRules)(nil),                                // 162: openshell.v1.AddAllowRules
+	(*RemoveNetworkBinary)(nil),                          // 163: openshell.v1.RemoveNetworkBinary
+	(*UpdateConfigResponse)(nil),                         // 164: openshell.v1.UpdateConfigResponse
+	(*GetSandboxPolicyStatusRequest)(nil),                // 165: openshell.v1.GetSandboxPolicyStatusRequest
+	(*GetSandboxPolicyStatusResponse)(nil),               // 166: openshell.v1.GetSandboxPolicyStatusResponse
+	(*ListSandboxPoliciesRequest)(nil),                   // 167: openshell.v1.ListSandboxPoliciesRequest
+	(*ListSandboxPoliciesResponse)(nil),                  // 168: openshell.v1.ListSandboxPoliciesResponse
+	(*ReportPolicyStatusRequest)(nil),                    // 169: openshell.v1.ReportPolicyStatusRequest
+	(*ReportPolicyStatusResponse)(nil),                   // 170: openshell.v1.ReportPolicyStatusResponse
+	(*SandboxConfigurationAdmission)(nil),                // 171: openshell.v1.SandboxConfigurationAdmission
+	(*ReportSandboxConfigurationRequest)(nil),            // 172: openshell.v1.ReportSandboxConfigurationRequest
+	(*ReportSandboxConfigurationResponse)(nil),           // 173: openshell.v1.ReportSandboxConfigurationResponse
+	(*SandboxPolicyRevision)(nil),                        // 174: openshell.v1.SandboxPolicyRevision
+	(*GetSandboxLogsRequest)(nil),                        // 175: openshell.v1.GetSandboxLogsRequest
+	(*PushSandboxLogsRequest)(nil),                       // 176: openshell.v1.PushSandboxLogsRequest
+	(*PushSandboxLogsResponse)(nil),                      // 177: openshell.v1.PushSandboxLogsResponse
+	(*GetSandboxLogsResponse)(nil),                       // 178: openshell.v1.GetSandboxLogsResponse
+	(*SupervisorMessage)(nil),                            // 179: openshell.v1.SupervisorMessage
+	(*GatewayMessage)(nil),                               // 180: openshell.v1.GatewayMessage
+	(*SupervisorHello)(nil),                              // 181: openshell.v1.SupervisorHello
+	(*SessionAccepted)(nil),                              // 182: openshell.v1.SessionAccepted
+	(*SessionRejected)(nil),                              // 183: openshell.v1.SessionRejected
+	(*SupervisorHeartbeat)(nil),                          // 184: openshell.v1.SupervisorHeartbeat
+	(*GatewayHeartbeat)(nil),                             // 185: openshell.v1.GatewayHeartbeat
+	(*ReportMainProcessExitRequest)(nil),                 // 186: openshell.v1.ReportMainProcessExitRequest
+	(*ReportMainProcessExitResponse)(nil),                // 187: openshell.v1.ReportMainProcessExitResponse
+	(*FinalizeMainProcessExitRequest)(nil),               // 188: openshell.v1.FinalizeMainProcessExitRequest
+	(*FinalizeMainProcessExitResponse)(nil),              // 189: openshell.v1.FinalizeMainProcessExitResponse
+	(*RelayOpen)(nil),                                    // 190: openshell.v1.RelayOpen
+	(*SshRelayTarget)(nil),                               // 191: openshell.v1.SshRelayTarget
+	(*TcpRelayTarget)(nil),                               // 192: openshell.v1.TcpRelayTarget
+	(*RelayInit)(nil),                                    // 193: openshell.v1.RelayInit
+	(*RelayFrame)(nil),                                   // 194: openshell.v1.RelayFrame
+	(*RelayOpenResult)(nil),                              // 195: openshell.v1.RelayOpenResult
+	(*RelayClose)(nil),                                   // 196: openshell.v1.RelayClose
+	(*L7RequestSample)(nil),                              // 197: openshell.v1.L7RequestSample
+	(*DenialSummary)(nil),                                // 198: openshell.v1.DenialSummary
+	(*DenialGroupCount)(nil),                             // 199: openshell.v1.DenialGroupCount
+	(*NetworkActivitySummary)(nil),                       // 200: openshell.v1.NetworkActivitySummary
+	(*PolicyChunk)(nil),                                  // 201: openshell.v1.PolicyChunk
+	(*DraftPolicyUpdate)(nil),                            // 202: openshell.v1.DraftPolicyUpdate
+	(*SubmitPolicyAnalysisRequest)(nil),                  // 203: openshell.v1.SubmitPolicyAnalysisRequest
+	(*SubmitPolicyAnalysisResponse)(nil),                 // 204: openshell.v1.SubmitPolicyAnalysisResponse
+	(*GetDraftPolicyRequest)(nil),                        // 205: openshell.v1.GetDraftPolicyRequest
+	(*GetDraftPolicyResponse)(nil),                       // 206: openshell.v1.GetDraftPolicyResponse
+	(*ApproveDraftChunkRequest)(nil),                     // 207: openshell.v1.ApproveDraftChunkRequest
+	(*ApproveDraftChunkResponse)(nil),                    // 208: openshell.v1.ApproveDraftChunkResponse
+	(*RejectDraftChunkRequest)(nil),                      // 209: openshell.v1.RejectDraftChunkRequest
+	(*RejectDraftChunkResponse)(nil),                     // 210: openshell.v1.RejectDraftChunkResponse
+	(*DraftChunkApproval)(nil),                           // 211: openshell.v1.DraftChunkApproval
+	(*ApproveAllDraftChunksRequest)(nil),                 // 212: openshell.v1.ApproveAllDraftChunksRequest
+	(*ApproveAllDraftChunksResponse)(nil),                // 213: openshell.v1.ApproveAllDraftChunksResponse
+	(*EditDraftChunkRequest)(nil),                        // 214: openshell.v1.EditDraftChunkRequest
+	(*EditDraftChunkResponse)(nil),                       // 215: openshell.v1.EditDraftChunkResponse
+	(*UndoDraftChunkRequest)(nil),                        // 216: openshell.v1.UndoDraftChunkRequest
+	(*UndoDraftChunkResponse)(nil),                       // 217: openshell.v1.UndoDraftChunkResponse
+	(*ClearDraftChunksRequest)(nil),                      // 218: openshell.v1.ClearDraftChunksRequest
+	(*ClearDraftChunksResponse)(nil),                     // 219: openshell.v1.ClearDraftChunksResponse
+	(*GetDraftHistoryRequest)(nil),                       // 220: openshell.v1.GetDraftHistoryRequest
+	(*DraftHistoryEntry)(nil),                            // 221: openshell.v1.DraftHistoryEntry
+	(*GetDraftHistoryResponse)(nil),                      // 222: openshell.v1.GetDraftHistoryResponse
+	(*CreateWorkspaceRequest)(nil),                       // 223: openshell.v1.CreateWorkspaceRequest
+	(*CreateWorkspaceResponse)(nil),                      // 224: openshell.v1.CreateWorkspaceResponse
+	(*GetWorkspaceRequest)(nil),                          // 225: openshell.v1.GetWorkspaceRequest
+	(*GetWorkspaceResponse)(nil),                         // 226: openshell.v1.GetWorkspaceResponse
+	(*ListWorkspacesRequest)(nil),                        // 227: openshell.v1.ListWorkspacesRequest
+	(*ListWorkspacesResponse)(nil),                       // 228: openshell.v1.ListWorkspacesResponse
+	(*DeleteWorkspaceRequest)(nil),                       // 229: openshell.v1.DeleteWorkspaceRequest
+	(*DeleteWorkspaceResponse)(nil),                      // 230: openshell.v1.DeleteWorkspaceResponse
+	(*WorkspaceMember)(nil),                              // 231: openshell.v1.WorkspaceMember
+	(*AddWorkspaceMemberRequest)(nil),                    // 232: openshell.v1.AddWorkspaceMemberRequest
+	(*AddWorkspaceMemberResponse)(nil),                   // 233: openshell.v1.AddWorkspaceMemberResponse
+	(*RemoveWorkspaceMemberRequest)(nil),                 // 234: openshell.v1.RemoveWorkspaceMemberRequest
+	(*RemoveWorkspaceMemberResponse)(nil),                // 235: openshell.v1.RemoveWorkspaceMemberResponse
+	(*ListWorkspaceMembersRequest)(nil),                  // 236: openshell.v1.ListWorkspaceMembersRequest
+	(*ListWorkspaceMembersResponse)(nil),                 // 237: openshell.v1.ListWorkspaceMembersResponse
+	(*ExtensionServiceCredential)(nil),                   // 238: openshell.v1.ExtensionServiceCredential
+	(*EndpointObservation)(nil),                          // 239: openshell.v1.EndpointObservation
+	(*ReportEndpointStatusRequest)(nil),                  // 240: openshell.v1.ReportEndpointStatusRequest
+	(*ReportEndpointStatusResponse)(nil),                 // 241: openshell.v1.ReportEndpointStatusResponse
+	(*EndpointStatus)(nil),                               // 242: openshell.v1.EndpointStatus
+	(*SandboxProvisioning)(nil),                          // 243: openshell.v1.SandboxProvisioning
+	nil,                                                  // 244: openshell.v1.SandboxSpec.EnvironmentEntry
+	nil,                                                  // 245: openshell.v1.SandboxTemplate.LabelsEntry
+	nil,                                                  // 246: openshell.v1.SandboxTemplate.AnnotationsEntry
+	nil,                                                  // 247: openshell.v1.SandboxTemplate.EnvironmentEntry
+	nil,                                                  // 248: openshell.v1.SandboxWorkloadConfig.EnvironmentEntry
+	nil,                                                  // 249: openshell.v1.PlatformEvent.MetadataEntry
+	nil,                                                  // 250: openshell.v1.CreateSandboxRequest.LabelsEntry
+	nil,                                                  // 251: openshell.v1.CreateSandboxRequest.AnnotationsEntry
+	nil,                                                  // 252: openshell.v1.ExecSandboxRequest.EnvironmentEntry
+	nil,                                                  // 253: openshell.v1.SandboxLogLine.FieldsEntry
+	nil,                                                  // 254: openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry
+	nil,                                                  // 255: openshell.v1.ConfigureProviderRefreshRequest.MaterialEntry
+	nil,                                                  // 256: openshell.v1.ProviderProfile.AnnotationsEntry
+	nil,                                                  // 257: openshell.v1.GetSandboxProviderEnvironmentResponse.EnvironmentEntry
+	nil,                                                  // 258: openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry
+	nil,                                                  // 259: openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry
+	nil,                                                  // 260: openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry
+	nil,                                                  // 261: openshell.v1.UpdateConfigRequest.AnnotationsEntry
+	nil,                                                  // 262: openshell.v1.UpdateConfigResponse.AnnotationsEntry
+	nil,                                                  // 263: openshell.v1.SandboxPolicyRevision.ProvenanceEntry
+	nil,                                                  // 264: openshell.v1.CreateWorkspaceRequest.LabelsEntry
+	(*timestamppb.Timestamp)(nil),                        // 265: google.protobuf.Timestamp
+	(*datamodelv1.ObjectMeta)(nil),                       // 266: openshell.datamodel.v1.ObjectMeta
+	(*policyv1.SandboxPolicy)(nil),                       // 267: openshell.policy.v1.SandboxPolicy
+	(*structpb.Struct)(nil),                              // 268: google.protobuf.Struct
+	(*durationpb.Duration)(nil),                          // 269: google.protobuf.Duration
+	(*datamodelv1.WorkspaceSelector)(nil),                // 270: openshell.datamodel.v1.WorkspaceSelector
+	(*datamodelv1.Provider)(nil),                         // 271: openshell.datamodel.v1.Provider
+	(sandboxv1.PolicySource)(0),                          // 272: openshell.sandbox.v1.PolicySource
+	(*policyv1.NetworkEndpoint)(nil),                     // 273: openshell.policy.v1.NetworkEndpoint
+	(*policyv1.NetworkBinary)(nil),                       // 274: openshell.policy.v1.NetworkBinary
+	(*sandboxv1.SettingValue)(nil),                       // 275: openshell.sandbox.v1.SettingValue
+	(*policyv1.NetworkPolicyRule)(nil),                   // 276: openshell.policy.v1.NetworkPolicyRule
+	(*policyv1.L7DenyRule)(nil),                          // 277: openshell.policy.v1.L7DenyRule
+	(*policyv1.L7Rule)(nil),                              // 278: openshell.policy.v1.L7Rule
+	(*datamodelv1.Workspace)(nil),                        // 279: openshell.datamodel.v1.Workspace
+	(*sandboxv1.GetSandboxConfigRequest)(nil),            // 280: openshell.sandbox.v1.GetSandboxConfigRequest
+	(*sandboxv1.GetGatewayConfigRequest)(nil),            // 281: openshell.sandbox.v1.GetGatewayConfigRequest
+	(*sandboxv1.GetSandboxConfigResponse)(nil),           // 282: openshell.sandbox.v1.GetSandboxConfigResponse
+	(*sandboxv1.GetGatewayConfigResponse)(nil),           // 283: openshell.sandbox.v1.GetGatewayConfigResponse
 }
 var file_openshell_proto_depIdxs = []int32{
-	242, // 0: openshell.v1.IssueSandboxTokenResponse.expiration_time:type_name -> google.protobuf.Timestamp
-	242, // 1: openshell.v1.RefreshSandboxTokenResponse.expiration_time:type_name -> google.protobuf.Timestamp
-	216, // 2: openshell.v1.RefreshSandboxTokenResponse.extension_credentials:type_name -> openshell.v1.ExtensionServiceCredential
-	242, // 3: openshell.v1.RefreshSandboxTokenResponse.sandbox_expiration_time:type_name -> google.protobuf.Timestamp
-	5,   // 4: openshell.v1.HealthResponse.status:type_name -> openshell.v1.ServiceStatus
-	5,   // 5: openshell.v1.GetGatewayInfoResponse.status:type_name -> openshell.v1.ServiceStatus
-	20,  // 6: openshell.v1.GetGatewayInfoResponse.compute_drivers:type_name -> openshell.v1.ComputeDriverInfo
-	21,  // 7: openshell.v1.ComputeDriverInfo.capabilities:type_name -> openshell.v1.ComputeDriverCapabilities
-	22,  // 8: openshell.v1.ComputeDriverCapabilities.resource_capabilities:type_name -> openshell.v1.ResourceCapabilities
-	23,  // 9: openshell.v1.ResourceCapabilities.cpu:type_name -> openshell.v1.CpuResourceCapabilities
-	24,  // 10: openshell.v1.ResourceCapabilities.memory:type_name -> openshell.v1.MemoryResourceCapabilities
-	25,  // 11: openshell.v1.ResourceCapabilities.gpu:type_name -> openshell.v1.GpuResourceCapabilities
-	243, // 12: openshell.v1.Sandbox.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	27,  // 13: openshell.v1.Sandbox.spec:type_name -> openshell.v1.SandboxSpec
-	38,  // 14: openshell.v1.Sandbox.status:type_name -> openshell.v1.SandboxStatus
-	37,  // 15: openshell.v1.Sandbox.created_from_workload_template:type_name -> openshell.v1.SandboxWorkloadTemplateProvenance
-	221, // 16: openshell.v1.SandboxSpec.environment:type_name -> openshell.v1.SandboxSpec.EnvironmentEntry
-	30,  // 17: openshell.v1.SandboxSpec.template:type_name -> openshell.v1.SandboxTemplate
-	244, // 18: openshell.v1.SandboxSpec.policy:type_name -> openshell.policy.v1.SandboxPolicy
-	28,  // 19: openshell.v1.SandboxSpec.resource_requirements:type_name -> openshell.v1.ResourceRequirements
-	29,  // 20: openshell.v1.ResourceRequirements.gpu:type_name -> openshell.v1.GpuResourceRequirements
-	222, // 21: openshell.v1.SandboxTemplate.labels:type_name -> openshell.v1.SandboxTemplate.LabelsEntry
-	223, // 22: openshell.v1.SandboxTemplate.annotations:type_name -> openshell.v1.SandboxTemplate.AnnotationsEntry
-	224, // 23: openshell.v1.SandboxTemplate.environment:type_name -> openshell.v1.SandboxTemplate.EnvironmentEntry
-	245, // 24: openshell.v1.SandboxTemplate.resources:type_name -> google.protobuf.Struct
-	245, // 25: openshell.v1.SandboxTemplate.driver_config:type_name -> google.protobuf.Struct
-	243, // 26: openshell.v1.SandboxWorkloadTemplate.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	32,  // 27: openshell.v1.SandboxWorkloadTemplate.spec:type_name -> openshell.v1.SandboxWorkloadTemplateSpec
-	33,  // 28: openshell.v1.SandboxWorkloadTemplateSpec.workload:type_name -> openshell.v1.SandboxWorkloadConfig
-	245, // 29: openshell.v1.SandboxWorkloadTemplateSpec.driver_config:type_name -> google.protobuf.Struct
-	35,  // 30: openshell.v1.SandboxWorkloadTemplateSpec.desired_service_level:type_name -> openshell.v1.SandboxServiceLevel
-	225, // 31: openshell.v1.SandboxWorkloadConfig.environment:type_name -> openshell.v1.SandboxWorkloadConfig.EnvironmentEntry
-	34,  // 32: openshell.v1.SandboxWorkloadConfig.resources:type_name -> openshell.v1.SandboxResources
-	29,  // 33: openshell.v1.SandboxResources.gpu:type_name -> openshell.v1.GpuResourceRequirements
-	36,  // 34: openshell.v1.SandboxServiceLevel.startup:type_name -> openshell.v1.SandboxStartup
-	246, // 35: openshell.v1.SandboxStartup.ready_within:type_name -> google.protobuf.Duration
-	39,  // 36: openshell.v1.SandboxStatus.conditions:type_name -> openshell.v1.SandboxCondition
+	265, // 0: openshell.v1.IssueSandboxTokenResponse.expiration_time:type_name -> google.protobuf.Timestamp
+	265, // 1: openshell.v1.RefreshSandboxTokenResponse.expiration_time:type_name -> google.protobuf.Timestamp
+	238, // 2: openshell.v1.RefreshSandboxTokenResponse.extension_credentials:type_name -> openshell.v1.ExtensionServiceCredential
+	265, // 3: openshell.v1.RefreshSandboxTokenResponse.sandbox_expiration_time:type_name -> google.protobuf.Timestamp
+	12,  // 4: openshell.v1.HealthResponse.status:type_name -> openshell.v1.ServiceStatus
+	12,  // 5: openshell.v1.GetGatewayInfoResponse.status:type_name -> openshell.v1.ServiceStatus
+	27,  // 6: openshell.v1.GetGatewayInfoResponse.compute_drivers:type_name -> openshell.v1.ComputeDriverInfo
+	28,  // 7: openshell.v1.ComputeDriverInfo.capabilities:type_name -> openshell.v1.ComputeDriverCapabilities
+	29,  // 8: openshell.v1.ComputeDriverCapabilities.resource_capabilities:type_name -> openshell.v1.ResourceCapabilities
+	30,  // 9: openshell.v1.ResourceCapabilities.cpu:type_name -> openshell.v1.CpuResourceCapabilities
+	31,  // 10: openshell.v1.ResourceCapabilities.memory:type_name -> openshell.v1.MemoryResourceCapabilities
+	32,  // 11: openshell.v1.ResourceCapabilities.gpu:type_name -> openshell.v1.GpuResourceCapabilities
+	266, // 12: openshell.v1.Sandbox.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	34,  // 13: openshell.v1.Sandbox.spec:type_name -> openshell.v1.SandboxSpec
+	45,  // 14: openshell.v1.Sandbox.status:type_name -> openshell.v1.SandboxStatus
+	44,  // 15: openshell.v1.Sandbox.created_from_workload_template:type_name -> openshell.v1.SandboxWorkloadTemplateProvenance
+	244, // 16: openshell.v1.SandboxSpec.environment:type_name -> openshell.v1.SandboxSpec.EnvironmentEntry
+	37,  // 17: openshell.v1.SandboxSpec.template:type_name -> openshell.v1.SandboxTemplate
+	267, // 18: openshell.v1.SandboxSpec.policy:type_name -> openshell.policy.v1.SandboxPolicy
+	35,  // 19: openshell.v1.SandboxSpec.resource_requirements:type_name -> openshell.v1.ResourceRequirements
+	36,  // 20: openshell.v1.ResourceRequirements.gpu:type_name -> openshell.v1.GpuResourceRequirements
+	245, // 21: openshell.v1.SandboxTemplate.labels:type_name -> openshell.v1.SandboxTemplate.LabelsEntry
+	246, // 22: openshell.v1.SandboxTemplate.annotations:type_name -> openshell.v1.SandboxTemplate.AnnotationsEntry
+	247, // 23: openshell.v1.SandboxTemplate.environment:type_name -> openshell.v1.SandboxTemplate.EnvironmentEntry
+	268, // 24: openshell.v1.SandboxTemplate.resources:type_name -> google.protobuf.Struct
+	268, // 25: openshell.v1.SandboxTemplate.driver_config:type_name -> google.protobuf.Struct
+	266, // 26: openshell.v1.SandboxWorkloadTemplate.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	39,  // 27: openshell.v1.SandboxWorkloadTemplate.spec:type_name -> openshell.v1.SandboxWorkloadTemplateSpec
+	40,  // 28: openshell.v1.SandboxWorkloadTemplateSpec.workload:type_name -> openshell.v1.SandboxWorkloadConfig
+	268, // 29: openshell.v1.SandboxWorkloadTemplateSpec.driver_config:type_name -> google.protobuf.Struct
+	42,  // 30: openshell.v1.SandboxWorkloadTemplateSpec.desired_service_level:type_name -> openshell.v1.SandboxServiceLevel
+	248, // 31: openshell.v1.SandboxWorkloadConfig.environment:type_name -> openshell.v1.SandboxWorkloadConfig.EnvironmentEntry
+	41,  // 32: openshell.v1.SandboxWorkloadConfig.resources:type_name -> openshell.v1.SandboxResources
+	36,  // 33: openshell.v1.SandboxResources.gpu:type_name -> openshell.v1.GpuResourceRequirements
+	43,  // 34: openshell.v1.SandboxServiceLevel.startup:type_name -> openshell.v1.SandboxStartup
+	269, // 35: openshell.v1.SandboxStartup.ready_within:type_name -> google.protobuf.Duration
+	46,  // 36: openshell.v1.SandboxStatus.conditions:type_name -> openshell.v1.SandboxCondition
 	0,   // 37: openshell.v1.SandboxStatus.phase:type_name -> openshell.v1.SandboxPhase
-	220, // 38: openshell.v1.SandboxStatus.endpoint_statuses:type_name -> openshell.v1.EndpointStatus
-	242, // 39: openshell.v1.SandboxCondition.transition_time:type_name -> google.protobuf.Timestamp
-	242, // 40: openshell.v1.PlatformEvent.event_time:type_name -> google.protobuf.Timestamp
-	226, // 41: openshell.v1.PlatformEvent.metadata:type_name -> openshell.v1.PlatformEvent.MetadataEntry
-	27,  // 42: openshell.v1.CreateSandboxRequest.spec:type_name -> openshell.v1.SandboxSpec
-	227, // 43: openshell.v1.CreateSandboxRequest.labels:type_name -> openshell.v1.CreateSandboxRequest.LabelsEntry
-	228, // 44: openshell.v1.CreateSandboxRequest.annotations:type_name -> openshell.v1.CreateSandboxRequest.AnnotationsEntry
-	247, // 45: openshell.v1.CreateSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	31,  // 46: openshell.v1.CreateSandboxTemplateRequest.template:type_name -> openshell.v1.SandboxWorkloadTemplate
-	247, // 47: openshell.v1.CreateSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 48: openshell.v1.GetSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 49: openshell.v1.ListSandboxTemplatesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 50: openshell.v1.DeleteSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	31,  // 51: openshell.v1.SandboxTemplateResponse.template:type_name -> openshell.v1.SandboxWorkloadTemplate
-	31,  // 52: openshell.v1.ListSandboxTemplatesResponse.templates:type_name -> openshell.v1.SandboxWorkloadTemplate
-	8,   // 53: openshell.v1.DeleteSandboxTemplateResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	247, // 54: openshell.v1.BeginRootfsTarStagingRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	242, // 55: openshell.v1.BeginRootfsTarStagingResponse.expiration_time:type_name -> google.protobuf.Timestamp
-	247, // 56: openshell.v1.GetSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 57: openshell.v1.ListSandboxesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 58: openshell.v1.ListSandboxProvidersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 59: openshell.v1.AttachSandboxProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 60: openshell.v1.DetachSandboxProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 61: openshell.v1.DeleteSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 62: openshell.v1.StopSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 63: openshell.v1.StartSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	26,  // 64: openshell.v1.SandboxResponse.sandbox:type_name -> openshell.v1.Sandbox
-	26,  // 65: openshell.v1.ListSandboxesResponse.sandboxes:type_name -> openshell.v1.Sandbox
-	248, // 66: openshell.v1.ListSandboxProvidersResponse.providers:type_name -> openshell.datamodel.v1.Provider
-	26,  // 67: openshell.v1.AttachSandboxProviderResponse.sandbox:type_name -> openshell.v1.Sandbox
-	26,  // 68: openshell.v1.DetachSandboxProviderResponse.sandbox:type_name -> openshell.v1.Sandbox
-	8,   // 69: openshell.v1.DeleteSandboxResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	242, // 70: openshell.v1.CreateSshSessionResponse.expiration_time:type_name -> google.protobuf.Timestamp
-	247, // 71: openshell.v1.ExposeServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 72: openshell.v1.GetServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 73: openshell.v1.ListServicesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	74,  // 74: openshell.v1.ListServicesResponse.services:type_name -> openshell.v1.ServiceEndpointResponse
-	247, // 75: openshell.v1.DeleteServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	8,   // 76: openshell.v1.DeleteServiceResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	243, // 77: openshell.v1.ServiceEndpoint.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	73,  // 78: openshell.v1.ServiceEndpointResponse.endpoint:type_name -> openshell.v1.ServiceEndpoint
-	8,   // 79: openshell.v1.RevokeSshSessionResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	229, // 80: openshell.v1.ExecSandboxRequest.environment:type_name -> openshell.v1.ExecSandboxRequest.EnvironmentEntry
-	246, // 81: openshell.v1.ExecSandboxRequest.execution_timeout:type_name -> google.protobuf.Duration
-	78,  // 82: openshell.v1.ExecSandboxEvent.stdout:type_name -> openshell.v1.ExecSandboxStdout
-	79,  // 83: openshell.v1.ExecSandboxEvent.stderr:type_name -> openshell.v1.ExecSandboxStderr
-	80,  // 84: openshell.v1.ExecSandboxEvent.exit:type_name -> openshell.v1.ExecSandboxExit
-	169, // 85: openshell.v1.TcpForwardInit.ssh:type_name -> openshell.v1.SshRelayTarget
-	170, // 86: openshell.v1.TcpForwardInit.tcp:type_name -> openshell.v1.TcpRelayTarget
-	82,  // 87: openshell.v1.TcpForwardFrame.init:type_name -> openshell.v1.TcpForwardInit
-	77,  // 88: openshell.v1.ExecSandboxInput.start:type_name -> openshell.v1.ExecSandboxRequest
-	85,  // 89: openshell.v1.ExecSandboxInput.resize:type_name -> openshell.v1.ExecSandboxWindowResize
-	243, // 90: openshell.v1.SshSession.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	242, // 91: openshell.v1.SshSession.expiration_time:type_name -> google.protobuf.Timestamp
-	242, // 92: openshell.v1.WatchSandboxRequest.since_time:type_name -> google.protobuf.Timestamp
-	26,  // 93: openshell.v1.SandboxStreamEvent.sandbox:type_name -> openshell.v1.Sandbox
-	89,  // 94: openshell.v1.SandboxStreamEvent.log:type_name -> openshell.v1.SandboxLogLine
-	40,  // 95: openshell.v1.SandboxStreamEvent.event:type_name -> openshell.v1.PlatformEvent
-	90,  // 96: openshell.v1.SandboxStreamEvent.warning:type_name -> openshell.v1.SandboxStreamWarning
-	180, // 97: openshell.v1.SandboxStreamEvent.draft_policy_update:type_name -> openshell.v1.DraftPolicyUpdate
-	242, // 98: openshell.v1.SandboxLogLine.event_time:type_name -> google.protobuf.Timestamp
-	230, // 99: openshell.v1.SandboxLogLine.fields:type_name -> openshell.v1.SandboxLogLine.FieldsEntry
-	248, // 100: openshell.v1.CreateProviderRequest.provider:type_name -> openshell.datamodel.v1.Provider
-	247, // 101: openshell.v1.CreateProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 102: openshell.v1.GetProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 103: openshell.v1.ListProvidersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	248, // 104: openshell.v1.UpdateProviderRequest.provider:type_name -> openshell.datamodel.v1.Provider
-	231, // 105: openshell.v1.UpdateProviderRequest.credential_expiration_times:type_name -> openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry
-	247, // 106: openshell.v1.UpdateProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 107: openshell.v1.DeleteProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	248, // 108: openshell.v1.ProviderResponse.provider:type_name -> openshell.datamodel.v1.Provider
-	248, // 109: openshell.v1.ListProvidersResponse.providers:type_name -> openshell.datamodel.v1.Provider
-	119, // 110: openshell.v1.ProviderProfileImportItem.profile:type_name -> openshell.v1.ProviderProfile
-	246, // 111: openshell.v1.ProviderCredentialTokenGrant.cache_ttl:type_name -> google.protobuf.Duration
-	102, // 112: openshell.v1.ProviderCredentialTokenGrant.audience_overrides:type_name -> openshell.v1.ProviderCredentialTokenGrantAudienceOverride
-	1,   // 113: openshell.v1.ProviderCredentialTokenGrant.grant_type:type_name -> openshell.v1.ProviderCredentialTokenGrantType
-	103, // 114: openshell.v1.ProviderCredentialTokenGrant.subject_token:type_name -> openshell.v1.ProviderCredentialTokenGrantSubjectToken
-	108, // 115: openshell.v1.ProviderProfileCredential.refresh:type_name -> openshell.v1.ProviderCredentialRefresh
-	104, // 116: openshell.v1.ProviderProfileCredential.token_grant:type_name -> openshell.v1.ProviderCredentialTokenGrant
-	2,   // 117: openshell.v1.ProviderCredentialRefresh.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
-	246, // 118: openshell.v1.ProviderCredentialRefresh.refresh_before:type_name -> google.protobuf.Duration
-	246, // 119: openshell.v1.ProviderCredentialRefresh.max_lifetime:type_name -> google.protobuf.Duration
-	106, // 120: openshell.v1.ProviderCredentialRefresh.material:type_name -> openshell.v1.ProviderCredentialRefreshMaterial
-	107, // 121: openshell.v1.ProviderCredentialRefresh.additional_outputs:type_name -> openshell.v1.ProviderCredentialRefreshOutput
-	2,   // 122: openshell.v1.ProviderCredentialRefreshStatus.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
-	242, // 123: openshell.v1.ProviderCredentialRefreshStatus.expiration_time:type_name -> google.protobuf.Timestamp
-	242, // 124: openshell.v1.ProviderCredentialRefreshStatus.next_refresh_time:type_name -> google.protobuf.Timestamp
-	242, // 125: openshell.v1.ProviderCredentialRefreshStatus.last_refresh_time:type_name -> google.protobuf.Timestamp
-	7,   // 126: openshell.v1.ProviderCredentialRefreshStatus.recovery_action:type_name -> openshell.v1.ProviderCredentialRefreshRecoveryAction
-	242, // 127: openshell.v1.ProviderCredentialRefreshStatus.last_error_time:type_name -> google.protobuf.Timestamp
-	247, // 128: openshell.v1.GetProviderRefreshStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	109, // 129: openshell.v1.GetProviderRefreshStatusResponse.credentials:type_name -> openshell.v1.ProviderCredentialRefreshStatus
-	2,   // 130: openshell.v1.ConfigureProviderRefreshRequest.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
-	232, // 131: openshell.v1.ConfigureProviderRefreshRequest.material:type_name -> openshell.v1.ConfigureProviderRefreshRequest.MaterialEntry
-	242, // 132: openshell.v1.ConfigureProviderRefreshRequest.expiration_time:type_name -> google.protobuf.Timestamp
-	247, // 133: openshell.v1.ConfigureProviderRefreshRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	109, // 134: openshell.v1.ConfigureProviderRefreshResponse.status:type_name -> openshell.v1.ProviderCredentialRefreshStatus
-	247, // 135: openshell.v1.RotateProviderCredentialRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	109, // 136: openshell.v1.RotateProviderCredentialResponse.status:type_name -> openshell.v1.ProviderCredentialRefreshStatus
-	247, // 137: openshell.v1.DeleteProviderRefreshRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	8,   // 138: openshell.v1.DeleteProviderRefreshResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	3,   // 139: openshell.v1.ProviderProfile.category:type_name -> openshell.v1.ProviderProfileCategory
-	105, // 140: openshell.v1.ProviderProfile.credentials:type_name -> openshell.v1.ProviderProfileCredential
-	249, // 141: openshell.v1.ProviderProfile.endpoints:type_name -> openshell.policy.v1.NetworkEndpoint
-	250, // 142: openshell.v1.ProviderProfile.binaries:type_name -> openshell.policy.v1.NetworkBinary
-	110, // 143: openshell.v1.ProviderProfile.discovery:type_name -> openshell.v1.ProviderProfileDiscovery
-	233, // 144: openshell.v1.ProviderProfile.annotations:type_name -> openshell.v1.ProviderProfile.AnnotationsEntry
-	119, // 145: openshell.v1.ProviderProfileResponse.profile:type_name -> openshell.v1.ProviderProfile
-	119, // 146: openshell.v1.ListProviderProfilesResponse.profiles:type_name -> openshell.v1.ProviderProfile
-	100, // 147: openshell.v1.ImportProviderProfilesRequest.profiles:type_name -> openshell.v1.ProviderProfileImportItem
-	101, // 148: openshell.v1.ImportProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
-	119, // 149: openshell.v1.ImportProviderProfilesResponse.profiles:type_name -> openshell.v1.ProviderProfile
-	100, // 150: openshell.v1.UpdateProviderProfilesRequest.profile:type_name -> openshell.v1.ProviderProfileImportItem
-	101, // 151: openshell.v1.UpdateProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
-	119, // 152: openshell.v1.UpdateProviderProfilesResponse.profile:type_name -> openshell.v1.ProviderProfile
-	100, // 153: openshell.v1.LintProviderProfilesRequest.profiles:type_name -> openshell.v1.ProviderProfileImportItem
-	101, // 154: openshell.v1.LintProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
-	8,   // 155: openshell.v1.DeleteProviderResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	8,   // 156: openshell.v1.DeleteProviderProfileResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	132, // 157: openshell.v1.StaticCredentialBinding.endpoints:type_name -> openshell.v1.StaticCredentialEndpointBinding
-	234, // 158: openshell.v1.GetSandboxProviderEnvironmentResponse.environment:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.EnvironmentEntry
-	235, // 159: openshell.v1.GetSandboxProviderEnvironmentResponse.credential_expiration_times:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry
-	236, // 160: openshell.v1.GetSandboxProviderEnvironmentResponse.dynamic_credentials:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry
-	237, // 161: openshell.v1.GetSandboxProviderEnvironmentResponse.static_credential_bindings:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry
-	246, // 162: openshell.v1.ExchangeProviderSubjectTokenResponse.expires_after:type_name -> google.protobuf.Duration
-	244, // 163: openshell.v1.UpdateConfigRequest.policy:type_name -> openshell.policy.v1.SandboxPolicy
-	251, // 164: openshell.v1.UpdateConfigRequest.setting_value:type_name -> openshell.sandbox.v1.SettingValue
-	138, // 165: openshell.v1.UpdateConfigRequest.merge_operations:type_name -> openshell.v1.PolicyMergeOperation
-	238, // 166: openshell.v1.UpdateConfigRequest.annotations:type_name -> openshell.v1.UpdateConfigRequest.AnnotationsEntry
-	247, // 167: openshell.v1.UpdateConfigRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	139, // 168: openshell.v1.PolicyMergeOperation.add_rule:type_name -> openshell.v1.AddNetworkRule
-	140, // 169: openshell.v1.PolicyMergeOperation.remove_endpoint:type_name -> openshell.v1.RemoveNetworkEndpoint
-	141, // 170: openshell.v1.PolicyMergeOperation.remove_rule:type_name -> openshell.v1.RemoveNetworkRule
-	142, // 171: openshell.v1.PolicyMergeOperation.add_deny_rules:type_name -> openshell.v1.AddDenyRules
-	143, // 172: openshell.v1.PolicyMergeOperation.add_allow_rules:type_name -> openshell.v1.AddAllowRules
-	144, // 173: openshell.v1.PolicyMergeOperation.remove_binary:type_name -> openshell.v1.RemoveNetworkBinary
-	252, // 174: openshell.v1.AddNetworkRule.rule:type_name -> openshell.policy.v1.NetworkPolicyRule
-	253, // 175: openshell.v1.AddDenyRules.deny_rules:type_name -> openshell.policy.v1.L7DenyRule
-	254, // 176: openshell.v1.AddAllowRules.rules:type_name -> openshell.policy.v1.L7Rule
-	239, // 177: openshell.v1.UpdateConfigResponse.annotations:type_name -> openshell.v1.UpdateConfigResponse.AnnotationsEntry
-	247, // 178: openshell.v1.GetSandboxPolicyStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	152, // 179: openshell.v1.GetSandboxPolicyStatusResponse.revision:type_name -> openshell.v1.SandboxPolicyRevision
-	247, // 180: openshell.v1.ListSandboxPoliciesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	152, // 181: openshell.v1.ListSandboxPoliciesResponse.revisions:type_name -> openshell.v1.SandboxPolicyRevision
-	4,   // 182: openshell.v1.ReportPolicyStatusRequest.status:type_name -> openshell.v1.PolicyStatus
-	4,   // 183: openshell.v1.SandboxPolicyRevision.status:type_name -> openshell.v1.PolicyStatus
-	242, // 184: openshell.v1.SandboxPolicyRevision.created_time:type_name -> google.protobuf.Timestamp
-	242, // 185: openshell.v1.SandboxPolicyRevision.loaded_time:type_name -> google.protobuf.Timestamp
-	244, // 186: openshell.v1.SandboxPolicyRevision.policy:type_name -> openshell.policy.v1.SandboxPolicy
-	240, // 187: openshell.v1.SandboxPolicyRevision.provenance:type_name -> openshell.v1.SandboxPolicyRevision.ProvenanceEntry
-	242, // 188: openshell.v1.GetSandboxLogsRequest.since_time:type_name -> google.protobuf.Timestamp
-	247, // 189: openshell.v1.GetSandboxLogsRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	89,  // 190: openshell.v1.PushSandboxLogsRequest.logs:type_name -> openshell.v1.SandboxLogLine
-	89,  // 191: openshell.v1.GetSandboxLogsResponse.logs:type_name -> openshell.v1.SandboxLogLine
-	159, // 192: openshell.v1.SupervisorMessage.hello:type_name -> openshell.v1.SupervisorHello
-	162, // 193: openshell.v1.SupervisorMessage.heartbeat:type_name -> openshell.v1.SupervisorHeartbeat
-	173, // 194: openshell.v1.SupervisorMessage.relay_open_result:type_name -> openshell.v1.RelayOpenResult
-	174, // 195: openshell.v1.SupervisorMessage.relay_close:type_name -> openshell.v1.RelayClose
-	160, // 196: openshell.v1.GatewayMessage.session_accepted:type_name -> openshell.v1.SessionAccepted
-	161, // 197: openshell.v1.GatewayMessage.session_rejected:type_name -> openshell.v1.SessionRejected
-	163, // 198: openshell.v1.GatewayMessage.heartbeat:type_name -> openshell.v1.GatewayHeartbeat
-	168, // 199: openshell.v1.GatewayMessage.relay_open:type_name -> openshell.v1.RelayOpen
-	174, // 200: openshell.v1.GatewayMessage.relay_close:type_name -> openshell.v1.RelayClose
-	246, // 201: openshell.v1.SessionAccepted.heartbeat_interval:type_name -> google.protobuf.Duration
-	169, // 202: openshell.v1.RelayOpen.ssh:type_name -> openshell.v1.SshRelayTarget
-	170, // 203: openshell.v1.RelayOpen.tcp:type_name -> openshell.v1.TcpRelayTarget
-	171, // 204: openshell.v1.RelayFrame.init:type_name -> openshell.v1.RelayInit
-	242, // 205: openshell.v1.DenialSummary.first_seen_time:type_name -> google.protobuf.Timestamp
-	242, // 206: openshell.v1.DenialSummary.last_seen_time:type_name -> google.protobuf.Timestamp
-	175, // 207: openshell.v1.DenialSummary.l7_request_samples:type_name -> openshell.v1.L7RequestSample
-	177, // 208: openshell.v1.NetworkActivitySummary.denials_by_group:type_name -> openshell.v1.DenialGroupCount
-	252, // 209: openshell.v1.PolicyChunk.proposed_rule:type_name -> openshell.policy.v1.NetworkPolicyRule
-	242, // 210: openshell.v1.PolicyChunk.created_time:type_name -> google.protobuf.Timestamp
-	242, // 211: openshell.v1.PolicyChunk.decided_time:type_name -> google.protobuf.Timestamp
-	242, // 212: openshell.v1.PolicyChunk.first_seen_time:type_name -> google.protobuf.Timestamp
-	242, // 213: openshell.v1.PolicyChunk.last_seen_time:type_name -> google.protobuf.Timestamp
-	244, // 214: openshell.v1.PolicyChunk.current_effective_policy:type_name -> openshell.policy.v1.SandboxPolicy
-	244, // 215: openshell.v1.PolicyChunk.candidate_effective_policy:type_name -> openshell.policy.v1.SandboxPolicy
-	176, // 216: openshell.v1.SubmitPolicyAnalysisRequest.summaries:type_name -> openshell.v1.DenialSummary
-	179, // 217: openshell.v1.SubmitPolicyAnalysisRequest.proposed_chunks:type_name -> openshell.v1.PolicyChunk
-	178, // 218: openshell.v1.SubmitPolicyAnalysisRequest.network_activity_summaries:type_name -> openshell.v1.NetworkActivitySummary
-	247, // 219: openshell.v1.GetDraftPolicyRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	179, // 220: openshell.v1.GetDraftPolicyResponse.chunks:type_name -> openshell.v1.PolicyChunk
-	242, // 221: openshell.v1.GetDraftPolicyResponse.last_analyzed_time:type_name -> google.protobuf.Timestamp
-	247, // 222: openshell.v1.ApproveDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 223: openshell.v1.RejectDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	189, // 224: openshell.v1.ApproveAllDraftChunksRequest.approvals:type_name -> openshell.v1.DraftChunkApproval
-	247, // 225: openshell.v1.ApproveAllDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	252, // 226: openshell.v1.EditDraftChunkRequest.proposed_rule:type_name -> openshell.policy.v1.NetworkPolicyRule
-	247, // 227: openshell.v1.EditDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 228: openshell.v1.UndoDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 229: openshell.v1.ClearDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	247, // 230: openshell.v1.GetDraftHistoryRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	242, // 231: openshell.v1.DraftHistoryEntry.event_time:type_name -> google.protobuf.Timestamp
-	199, // 232: openshell.v1.GetDraftHistoryResponse.entries:type_name -> openshell.v1.DraftHistoryEntry
-	241, // 233: openshell.v1.CreateWorkspaceRequest.labels:type_name -> openshell.v1.CreateWorkspaceRequest.LabelsEntry
-	255, // 234: openshell.v1.CreateWorkspaceResponse.workspace:type_name -> openshell.datamodel.v1.Workspace
-	255, // 235: openshell.v1.GetWorkspaceResponse.workspace:type_name -> openshell.datamodel.v1.Workspace
-	255, // 236: openshell.v1.ListWorkspacesResponse.workspaces:type_name -> openshell.datamodel.v1.Workspace
-	8,   // 237: openshell.v1.DeleteWorkspaceResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	243, // 238: openshell.v1.WorkspaceMember.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	6,   // 239: openshell.v1.WorkspaceMember.role:type_name -> openshell.v1.WorkspaceRole
-	6,   // 240: openshell.v1.AddWorkspaceMemberRequest.role:type_name -> openshell.v1.WorkspaceRole
-	209, // 241: openshell.v1.AddWorkspaceMemberResponse.member:type_name -> openshell.v1.WorkspaceMember
-	8,   // 242: openshell.v1.RemoveWorkspaceMemberResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	209, // 243: openshell.v1.ListWorkspaceMembersResponse.members:type_name -> openshell.v1.WorkspaceMember
-	242, // 244: openshell.v1.ExtensionServiceCredential.expiration_time:type_name -> google.protobuf.Timestamp
-	9,   // 245: openshell.v1.EndpointObservation.result:type_name -> openshell.v1.EndpointResult
-	217, // 246: openshell.v1.ReportEndpointStatusRequest.observations:type_name -> openshell.v1.EndpointObservation
-	9,   // 247: openshell.v1.EndpointStatus.last_result:type_name -> openshell.v1.EndpointResult
-	242, // 248: openshell.v1.EndpointStatus.last_reported_time:type_name -> google.protobuf.Timestamp
-	242, // 249: openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry.value:type_name -> google.protobuf.Timestamp
-	242, // 250: openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry.value:type_name -> google.protobuf.Timestamp
-	105, // 251: openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry.value:type_name -> openshell.v1.ProviderProfileCredential
-	133, // 252: openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry.value:type_name -> openshell.v1.StaticCredentialBinding
-	14,  // 253: openshell.v1.OpenShell.Health:input_type -> openshell.v1.HealthRequest
-	16,  // 254: openshell.v1.OpenShell.GetCurrentUser:input_type -> openshell.v1.GetCurrentUserRequest
-	18,  // 255: openshell.v1.OpenShell.GetGatewayInfo:input_type -> openshell.v1.GetGatewayInfoRequest
-	41,  // 256: openshell.v1.OpenShell.CreateSandbox:input_type -> openshell.v1.CreateSandboxRequest
-	49,  // 257: openshell.v1.OpenShell.BeginRootfsTarStaging:input_type -> openshell.v1.BeginRootfsTarStagingRequest
-	51,  // 258: openshell.v1.OpenShell.GetSandbox:input_type -> openshell.v1.GetSandboxRequest
-	52,  // 259: openshell.v1.OpenShell.ListSandboxes:input_type -> openshell.v1.ListSandboxesRequest
-	42,  // 260: openshell.v1.OpenShell.CreateSandboxTemplate:input_type -> openshell.v1.CreateSandboxTemplateRequest
-	43,  // 261: openshell.v1.OpenShell.GetSandboxTemplate:input_type -> openshell.v1.GetSandboxTemplateRequest
-	44,  // 262: openshell.v1.OpenShell.ListSandboxTemplates:input_type -> openshell.v1.ListSandboxTemplatesRequest
-	45,  // 263: openshell.v1.OpenShell.DeleteSandboxTemplate:input_type -> openshell.v1.DeleteSandboxTemplateRequest
-	53,  // 264: openshell.v1.OpenShell.ListSandboxProviders:input_type -> openshell.v1.ListSandboxProvidersRequest
-	54,  // 265: openshell.v1.OpenShell.AttachSandboxProvider:input_type -> openshell.v1.AttachSandboxProviderRequest
-	55,  // 266: openshell.v1.OpenShell.DetachSandboxProvider:input_type -> openshell.v1.DetachSandboxProviderRequest
-	56,  // 267: openshell.v1.OpenShell.DeleteSandbox:input_type -> openshell.v1.DeleteSandboxRequest
-	57,  // 268: openshell.v1.OpenShell.StopSandbox:input_type -> openshell.v1.StopSandboxRequest
-	58,  // 269: openshell.v1.OpenShell.StartSandbox:input_type -> openshell.v1.StartSandboxRequest
-	65,  // 270: openshell.v1.OpenShell.CreateSshSession:input_type -> openshell.v1.CreateSshSessionRequest
-	67,  // 271: openshell.v1.OpenShell.ExposeService:input_type -> openshell.v1.ExposeServiceRequest
-	68,  // 272: openshell.v1.OpenShell.GetService:input_type -> openshell.v1.GetServiceRequest
-	69,  // 273: openshell.v1.OpenShell.ListServices:input_type -> openshell.v1.ListServicesRequest
-	71,  // 274: openshell.v1.OpenShell.DeleteService:input_type -> openshell.v1.DeleteServiceRequest
-	75,  // 275: openshell.v1.OpenShell.RevokeSshSession:input_type -> openshell.v1.RevokeSshSessionRequest
-	77,  // 276: openshell.v1.OpenShell.ExecSandbox:input_type -> openshell.v1.ExecSandboxRequest
-	83,  // 277: openshell.v1.OpenShell.ForwardTcp:input_type -> openshell.v1.TcpForwardFrame
-	84,  // 278: openshell.v1.OpenShell.ExecSandboxInteractive:input_type -> openshell.v1.ExecSandboxInput
-	91,  // 279: openshell.v1.OpenShell.CreateProvider:input_type -> openshell.v1.CreateProviderRequest
-	92,  // 280: openshell.v1.OpenShell.GetProvider:input_type -> openshell.v1.GetProviderRequest
-	93,  // 281: openshell.v1.OpenShell.ListProviders:input_type -> openshell.v1.ListProvidersRequest
-	98,  // 282: openshell.v1.OpenShell.ListProviderProfiles:input_type -> openshell.v1.ListProviderProfilesRequest
-	99,  // 283: openshell.v1.OpenShell.GetProviderProfile:input_type -> openshell.v1.GetProviderProfileRequest
-	122, // 284: openshell.v1.OpenShell.ImportProviderProfiles:input_type -> openshell.v1.ImportProviderProfilesRequest
-	124, // 285: openshell.v1.OpenShell.UpdateProviderProfiles:input_type -> openshell.v1.UpdateProviderProfilesRequest
-	126, // 286: openshell.v1.OpenShell.LintProviderProfiles:input_type -> openshell.v1.LintProviderProfilesRequest
-	94,  // 287: openshell.v1.OpenShell.UpdateProvider:input_type -> openshell.v1.UpdateProviderRequest
-	111, // 288: openshell.v1.OpenShell.GetProviderRefreshStatus:input_type -> openshell.v1.GetProviderRefreshStatusRequest
-	113, // 289: openshell.v1.OpenShell.ConfigureProviderRefresh:input_type -> openshell.v1.ConfigureProviderRefreshRequest
-	115, // 290: openshell.v1.OpenShell.RotateProviderCredential:input_type -> openshell.v1.RotateProviderCredentialRequest
-	117, // 291: openshell.v1.OpenShell.DeleteProviderRefresh:input_type -> openshell.v1.DeleteProviderRefreshRequest
-	95,  // 292: openshell.v1.OpenShell.DeleteProvider:input_type -> openshell.v1.DeleteProviderRequest
-	129, // 293: openshell.v1.OpenShell.DeleteProviderProfile:input_type -> openshell.v1.DeleteProviderProfileRequest
-	256, // 294: openshell.v1.OpenShell.GetSandboxConfig:input_type -> openshell.sandbox.v1.GetSandboxConfigRequest
-	257, // 295: openshell.v1.OpenShell.GetGatewayConfig:input_type -> openshell.sandbox.v1.GetGatewayConfigRequest
-	137, // 296: openshell.v1.OpenShell.UpdateConfig:input_type -> openshell.v1.UpdateConfigRequest
-	146, // 297: openshell.v1.OpenShell.GetSandboxPolicyStatus:input_type -> openshell.v1.GetSandboxPolicyStatusRequest
-	148, // 298: openshell.v1.OpenShell.ListSandboxPolicies:input_type -> openshell.v1.ListSandboxPoliciesRequest
-	150, // 299: openshell.v1.OpenShell.ReportPolicyStatus:input_type -> openshell.v1.ReportPolicyStatusRequest
-	218, // 300: openshell.v1.OpenShell.ReportEndpointStatus:input_type -> openshell.v1.ReportEndpointStatusRequest
-	131, // 301: openshell.v1.OpenShell.GetSandboxProviderEnvironment:input_type -> openshell.v1.GetSandboxProviderEnvironmentRequest
-	135, // 302: openshell.v1.OpenShell.ExchangeProviderSubjectToken:input_type -> openshell.v1.ExchangeProviderSubjectTokenRequest
-	153, // 303: openshell.v1.OpenShell.GetSandboxLogs:input_type -> openshell.v1.GetSandboxLogsRequest
-	154, // 304: openshell.v1.OpenShell.PushSandboxLogs:input_type -> openshell.v1.PushSandboxLogsRequest
-	157, // 305: openshell.v1.OpenShell.ConnectSupervisor:input_type -> openshell.v1.SupervisorMessage
-	164, // 306: openshell.v1.OpenShell.ReportMainProcessExit:input_type -> openshell.v1.ReportMainProcessExitRequest
-	166, // 307: openshell.v1.OpenShell.FinalizeMainProcessExit:input_type -> openshell.v1.FinalizeMainProcessExitRequest
-	172, // 308: openshell.v1.OpenShell.RelayStream:input_type -> openshell.v1.RelayFrame
-	87,  // 309: openshell.v1.OpenShell.WatchSandbox:input_type -> openshell.v1.WatchSandboxRequest
-	181, // 310: openshell.v1.OpenShell.SubmitPolicyAnalysis:input_type -> openshell.v1.SubmitPolicyAnalysisRequest
-	183, // 311: openshell.v1.OpenShell.GetDraftPolicy:input_type -> openshell.v1.GetDraftPolicyRequest
-	185, // 312: openshell.v1.OpenShell.ApproveDraftChunk:input_type -> openshell.v1.ApproveDraftChunkRequest
-	187, // 313: openshell.v1.OpenShell.RejectDraftChunk:input_type -> openshell.v1.RejectDraftChunkRequest
-	190, // 314: openshell.v1.OpenShell.ApproveAllDraftChunks:input_type -> openshell.v1.ApproveAllDraftChunksRequest
-	192, // 315: openshell.v1.OpenShell.EditDraftChunk:input_type -> openshell.v1.EditDraftChunkRequest
-	194, // 316: openshell.v1.OpenShell.UndoDraftChunk:input_type -> openshell.v1.UndoDraftChunkRequest
-	196, // 317: openshell.v1.OpenShell.ClearDraftChunks:input_type -> openshell.v1.ClearDraftChunksRequest
-	198, // 318: openshell.v1.OpenShell.GetDraftHistory:input_type -> openshell.v1.GetDraftHistoryRequest
-	10,  // 319: openshell.v1.OpenShell.IssueSandboxToken:input_type -> openshell.v1.IssueSandboxTokenRequest
-	12,  // 320: openshell.v1.OpenShell.RefreshSandboxToken:input_type -> openshell.v1.RefreshSandboxTokenRequest
-	201, // 321: openshell.v1.OpenShell.CreateWorkspace:input_type -> openshell.v1.CreateWorkspaceRequest
-	203, // 322: openshell.v1.OpenShell.GetWorkspace:input_type -> openshell.v1.GetWorkspaceRequest
-	205, // 323: openshell.v1.OpenShell.ListWorkspaces:input_type -> openshell.v1.ListWorkspacesRequest
-	207, // 324: openshell.v1.OpenShell.DeleteWorkspace:input_type -> openshell.v1.DeleteWorkspaceRequest
-	210, // 325: openshell.v1.OpenShell.AddWorkspaceMember:input_type -> openshell.v1.AddWorkspaceMemberRequest
-	212, // 326: openshell.v1.OpenShell.RemoveWorkspaceMember:input_type -> openshell.v1.RemoveWorkspaceMemberRequest
-	214, // 327: openshell.v1.OpenShell.ListWorkspaceMembers:input_type -> openshell.v1.ListWorkspaceMembersRequest
-	15,  // 328: openshell.v1.OpenShell.Health:output_type -> openshell.v1.HealthResponse
-	17,  // 329: openshell.v1.OpenShell.GetCurrentUser:output_type -> openshell.v1.GetCurrentUserResponse
-	19,  // 330: openshell.v1.OpenShell.GetGatewayInfo:output_type -> openshell.v1.GetGatewayInfoResponse
-	59,  // 331: openshell.v1.OpenShell.CreateSandbox:output_type -> openshell.v1.SandboxResponse
-	50,  // 332: openshell.v1.OpenShell.BeginRootfsTarStaging:output_type -> openshell.v1.BeginRootfsTarStagingResponse
-	59,  // 333: openshell.v1.OpenShell.GetSandbox:output_type -> openshell.v1.SandboxResponse
-	60,  // 334: openshell.v1.OpenShell.ListSandboxes:output_type -> openshell.v1.ListSandboxesResponse
-	46,  // 335: openshell.v1.OpenShell.CreateSandboxTemplate:output_type -> openshell.v1.SandboxTemplateResponse
-	46,  // 336: openshell.v1.OpenShell.GetSandboxTemplate:output_type -> openshell.v1.SandboxTemplateResponse
-	47,  // 337: openshell.v1.OpenShell.ListSandboxTemplates:output_type -> openshell.v1.ListSandboxTemplatesResponse
-	48,  // 338: openshell.v1.OpenShell.DeleteSandboxTemplate:output_type -> openshell.v1.DeleteSandboxTemplateResponse
-	61,  // 339: openshell.v1.OpenShell.ListSandboxProviders:output_type -> openshell.v1.ListSandboxProvidersResponse
-	62,  // 340: openshell.v1.OpenShell.AttachSandboxProvider:output_type -> openshell.v1.AttachSandboxProviderResponse
-	63,  // 341: openshell.v1.OpenShell.DetachSandboxProvider:output_type -> openshell.v1.DetachSandboxProviderResponse
-	64,  // 342: openshell.v1.OpenShell.DeleteSandbox:output_type -> openshell.v1.DeleteSandboxResponse
-	59,  // 343: openshell.v1.OpenShell.StopSandbox:output_type -> openshell.v1.SandboxResponse
-	59,  // 344: openshell.v1.OpenShell.StartSandbox:output_type -> openshell.v1.SandboxResponse
-	66,  // 345: openshell.v1.OpenShell.CreateSshSession:output_type -> openshell.v1.CreateSshSessionResponse
-	74,  // 346: openshell.v1.OpenShell.ExposeService:output_type -> openshell.v1.ServiceEndpointResponse
-	74,  // 347: openshell.v1.OpenShell.GetService:output_type -> openshell.v1.ServiceEndpointResponse
-	70,  // 348: openshell.v1.OpenShell.ListServices:output_type -> openshell.v1.ListServicesResponse
-	72,  // 349: openshell.v1.OpenShell.DeleteService:output_type -> openshell.v1.DeleteServiceResponse
-	76,  // 350: openshell.v1.OpenShell.RevokeSshSession:output_type -> openshell.v1.RevokeSshSessionResponse
-	81,  // 351: openshell.v1.OpenShell.ExecSandbox:output_type -> openshell.v1.ExecSandboxEvent
-	83,  // 352: openshell.v1.OpenShell.ForwardTcp:output_type -> openshell.v1.TcpForwardFrame
-	81,  // 353: openshell.v1.OpenShell.ExecSandboxInteractive:output_type -> openshell.v1.ExecSandboxEvent
-	96,  // 354: openshell.v1.OpenShell.CreateProvider:output_type -> openshell.v1.ProviderResponse
-	96,  // 355: openshell.v1.OpenShell.GetProvider:output_type -> openshell.v1.ProviderResponse
-	97,  // 356: openshell.v1.OpenShell.ListProviders:output_type -> openshell.v1.ListProvidersResponse
-	121, // 357: openshell.v1.OpenShell.ListProviderProfiles:output_type -> openshell.v1.ListProviderProfilesResponse
-	120, // 358: openshell.v1.OpenShell.GetProviderProfile:output_type -> openshell.v1.ProviderProfileResponse
-	123, // 359: openshell.v1.OpenShell.ImportProviderProfiles:output_type -> openshell.v1.ImportProviderProfilesResponse
-	125, // 360: openshell.v1.OpenShell.UpdateProviderProfiles:output_type -> openshell.v1.UpdateProviderProfilesResponse
-	127, // 361: openshell.v1.OpenShell.LintProviderProfiles:output_type -> openshell.v1.LintProviderProfilesResponse
-	96,  // 362: openshell.v1.OpenShell.UpdateProvider:output_type -> openshell.v1.ProviderResponse
-	112, // 363: openshell.v1.OpenShell.GetProviderRefreshStatus:output_type -> openshell.v1.GetProviderRefreshStatusResponse
-	114, // 364: openshell.v1.OpenShell.ConfigureProviderRefresh:output_type -> openshell.v1.ConfigureProviderRefreshResponse
-	116, // 365: openshell.v1.OpenShell.RotateProviderCredential:output_type -> openshell.v1.RotateProviderCredentialResponse
-	118, // 366: openshell.v1.OpenShell.DeleteProviderRefresh:output_type -> openshell.v1.DeleteProviderRefreshResponse
-	128, // 367: openshell.v1.OpenShell.DeleteProvider:output_type -> openshell.v1.DeleteProviderResponse
-	130, // 368: openshell.v1.OpenShell.DeleteProviderProfile:output_type -> openshell.v1.DeleteProviderProfileResponse
-	258, // 369: openshell.v1.OpenShell.GetSandboxConfig:output_type -> openshell.sandbox.v1.GetSandboxConfigResponse
-	259, // 370: openshell.v1.OpenShell.GetGatewayConfig:output_type -> openshell.sandbox.v1.GetGatewayConfigResponse
-	145, // 371: openshell.v1.OpenShell.UpdateConfig:output_type -> openshell.v1.UpdateConfigResponse
-	147, // 372: openshell.v1.OpenShell.GetSandboxPolicyStatus:output_type -> openshell.v1.GetSandboxPolicyStatusResponse
-	149, // 373: openshell.v1.OpenShell.ListSandboxPolicies:output_type -> openshell.v1.ListSandboxPoliciesResponse
-	151, // 374: openshell.v1.OpenShell.ReportPolicyStatus:output_type -> openshell.v1.ReportPolicyStatusResponse
-	219, // 375: openshell.v1.OpenShell.ReportEndpointStatus:output_type -> openshell.v1.ReportEndpointStatusResponse
-	134, // 376: openshell.v1.OpenShell.GetSandboxProviderEnvironment:output_type -> openshell.v1.GetSandboxProviderEnvironmentResponse
-	136, // 377: openshell.v1.OpenShell.ExchangeProviderSubjectToken:output_type -> openshell.v1.ExchangeProviderSubjectTokenResponse
-	156, // 378: openshell.v1.OpenShell.GetSandboxLogs:output_type -> openshell.v1.GetSandboxLogsResponse
-	155, // 379: openshell.v1.OpenShell.PushSandboxLogs:output_type -> openshell.v1.PushSandboxLogsResponse
-	158, // 380: openshell.v1.OpenShell.ConnectSupervisor:output_type -> openshell.v1.GatewayMessage
-	165, // 381: openshell.v1.OpenShell.ReportMainProcessExit:output_type -> openshell.v1.ReportMainProcessExitResponse
-	167, // 382: openshell.v1.OpenShell.FinalizeMainProcessExit:output_type -> openshell.v1.FinalizeMainProcessExitResponse
-	172, // 383: openshell.v1.OpenShell.RelayStream:output_type -> openshell.v1.RelayFrame
-	88,  // 384: openshell.v1.OpenShell.WatchSandbox:output_type -> openshell.v1.SandboxStreamEvent
-	182, // 385: openshell.v1.OpenShell.SubmitPolicyAnalysis:output_type -> openshell.v1.SubmitPolicyAnalysisResponse
-	184, // 386: openshell.v1.OpenShell.GetDraftPolicy:output_type -> openshell.v1.GetDraftPolicyResponse
-	186, // 387: openshell.v1.OpenShell.ApproveDraftChunk:output_type -> openshell.v1.ApproveDraftChunkResponse
-	188, // 388: openshell.v1.OpenShell.RejectDraftChunk:output_type -> openshell.v1.RejectDraftChunkResponse
-	191, // 389: openshell.v1.OpenShell.ApproveAllDraftChunks:output_type -> openshell.v1.ApproveAllDraftChunksResponse
-	193, // 390: openshell.v1.OpenShell.EditDraftChunk:output_type -> openshell.v1.EditDraftChunkResponse
-	195, // 391: openshell.v1.OpenShell.UndoDraftChunk:output_type -> openshell.v1.UndoDraftChunkResponse
-	197, // 392: openshell.v1.OpenShell.ClearDraftChunks:output_type -> openshell.v1.ClearDraftChunksResponse
-	200, // 393: openshell.v1.OpenShell.GetDraftHistory:output_type -> openshell.v1.GetDraftHistoryResponse
-	11,  // 394: openshell.v1.OpenShell.IssueSandboxToken:output_type -> openshell.v1.IssueSandboxTokenResponse
-	13,  // 395: openshell.v1.OpenShell.RefreshSandboxToken:output_type -> openshell.v1.RefreshSandboxTokenResponse
-	202, // 396: openshell.v1.OpenShell.CreateWorkspace:output_type -> openshell.v1.CreateWorkspaceResponse
-	204, // 397: openshell.v1.OpenShell.GetWorkspace:output_type -> openshell.v1.GetWorkspaceResponse
-	206, // 398: openshell.v1.OpenShell.ListWorkspaces:output_type -> openshell.v1.ListWorkspacesResponse
-	208, // 399: openshell.v1.OpenShell.DeleteWorkspace:output_type -> openshell.v1.DeleteWorkspaceResponse
-	211, // 400: openshell.v1.OpenShell.AddWorkspaceMember:output_type -> openshell.v1.AddWorkspaceMemberResponse
-	213, // 401: openshell.v1.OpenShell.RemoveWorkspaceMember:output_type -> openshell.v1.RemoveWorkspaceMemberResponse
-	215, // 402: openshell.v1.OpenShell.ListWorkspaceMembers:output_type -> openshell.v1.ListWorkspaceMembersResponse
-	328, // [328:403] is the sub-list for method output_type
-	253, // [253:328] is the sub-list for method input_type
-	253, // [253:253] is the sub-list for extension type_name
-	253, // [253:253] is the sub-list for extension extendee
-	0,   // [0:253] is the sub-list for field type_name
+	242, // 38: openshell.v1.SandboxStatus.endpoint_statuses:type_name -> openshell.v1.EndpointStatus
+	171, // 39: openshell.v1.SandboxStatus.configuration_admission:type_name -> openshell.v1.SandboxConfigurationAdmission
+	243, // 40: openshell.v1.SandboxStatus.provisioning:type_name -> openshell.v1.SandboxProvisioning
+	265, // 41: openshell.v1.SandboxCondition.transition_time:type_name -> google.protobuf.Timestamp
+	265, // 42: openshell.v1.PlatformEvent.event_time:type_name -> google.protobuf.Timestamp
+	249, // 43: openshell.v1.PlatformEvent.metadata:type_name -> openshell.v1.PlatformEvent.MetadataEntry
+	34,  // 44: openshell.v1.CreateSandboxRequest.spec:type_name -> openshell.v1.SandboxSpec
+	250, // 45: openshell.v1.CreateSandboxRequest.labels:type_name -> openshell.v1.CreateSandboxRequest.LabelsEntry
+	251, // 46: openshell.v1.CreateSandboxRequest.annotations:type_name -> openshell.v1.CreateSandboxRequest.AnnotationsEntry
+	270, // 47: openshell.v1.CreateSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	38,  // 48: openshell.v1.CreateSandboxTemplateRequest.template:type_name -> openshell.v1.SandboxWorkloadTemplate
+	270, // 49: openshell.v1.CreateSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 50: openshell.v1.GetSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 51: openshell.v1.ListSandboxTemplatesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 52: openshell.v1.DeleteSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	38,  // 53: openshell.v1.SandboxTemplateResponse.template:type_name -> openshell.v1.SandboxWorkloadTemplate
+	38,  // 54: openshell.v1.ListSandboxTemplatesResponse.templates:type_name -> openshell.v1.SandboxWorkloadTemplate
+	15,  // 55: openshell.v1.DeleteSandboxTemplateResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	270, // 56: openshell.v1.BeginRootfsTarStagingRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	265, // 57: openshell.v1.BeginRootfsTarStagingResponse.expiration_time:type_name -> google.protobuf.Timestamp
+	270, // 58: openshell.v1.GetSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 59: openshell.v1.ListSandboxesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 60: openshell.v1.ListSandboxProvidersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 61: openshell.v1.AttachSandboxProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 62: openshell.v1.DetachSandboxProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 63: openshell.v1.DeleteSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 64: openshell.v1.StopSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 65: openshell.v1.StartSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	33,  // 66: openshell.v1.SandboxResponse.sandbox:type_name -> openshell.v1.Sandbox
+	33,  // 67: openshell.v1.ListSandboxesResponse.sandboxes:type_name -> openshell.v1.Sandbox
+	271, // 68: openshell.v1.ListSandboxProvidersResponse.providers:type_name -> openshell.datamodel.v1.Provider
+	33,  // 69: openshell.v1.AttachSandboxProviderResponse.sandbox:type_name -> openshell.v1.Sandbox
+	75,  // 70: openshell.v1.AttachSandboxProviderResponse.receipt:type_name -> openshell.v1.ProviderMutationReceipt
+	33,  // 71: openshell.v1.DetachSandboxProviderResponse.sandbox:type_name -> openshell.v1.Sandbox
+	75,  // 72: openshell.v1.DetachSandboxProviderResponse.receipt:type_name -> openshell.v1.ProviderMutationReceipt
+	73,  // 73: openshell.v1.ConfigSnapshotRevision.sandbox_config:type_name -> openshell.v1.SandboxConfigRevision
+	71,  // 74: openshell.v1.ConfigSnapshotRevision.provider_target:type_name -> openshell.v1.ProviderDesiredIdentity
+	272, // 75: openshell.v1.SandboxConfigRevision.policy_source:type_name -> openshell.sandbox.v1.PolicySource
+	4,   // 76: openshell.v1.ConfigUpdateOperation.component:type_name -> openshell.v1.ConfigComponent
+	72,  // 77: openshell.v1.ConfigUpdateOperation.target_revision:type_name -> openshell.v1.ConfigSnapshotRevision
+	6,   // 78: openshell.v1.ConfigUpdateOperation.state:type_name -> openshell.v1.ConfigUpdateOperationState
+	5,   // 79: openshell.v1.ConfigUpdateOperation.outcome:type_name -> openshell.v1.ConfigApplyOutcome
+	265, // 80: openshell.v1.ConfigUpdateOperation.created_time:type_name -> google.protobuf.Timestamp
+	265, // 81: openshell.v1.ConfigUpdateOperation.updated_time:type_name -> google.protobuf.Timestamp
+	265, // 82: openshell.v1.ConfigUpdateOperation.completed_time:type_name -> google.protobuf.Timestamp
+	1,   // 83: openshell.v1.ProviderMutationReceipt.kind:type_name -> openshell.v1.ProviderMutationKind
+	71,  // 84: openshell.v1.ProviderMutationReceipt.desired:type_name -> openshell.v1.ProviderDesiredIdentity
+	265, // 85: openshell.v1.ProviderMutationReceipt.persisted_time:type_name -> google.protobuf.Timestamp
+	3,   // 86: openshell.v1.ProviderReadinessObservation.reason:type_name -> openshell.v1.ProviderReadinessReason
+	75,  // 87: openshell.v1.ProviderReadinessStatus.receipt:type_name -> openshell.v1.ProviderMutationReceipt
+	2,   // 88: openshell.v1.ProviderReadinessStatus.state:type_name -> openshell.v1.ProviderReadinessState
+	3,   // 89: openshell.v1.ProviderReadinessStatus.reason:type_name -> openshell.v1.ProviderReadinessReason
+	76,  // 90: openshell.v1.ProviderReadinessStatus.observed:type_name -> openshell.v1.ProviderReadinessObservation
+	265, // 91: openshell.v1.ProviderReadinessStatus.observed_time:type_name -> google.protobuf.Timestamp
+	265, // 92: openshell.v1.ProviderReadinessStatus.evaluated_time:type_name -> google.protobuf.Timestamp
+	74,  // 93: openshell.v1.ProviderReadinessStatus.operation:type_name -> openshell.v1.ConfigUpdateOperation
+	270, // 94: openshell.v1.GetSandboxProviderStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	77,  // 95: openshell.v1.GetSandboxProviderStatusResponse.status:type_name -> openshell.v1.ProviderReadinessStatus
+	76,  // 96: openshell.v1.ReportProviderReadinessRequest.observation:type_name -> openshell.v1.ProviderReadinessObservation
+	269, // 97: openshell.v1.ReportProviderReadinessResponse.report_interval:type_name -> google.protobuf.Duration
+	269, // 98: openshell.v1.ReportProviderReadinessResponse.observation_ttl:type_name -> google.protobuf.Duration
+	15,  // 99: openshell.v1.DeleteSandboxResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	265, // 100: openshell.v1.CreateSshSessionResponse.expiration_time:type_name -> google.protobuf.Timestamp
+	270, // 101: openshell.v1.ExposeServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 102: openshell.v1.GetServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 103: openshell.v1.ListServicesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	92,  // 104: openshell.v1.ListServicesResponse.services:type_name -> openshell.v1.ServiceEndpointResponse
+	270, // 105: openshell.v1.DeleteServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	15,  // 106: openshell.v1.DeleteServiceResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	266, // 107: openshell.v1.ServiceEndpoint.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	91,  // 108: openshell.v1.ServiceEndpointResponse.endpoint:type_name -> openshell.v1.ServiceEndpoint
+	15,  // 109: openshell.v1.RevokeSshSessionResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	252, // 110: openshell.v1.ExecSandboxRequest.environment:type_name -> openshell.v1.ExecSandboxRequest.EnvironmentEntry
+	269, // 111: openshell.v1.ExecSandboxRequest.execution_timeout:type_name -> google.protobuf.Duration
+	96,  // 112: openshell.v1.ExecSandboxEvent.stdout:type_name -> openshell.v1.ExecSandboxStdout
+	97,  // 113: openshell.v1.ExecSandboxEvent.stderr:type_name -> openshell.v1.ExecSandboxStderr
+	98,  // 114: openshell.v1.ExecSandboxEvent.exit:type_name -> openshell.v1.ExecSandboxExit
+	191, // 115: openshell.v1.TcpForwardInit.ssh:type_name -> openshell.v1.SshRelayTarget
+	192, // 116: openshell.v1.TcpForwardInit.tcp:type_name -> openshell.v1.TcpRelayTarget
+	100, // 117: openshell.v1.TcpForwardFrame.init:type_name -> openshell.v1.TcpForwardInit
+	95,  // 118: openshell.v1.ExecSandboxInput.start:type_name -> openshell.v1.ExecSandboxRequest
+	103, // 119: openshell.v1.ExecSandboxInput.resize:type_name -> openshell.v1.ExecSandboxWindowResize
+	266, // 120: openshell.v1.SshSession.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	265, // 121: openshell.v1.SshSession.expiration_time:type_name -> google.protobuf.Timestamp
+	265, // 122: openshell.v1.WatchSandboxRequest.since_time:type_name -> google.protobuf.Timestamp
+	33,  // 123: openshell.v1.SandboxStreamEvent.sandbox:type_name -> openshell.v1.Sandbox
+	107, // 124: openshell.v1.SandboxStreamEvent.log:type_name -> openshell.v1.SandboxLogLine
+	47,  // 125: openshell.v1.SandboxStreamEvent.event:type_name -> openshell.v1.PlatformEvent
+	108, // 126: openshell.v1.SandboxStreamEvent.warning:type_name -> openshell.v1.SandboxStreamWarning
+	202, // 127: openshell.v1.SandboxStreamEvent.draft_policy_update:type_name -> openshell.v1.DraftPolicyUpdate
+	265, // 128: openshell.v1.SandboxLogLine.event_time:type_name -> google.protobuf.Timestamp
+	253, // 129: openshell.v1.SandboxLogLine.fields:type_name -> openshell.v1.SandboxLogLine.FieldsEntry
+	271, // 130: openshell.v1.CreateProviderRequest.provider:type_name -> openshell.datamodel.v1.Provider
+	270, // 131: openshell.v1.CreateProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 132: openshell.v1.GetProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 133: openshell.v1.ListProvidersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	271, // 134: openshell.v1.UpdateProviderRequest.provider:type_name -> openshell.datamodel.v1.Provider
+	254, // 135: openshell.v1.UpdateProviderRequest.credential_expiration_times:type_name -> openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry
+	270, // 136: openshell.v1.UpdateProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 137: openshell.v1.DeleteProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	271, // 138: openshell.v1.ProviderResponse.provider:type_name -> openshell.datamodel.v1.Provider
+	75,  // 139: openshell.v1.ProviderResponse.target_receipts:type_name -> openshell.v1.ProviderMutationReceipt
+	271, // 140: openshell.v1.ListProvidersResponse.providers:type_name -> openshell.datamodel.v1.Provider
+	137, // 141: openshell.v1.ProviderProfileImportItem.profile:type_name -> openshell.v1.ProviderProfile
+	269, // 142: openshell.v1.ProviderCredentialTokenGrant.cache_ttl:type_name -> google.protobuf.Duration
+	120, // 143: openshell.v1.ProviderCredentialTokenGrant.audience_overrides:type_name -> openshell.v1.ProviderCredentialTokenGrantAudienceOverride
+	7,   // 144: openshell.v1.ProviderCredentialTokenGrant.grant_type:type_name -> openshell.v1.ProviderCredentialTokenGrantType
+	121, // 145: openshell.v1.ProviderCredentialTokenGrant.subject_token:type_name -> openshell.v1.ProviderCredentialTokenGrantSubjectToken
+	126, // 146: openshell.v1.ProviderProfileCredential.refresh:type_name -> openshell.v1.ProviderCredentialRefresh
+	122, // 147: openshell.v1.ProviderProfileCredential.token_grant:type_name -> openshell.v1.ProviderCredentialTokenGrant
+	8,   // 148: openshell.v1.ProviderCredentialRefresh.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
+	269, // 149: openshell.v1.ProviderCredentialRefresh.refresh_before:type_name -> google.protobuf.Duration
+	269, // 150: openshell.v1.ProviderCredentialRefresh.max_lifetime:type_name -> google.protobuf.Duration
+	124, // 151: openshell.v1.ProviderCredentialRefresh.material:type_name -> openshell.v1.ProviderCredentialRefreshMaterial
+	125, // 152: openshell.v1.ProviderCredentialRefresh.additional_outputs:type_name -> openshell.v1.ProviderCredentialRefreshOutput
+	8,   // 153: openshell.v1.ProviderCredentialRefreshStatus.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
+	265, // 154: openshell.v1.ProviderCredentialRefreshStatus.expiration_time:type_name -> google.protobuf.Timestamp
+	265, // 155: openshell.v1.ProviderCredentialRefreshStatus.next_refresh_time:type_name -> google.protobuf.Timestamp
+	265, // 156: openshell.v1.ProviderCredentialRefreshStatus.last_refresh_time:type_name -> google.protobuf.Timestamp
+	14,  // 157: openshell.v1.ProviderCredentialRefreshStatus.recovery_action:type_name -> openshell.v1.ProviderCredentialRefreshRecoveryAction
+	265, // 158: openshell.v1.ProviderCredentialRefreshStatus.last_error_time:type_name -> google.protobuf.Timestamp
+	270, // 159: openshell.v1.GetProviderRefreshStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	127, // 160: openshell.v1.GetProviderRefreshStatusResponse.credentials:type_name -> openshell.v1.ProviderCredentialRefreshStatus
+	8,   // 161: openshell.v1.ConfigureProviderRefreshRequest.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
+	255, // 162: openshell.v1.ConfigureProviderRefreshRequest.material:type_name -> openshell.v1.ConfigureProviderRefreshRequest.MaterialEntry
+	265, // 163: openshell.v1.ConfigureProviderRefreshRequest.expiration_time:type_name -> google.protobuf.Timestamp
+	270, // 164: openshell.v1.ConfigureProviderRefreshRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	127, // 165: openshell.v1.ConfigureProviderRefreshResponse.status:type_name -> openshell.v1.ProviderCredentialRefreshStatus
+	270, // 166: openshell.v1.RotateProviderCredentialRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	127, // 167: openshell.v1.RotateProviderCredentialResponse.status:type_name -> openshell.v1.ProviderCredentialRefreshStatus
+	270, // 168: openshell.v1.DeleteProviderRefreshRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	15,  // 169: openshell.v1.DeleteProviderRefreshResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	9,   // 170: openshell.v1.ProviderProfile.category:type_name -> openshell.v1.ProviderProfileCategory
+	123, // 171: openshell.v1.ProviderProfile.credentials:type_name -> openshell.v1.ProviderProfileCredential
+	273, // 172: openshell.v1.ProviderProfile.endpoints:type_name -> openshell.policy.v1.NetworkEndpoint
+	274, // 173: openshell.v1.ProviderProfile.binaries:type_name -> openshell.policy.v1.NetworkBinary
+	128, // 174: openshell.v1.ProviderProfile.discovery:type_name -> openshell.v1.ProviderProfileDiscovery
+	256, // 175: openshell.v1.ProviderProfile.annotations:type_name -> openshell.v1.ProviderProfile.AnnotationsEntry
+	137, // 176: openshell.v1.ProviderProfileResponse.profile:type_name -> openshell.v1.ProviderProfile
+	137, // 177: openshell.v1.ListProviderProfilesResponse.profiles:type_name -> openshell.v1.ProviderProfile
+	118, // 178: openshell.v1.ImportProviderProfilesRequest.profiles:type_name -> openshell.v1.ProviderProfileImportItem
+	119, // 179: openshell.v1.ImportProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
+	137, // 180: openshell.v1.ImportProviderProfilesResponse.profiles:type_name -> openshell.v1.ProviderProfile
+	118, // 181: openshell.v1.UpdateProviderProfilesRequest.profile:type_name -> openshell.v1.ProviderProfileImportItem
+	119, // 182: openshell.v1.UpdateProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
+	137, // 183: openshell.v1.UpdateProviderProfilesResponse.profile:type_name -> openshell.v1.ProviderProfile
+	118, // 184: openshell.v1.LintProviderProfilesRequest.profiles:type_name -> openshell.v1.ProviderProfileImportItem
+	119, // 185: openshell.v1.LintProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
+	15,  // 186: openshell.v1.DeleteProviderResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	15,  // 187: openshell.v1.DeleteProviderProfileResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	150, // 188: openshell.v1.StaticCredentialBinding.endpoints:type_name -> openshell.v1.StaticCredentialEndpointBinding
+	257, // 189: openshell.v1.GetSandboxProviderEnvironmentResponse.environment:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.EnvironmentEntry
+	258, // 190: openshell.v1.GetSandboxProviderEnvironmentResponse.credential_expiration_times:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry
+	259, // 191: openshell.v1.GetSandboxProviderEnvironmentResponse.dynamic_credentials:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry
+	260, // 192: openshell.v1.GetSandboxProviderEnvironmentResponse.static_credential_bindings:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry
+	3,   // 193: openshell.v1.GetSandboxProviderEnvironmentResponse.readiness_reason:type_name -> openshell.v1.ProviderReadinessReason
+	269, // 194: openshell.v1.ExchangeProviderSubjectTokenResponse.expires_after:type_name -> google.protobuf.Duration
+	267, // 195: openshell.v1.UpdateConfigRequest.policy:type_name -> openshell.policy.v1.SandboxPolicy
+	275, // 196: openshell.v1.UpdateConfigRequest.setting_value:type_name -> openshell.sandbox.v1.SettingValue
+	156, // 197: openshell.v1.UpdateConfigRequest.merge_operations:type_name -> openshell.v1.PolicyMergeOperation
+	261, // 198: openshell.v1.UpdateConfigRequest.annotations:type_name -> openshell.v1.UpdateConfigRequest.AnnotationsEntry
+	270, // 199: openshell.v1.UpdateConfigRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	157, // 200: openshell.v1.PolicyMergeOperation.add_rule:type_name -> openshell.v1.AddNetworkRule
+	158, // 201: openshell.v1.PolicyMergeOperation.remove_endpoint:type_name -> openshell.v1.RemoveNetworkEndpoint
+	159, // 202: openshell.v1.PolicyMergeOperation.remove_rule:type_name -> openshell.v1.RemoveNetworkRule
+	161, // 203: openshell.v1.PolicyMergeOperation.add_deny_rules:type_name -> openshell.v1.AddDenyRules
+	162, // 204: openshell.v1.PolicyMergeOperation.add_allow_rules:type_name -> openshell.v1.AddAllowRules
+	163, // 205: openshell.v1.PolicyMergeOperation.remove_binary:type_name -> openshell.v1.RemoveNetworkBinary
+	276, // 206: openshell.v1.AddNetworkRule.rule:type_name -> openshell.policy.v1.NetworkPolicyRule
+	274, // 207: openshell.v1.L7RuleTarget.binaries:type_name -> openshell.policy.v1.NetworkBinary
+	277, // 208: openshell.v1.AddDenyRules.deny_rules:type_name -> openshell.policy.v1.L7DenyRule
+	160, // 209: openshell.v1.AddDenyRules.target:type_name -> openshell.v1.L7RuleTarget
+	278, // 210: openshell.v1.AddAllowRules.rules:type_name -> openshell.policy.v1.L7Rule
+	160, // 211: openshell.v1.AddAllowRules.target:type_name -> openshell.v1.L7RuleTarget
+	262, // 212: openshell.v1.UpdateConfigResponse.annotations:type_name -> openshell.v1.UpdateConfigResponse.AnnotationsEntry
+	270, // 213: openshell.v1.GetSandboxPolicyStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	174, // 214: openshell.v1.GetSandboxPolicyStatusResponse.revision:type_name -> openshell.v1.SandboxPolicyRevision
+	270, // 215: openshell.v1.ListSandboxPoliciesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	174, // 216: openshell.v1.ListSandboxPoliciesResponse.revisions:type_name -> openshell.v1.SandboxPolicyRevision
+	11,  // 217: openshell.v1.ReportPolicyStatusRequest.status:type_name -> openshell.v1.PolicyStatus
+	10,  // 218: openshell.v1.SandboxConfigurationAdmission.state:type_name -> openshell.v1.ConfigurationAdmissionState
+	171, // 219: openshell.v1.ReportSandboxConfigurationRequest.admission:type_name -> openshell.v1.SandboxConfigurationAdmission
+	11,  // 220: openshell.v1.SandboxPolicyRevision.status:type_name -> openshell.v1.PolicyStatus
+	265, // 221: openshell.v1.SandboxPolicyRevision.created_time:type_name -> google.protobuf.Timestamp
+	265, // 222: openshell.v1.SandboxPolicyRevision.loaded_time:type_name -> google.protobuf.Timestamp
+	267, // 223: openshell.v1.SandboxPolicyRevision.policy:type_name -> openshell.policy.v1.SandboxPolicy
+	263, // 224: openshell.v1.SandboxPolicyRevision.provenance:type_name -> openshell.v1.SandboxPolicyRevision.ProvenanceEntry
+	265, // 225: openshell.v1.GetSandboxLogsRequest.since_time:type_name -> google.protobuf.Timestamp
+	270, // 226: openshell.v1.GetSandboxLogsRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	107, // 227: openshell.v1.PushSandboxLogsRequest.logs:type_name -> openshell.v1.SandboxLogLine
+	107, // 228: openshell.v1.GetSandboxLogsResponse.logs:type_name -> openshell.v1.SandboxLogLine
+	181, // 229: openshell.v1.SupervisorMessage.hello:type_name -> openshell.v1.SupervisorHello
+	184, // 230: openshell.v1.SupervisorMessage.heartbeat:type_name -> openshell.v1.SupervisorHeartbeat
+	195, // 231: openshell.v1.SupervisorMessage.relay_open_result:type_name -> openshell.v1.RelayOpenResult
+	196, // 232: openshell.v1.SupervisorMessage.relay_close:type_name -> openshell.v1.RelayClose
+	182, // 233: openshell.v1.GatewayMessage.session_accepted:type_name -> openshell.v1.SessionAccepted
+	183, // 234: openshell.v1.GatewayMessage.session_rejected:type_name -> openshell.v1.SessionRejected
+	185, // 235: openshell.v1.GatewayMessage.heartbeat:type_name -> openshell.v1.GatewayHeartbeat
+	190, // 236: openshell.v1.GatewayMessage.relay_open:type_name -> openshell.v1.RelayOpen
+	196, // 237: openshell.v1.GatewayMessage.relay_close:type_name -> openshell.v1.RelayClose
+	269, // 238: openshell.v1.SessionAccepted.heartbeat_interval:type_name -> google.protobuf.Duration
+	191, // 239: openshell.v1.RelayOpen.ssh:type_name -> openshell.v1.SshRelayTarget
+	192, // 240: openshell.v1.RelayOpen.tcp:type_name -> openshell.v1.TcpRelayTarget
+	193, // 241: openshell.v1.RelayFrame.init:type_name -> openshell.v1.RelayInit
+	265, // 242: openshell.v1.DenialSummary.first_seen_time:type_name -> google.protobuf.Timestamp
+	265, // 243: openshell.v1.DenialSummary.last_seen_time:type_name -> google.protobuf.Timestamp
+	197, // 244: openshell.v1.DenialSummary.l7_request_samples:type_name -> openshell.v1.L7RequestSample
+	199, // 245: openshell.v1.NetworkActivitySummary.denials_by_group:type_name -> openshell.v1.DenialGroupCount
+	276, // 246: openshell.v1.PolicyChunk.proposed_rule:type_name -> openshell.policy.v1.NetworkPolicyRule
+	265, // 247: openshell.v1.PolicyChunk.created_time:type_name -> google.protobuf.Timestamp
+	265, // 248: openshell.v1.PolicyChunk.decided_time:type_name -> google.protobuf.Timestamp
+	265, // 249: openshell.v1.PolicyChunk.first_seen_time:type_name -> google.protobuf.Timestamp
+	265, // 250: openshell.v1.PolicyChunk.last_seen_time:type_name -> google.protobuf.Timestamp
+	267, // 251: openshell.v1.PolicyChunk.current_effective_policy:type_name -> openshell.policy.v1.SandboxPolicy
+	267, // 252: openshell.v1.PolicyChunk.candidate_effective_policy:type_name -> openshell.policy.v1.SandboxPolicy
+	198, // 253: openshell.v1.SubmitPolicyAnalysisRequest.summaries:type_name -> openshell.v1.DenialSummary
+	201, // 254: openshell.v1.SubmitPolicyAnalysisRequest.proposed_chunks:type_name -> openshell.v1.PolicyChunk
+	200, // 255: openshell.v1.SubmitPolicyAnalysisRequest.network_activity_summaries:type_name -> openshell.v1.NetworkActivitySummary
+	270, // 256: openshell.v1.GetDraftPolicyRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	201, // 257: openshell.v1.GetDraftPolicyResponse.chunks:type_name -> openshell.v1.PolicyChunk
+	265, // 258: openshell.v1.GetDraftPolicyResponse.last_analyzed_time:type_name -> google.protobuf.Timestamp
+	270, // 259: openshell.v1.ApproveDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 260: openshell.v1.RejectDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	211, // 261: openshell.v1.ApproveAllDraftChunksRequest.approvals:type_name -> openshell.v1.DraftChunkApproval
+	270, // 262: openshell.v1.ApproveAllDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	276, // 263: openshell.v1.EditDraftChunkRequest.proposed_rule:type_name -> openshell.policy.v1.NetworkPolicyRule
+	270, // 264: openshell.v1.EditDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 265: openshell.v1.UndoDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 266: openshell.v1.ClearDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	270, // 267: openshell.v1.GetDraftHistoryRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	265, // 268: openshell.v1.DraftHistoryEntry.event_time:type_name -> google.protobuf.Timestamp
+	221, // 269: openshell.v1.GetDraftHistoryResponse.entries:type_name -> openshell.v1.DraftHistoryEntry
+	264, // 270: openshell.v1.CreateWorkspaceRequest.labels:type_name -> openshell.v1.CreateWorkspaceRequest.LabelsEntry
+	279, // 271: openshell.v1.CreateWorkspaceResponse.workspace:type_name -> openshell.datamodel.v1.Workspace
+	279, // 272: openshell.v1.GetWorkspaceResponse.workspace:type_name -> openshell.datamodel.v1.Workspace
+	279, // 273: openshell.v1.ListWorkspacesResponse.workspaces:type_name -> openshell.datamodel.v1.Workspace
+	15,  // 274: openshell.v1.DeleteWorkspaceResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	266, // 275: openshell.v1.WorkspaceMember.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	13,  // 276: openshell.v1.WorkspaceMember.role:type_name -> openshell.v1.WorkspaceRole
+	13,  // 277: openshell.v1.AddWorkspaceMemberRequest.role:type_name -> openshell.v1.WorkspaceRole
+	231, // 278: openshell.v1.AddWorkspaceMemberResponse.member:type_name -> openshell.v1.WorkspaceMember
+	15,  // 279: openshell.v1.RemoveWorkspaceMemberResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	231, // 280: openshell.v1.ListWorkspaceMembersResponse.members:type_name -> openshell.v1.WorkspaceMember
+	265, // 281: openshell.v1.ExtensionServiceCredential.expiration_time:type_name -> google.protobuf.Timestamp
+	16,  // 282: openshell.v1.EndpointObservation.result:type_name -> openshell.v1.EndpointResult
+	239, // 283: openshell.v1.ReportEndpointStatusRequest.observations:type_name -> openshell.v1.EndpointObservation
+	16,  // 284: openshell.v1.EndpointStatus.last_result:type_name -> openshell.v1.EndpointResult
+	265, // 285: openshell.v1.EndpointStatus.last_reported_time:type_name -> google.protobuf.Timestamp
+	265, // 286: openshell.v1.SandboxProvisioning.configuration_change_time:type_name -> google.protobuf.Timestamp
+	265, // 287: openshell.v1.SandboxProvisioning.first_rejection_time:type_name -> google.protobuf.Timestamp
+	265, // 288: openshell.v1.SandboxProvisioning.deadline:type_name -> google.protobuf.Timestamp
+	265, // 289: openshell.v1.SandboxProvisioning.timeout_time:type_name -> google.protobuf.Timestamp
+	265, // 290: openshell.v1.SandboxProvisioning.cleanup_completed_time:type_name -> google.protobuf.Timestamp
+	265, // 291: openshell.v1.SandboxProvisioning.cleanup_retry_time:type_name -> google.protobuf.Timestamp
+	265, // 292: openshell.v1.SandboxProvisioning.attachment_change_time:type_name -> google.protobuf.Timestamp
+	265, // 293: openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry.value:type_name -> google.protobuf.Timestamp
+	265, // 294: openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry.value:type_name -> google.protobuf.Timestamp
+	123, // 295: openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry.value:type_name -> openshell.v1.ProviderProfileCredential
+	151, // 296: openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry.value:type_name -> openshell.v1.StaticCredentialBinding
+	21,  // 297: openshell.v1.OpenShell.Health:input_type -> openshell.v1.HealthRequest
+	23,  // 298: openshell.v1.OpenShell.GetCurrentUser:input_type -> openshell.v1.GetCurrentUserRequest
+	25,  // 299: openshell.v1.OpenShell.GetGatewayInfo:input_type -> openshell.v1.GetGatewayInfoRequest
+	48,  // 300: openshell.v1.OpenShell.CreateSandbox:input_type -> openshell.v1.CreateSandboxRequest
+	56,  // 301: openshell.v1.OpenShell.BeginRootfsTarStaging:input_type -> openshell.v1.BeginRootfsTarStagingRequest
+	58,  // 302: openshell.v1.OpenShell.GetSandbox:input_type -> openshell.v1.GetSandboxRequest
+	59,  // 303: openshell.v1.OpenShell.ListSandboxes:input_type -> openshell.v1.ListSandboxesRequest
+	49,  // 304: openshell.v1.OpenShell.CreateSandboxTemplate:input_type -> openshell.v1.CreateSandboxTemplateRequest
+	50,  // 305: openshell.v1.OpenShell.GetSandboxTemplate:input_type -> openshell.v1.GetSandboxTemplateRequest
+	51,  // 306: openshell.v1.OpenShell.ListSandboxTemplates:input_type -> openshell.v1.ListSandboxTemplatesRequest
+	52,  // 307: openshell.v1.OpenShell.DeleteSandboxTemplate:input_type -> openshell.v1.DeleteSandboxTemplateRequest
+	60,  // 308: openshell.v1.OpenShell.ListSandboxProviders:input_type -> openshell.v1.ListSandboxProvidersRequest
+	61,  // 309: openshell.v1.OpenShell.AttachSandboxProvider:input_type -> openshell.v1.AttachSandboxProviderRequest
+	62,  // 310: openshell.v1.OpenShell.DetachSandboxProvider:input_type -> openshell.v1.DetachSandboxProviderRequest
+	78,  // 311: openshell.v1.OpenShell.GetSandboxProviderStatus:input_type -> openshell.v1.GetSandboxProviderStatusRequest
+	63,  // 312: openshell.v1.OpenShell.DeleteSandbox:input_type -> openshell.v1.DeleteSandboxRequest
+	64,  // 313: openshell.v1.OpenShell.StopSandbox:input_type -> openshell.v1.StopSandboxRequest
+	65,  // 314: openshell.v1.OpenShell.StartSandbox:input_type -> openshell.v1.StartSandboxRequest
+	83,  // 315: openshell.v1.OpenShell.CreateSshSession:input_type -> openshell.v1.CreateSshSessionRequest
+	85,  // 316: openshell.v1.OpenShell.ExposeService:input_type -> openshell.v1.ExposeServiceRequest
+	86,  // 317: openshell.v1.OpenShell.GetService:input_type -> openshell.v1.GetServiceRequest
+	87,  // 318: openshell.v1.OpenShell.ListServices:input_type -> openshell.v1.ListServicesRequest
+	89,  // 319: openshell.v1.OpenShell.DeleteService:input_type -> openshell.v1.DeleteServiceRequest
+	93,  // 320: openshell.v1.OpenShell.RevokeSshSession:input_type -> openshell.v1.RevokeSshSessionRequest
+	95,  // 321: openshell.v1.OpenShell.ExecSandbox:input_type -> openshell.v1.ExecSandboxRequest
+	101, // 322: openshell.v1.OpenShell.ForwardTcp:input_type -> openshell.v1.TcpForwardFrame
+	102, // 323: openshell.v1.OpenShell.ExecSandboxInteractive:input_type -> openshell.v1.ExecSandboxInput
+	109, // 324: openshell.v1.OpenShell.CreateProvider:input_type -> openshell.v1.CreateProviderRequest
+	110, // 325: openshell.v1.OpenShell.GetProvider:input_type -> openshell.v1.GetProviderRequest
+	111, // 326: openshell.v1.OpenShell.ListProviders:input_type -> openshell.v1.ListProvidersRequest
+	116, // 327: openshell.v1.OpenShell.ListProviderProfiles:input_type -> openshell.v1.ListProviderProfilesRequest
+	117, // 328: openshell.v1.OpenShell.GetProviderProfile:input_type -> openshell.v1.GetProviderProfileRequest
+	140, // 329: openshell.v1.OpenShell.ImportProviderProfiles:input_type -> openshell.v1.ImportProviderProfilesRequest
+	142, // 330: openshell.v1.OpenShell.UpdateProviderProfiles:input_type -> openshell.v1.UpdateProviderProfilesRequest
+	144, // 331: openshell.v1.OpenShell.LintProviderProfiles:input_type -> openshell.v1.LintProviderProfilesRequest
+	112, // 332: openshell.v1.OpenShell.UpdateProvider:input_type -> openshell.v1.UpdateProviderRequest
+	129, // 333: openshell.v1.OpenShell.GetProviderRefreshStatus:input_type -> openshell.v1.GetProviderRefreshStatusRequest
+	131, // 334: openshell.v1.OpenShell.ConfigureProviderRefresh:input_type -> openshell.v1.ConfigureProviderRefreshRequest
+	133, // 335: openshell.v1.OpenShell.RotateProviderCredential:input_type -> openshell.v1.RotateProviderCredentialRequest
+	135, // 336: openshell.v1.OpenShell.DeleteProviderRefresh:input_type -> openshell.v1.DeleteProviderRefreshRequest
+	113, // 337: openshell.v1.OpenShell.DeleteProvider:input_type -> openshell.v1.DeleteProviderRequest
+	147, // 338: openshell.v1.OpenShell.DeleteProviderProfile:input_type -> openshell.v1.DeleteProviderProfileRequest
+	280, // 339: openshell.v1.OpenShell.GetSandboxConfig:input_type -> openshell.sandbox.v1.GetSandboxConfigRequest
+	281, // 340: openshell.v1.OpenShell.GetGatewayConfig:input_type -> openshell.sandbox.v1.GetGatewayConfigRequest
+	155, // 341: openshell.v1.OpenShell.UpdateConfig:input_type -> openshell.v1.UpdateConfigRequest
+	165, // 342: openshell.v1.OpenShell.GetSandboxPolicyStatus:input_type -> openshell.v1.GetSandboxPolicyStatusRequest
+	167, // 343: openshell.v1.OpenShell.ListSandboxPolicies:input_type -> openshell.v1.ListSandboxPoliciesRequest
+	169, // 344: openshell.v1.OpenShell.ReportPolicyStatus:input_type -> openshell.v1.ReportPolicyStatusRequest
+	240, // 345: openshell.v1.OpenShell.ReportEndpointStatus:input_type -> openshell.v1.ReportEndpointStatusRequest
+	80,  // 346: openshell.v1.OpenShell.ReportProviderReadiness:input_type -> openshell.v1.ReportProviderReadinessRequest
+	172, // 347: openshell.v1.OpenShell.ReportSandboxConfiguration:input_type -> openshell.v1.ReportSandboxConfigurationRequest
+	149, // 348: openshell.v1.OpenShell.GetSandboxProviderEnvironment:input_type -> openshell.v1.GetSandboxProviderEnvironmentRequest
+	153, // 349: openshell.v1.OpenShell.ExchangeProviderSubjectToken:input_type -> openshell.v1.ExchangeProviderSubjectTokenRequest
+	175, // 350: openshell.v1.OpenShell.GetSandboxLogs:input_type -> openshell.v1.GetSandboxLogsRequest
+	176, // 351: openshell.v1.OpenShell.PushSandboxLogs:input_type -> openshell.v1.PushSandboxLogsRequest
+	179, // 352: openshell.v1.OpenShell.ConnectSupervisor:input_type -> openshell.v1.SupervisorMessage
+	186, // 353: openshell.v1.OpenShell.ReportMainProcessExit:input_type -> openshell.v1.ReportMainProcessExitRequest
+	188, // 354: openshell.v1.OpenShell.FinalizeMainProcessExit:input_type -> openshell.v1.FinalizeMainProcessExitRequest
+	194, // 355: openshell.v1.OpenShell.RelayStream:input_type -> openshell.v1.RelayFrame
+	105, // 356: openshell.v1.OpenShell.WatchSandbox:input_type -> openshell.v1.WatchSandboxRequest
+	203, // 357: openshell.v1.OpenShell.SubmitPolicyAnalysis:input_type -> openshell.v1.SubmitPolicyAnalysisRequest
+	205, // 358: openshell.v1.OpenShell.GetDraftPolicy:input_type -> openshell.v1.GetDraftPolicyRequest
+	207, // 359: openshell.v1.OpenShell.ApproveDraftChunk:input_type -> openshell.v1.ApproveDraftChunkRequest
+	209, // 360: openshell.v1.OpenShell.RejectDraftChunk:input_type -> openshell.v1.RejectDraftChunkRequest
+	212, // 361: openshell.v1.OpenShell.ApproveAllDraftChunks:input_type -> openshell.v1.ApproveAllDraftChunksRequest
+	214, // 362: openshell.v1.OpenShell.EditDraftChunk:input_type -> openshell.v1.EditDraftChunkRequest
+	216, // 363: openshell.v1.OpenShell.UndoDraftChunk:input_type -> openshell.v1.UndoDraftChunkRequest
+	218, // 364: openshell.v1.OpenShell.ClearDraftChunks:input_type -> openshell.v1.ClearDraftChunksRequest
+	220, // 365: openshell.v1.OpenShell.GetDraftHistory:input_type -> openshell.v1.GetDraftHistoryRequest
+	17,  // 366: openshell.v1.OpenShell.IssueSandboxToken:input_type -> openshell.v1.IssueSandboxTokenRequest
+	19,  // 367: openshell.v1.OpenShell.RefreshSandboxToken:input_type -> openshell.v1.RefreshSandboxTokenRequest
+	223, // 368: openshell.v1.OpenShell.CreateWorkspace:input_type -> openshell.v1.CreateWorkspaceRequest
+	225, // 369: openshell.v1.OpenShell.GetWorkspace:input_type -> openshell.v1.GetWorkspaceRequest
+	227, // 370: openshell.v1.OpenShell.ListWorkspaces:input_type -> openshell.v1.ListWorkspacesRequest
+	229, // 371: openshell.v1.OpenShell.DeleteWorkspace:input_type -> openshell.v1.DeleteWorkspaceRequest
+	232, // 372: openshell.v1.OpenShell.AddWorkspaceMember:input_type -> openshell.v1.AddWorkspaceMemberRequest
+	234, // 373: openshell.v1.OpenShell.RemoveWorkspaceMember:input_type -> openshell.v1.RemoveWorkspaceMemberRequest
+	236, // 374: openshell.v1.OpenShell.ListWorkspaceMembers:input_type -> openshell.v1.ListWorkspaceMembersRequest
+	22,  // 375: openshell.v1.OpenShell.Health:output_type -> openshell.v1.HealthResponse
+	24,  // 376: openshell.v1.OpenShell.GetCurrentUser:output_type -> openshell.v1.GetCurrentUserResponse
+	26,  // 377: openshell.v1.OpenShell.GetGatewayInfo:output_type -> openshell.v1.GetGatewayInfoResponse
+	66,  // 378: openshell.v1.OpenShell.CreateSandbox:output_type -> openshell.v1.SandboxResponse
+	57,  // 379: openshell.v1.OpenShell.BeginRootfsTarStaging:output_type -> openshell.v1.BeginRootfsTarStagingResponse
+	66,  // 380: openshell.v1.OpenShell.GetSandbox:output_type -> openshell.v1.SandboxResponse
+	67,  // 381: openshell.v1.OpenShell.ListSandboxes:output_type -> openshell.v1.ListSandboxesResponse
+	53,  // 382: openshell.v1.OpenShell.CreateSandboxTemplate:output_type -> openshell.v1.SandboxTemplateResponse
+	53,  // 383: openshell.v1.OpenShell.GetSandboxTemplate:output_type -> openshell.v1.SandboxTemplateResponse
+	54,  // 384: openshell.v1.OpenShell.ListSandboxTemplates:output_type -> openshell.v1.ListSandboxTemplatesResponse
+	55,  // 385: openshell.v1.OpenShell.DeleteSandboxTemplate:output_type -> openshell.v1.DeleteSandboxTemplateResponse
+	68,  // 386: openshell.v1.OpenShell.ListSandboxProviders:output_type -> openshell.v1.ListSandboxProvidersResponse
+	69,  // 387: openshell.v1.OpenShell.AttachSandboxProvider:output_type -> openshell.v1.AttachSandboxProviderResponse
+	70,  // 388: openshell.v1.OpenShell.DetachSandboxProvider:output_type -> openshell.v1.DetachSandboxProviderResponse
+	79,  // 389: openshell.v1.OpenShell.GetSandboxProviderStatus:output_type -> openshell.v1.GetSandboxProviderStatusResponse
+	82,  // 390: openshell.v1.OpenShell.DeleteSandbox:output_type -> openshell.v1.DeleteSandboxResponse
+	66,  // 391: openshell.v1.OpenShell.StopSandbox:output_type -> openshell.v1.SandboxResponse
+	66,  // 392: openshell.v1.OpenShell.StartSandbox:output_type -> openshell.v1.SandboxResponse
+	84,  // 393: openshell.v1.OpenShell.CreateSshSession:output_type -> openshell.v1.CreateSshSessionResponse
+	92,  // 394: openshell.v1.OpenShell.ExposeService:output_type -> openshell.v1.ServiceEndpointResponse
+	92,  // 395: openshell.v1.OpenShell.GetService:output_type -> openshell.v1.ServiceEndpointResponse
+	88,  // 396: openshell.v1.OpenShell.ListServices:output_type -> openshell.v1.ListServicesResponse
+	90,  // 397: openshell.v1.OpenShell.DeleteService:output_type -> openshell.v1.DeleteServiceResponse
+	94,  // 398: openshell.v1.OpenShell.RevokeSshSession:output_type -> openshell.v1.RevokeSshSessionResponse
+	99,  // 399: openshell.v1.OpenShell.ExecSandbox:output_type -> openshell.v1.ExecSandboxEvent
+	101, // 400: openshell.v1.OpenShell.ForwardTcp:output_type -> openshell.v1.TcpForwardFrame
+	99,  // 401: openshell.v1.OpenShell.ExecSandboxInteractive:output_type -> openshell.v1.ExecSandboxEvent
+	114, // 402: openshell.v1.OpenShell.CreateProvider:output_type -> openshell.v1.ProviderResponse
+	114, // 403: openshell.v1.OpenShell.GetProvider:output_type -> openshell.v1.ProviderResponse
+	115, // 404: openshell.v1.OpenShell.ListProviders:output_type -> openshell.v1.ListProvidersResponse
+	139, // 405: openshell.v1.OpenShell.ListProviderProfiles:output_type -> openshell.v1.ListProviderProfilesResponse
+	138, // 406: openshell.v1.OpenShell.GetProviderProfile:output_type -> openshell.v1.ProviderProfileResponse
+	141, // 407: openshell.v1.OpenShell.ImportProviderProfiles:output_type -> openshell.v1.ImportProviderProfilesResponse
+	143, // 408: openshell.v1.OpenShell.UpdateProviderProfiles:output_type -> openshell.v1.UpdateProviderProfilesResponse
+	145, // 409: openshell.v1.OpenShell.LintProviderProfiles:output_type -> openshell.v1.LintProviderProfilesResponse
+	114, // 410: openshell.v1.OpenShell.UpdateProvider:output_type -> openshell.v1.ProviderResponse
+	130, // 411: openshell.v1.OpenShell.GetProviderRefreshStatus:output_type -> openshell.v1.GetProviderRefreshStatusResponse
+	132, // 412: openshell.v1.OpenShell.ConfigureProviderRefresh:output_type -> openshell.v1.ConfigureProviderRefreshResponse
+	134, // 413: openshell.v1.OpenShell.RotateProviderCredential:output_type -> openshell.v1.RotateProviderCredentialResponse
+	136, // 414: openshell.v1.OpenShell.DeleteProviderRefresh:output_type -> openshell.v1.DeleteProviderRefreshResponse
+	146, // 415: openshell.v1.OpenShell.DeleteProvider:output_type -> openshell.v1.DeleteProviderResponse
+	148, // 416: openshell.v1.OpenShell.DeleteProviderProfile:output_type -> openshell.v1.DeleteProviderProfileResponse
+	282, // 417: openshell.v1.OpenShell.GetSandboxConfig:output_type -> openshell.sandbox.v1.GetSandboxConfigResponse
+	283, // 418: openshell.v1.OpenShell.GetGatewayConfig:output_type -> openshell.sandbox.v1.GetGatewayConfigResponse
+	164, // 419: openshell.v1.OpenShell.UpdateConfig:output_type -> openshell.v1.UpdateConfigResponse
+	166, // 420: openshell.v1.OpenShell.GetSandboxPolicyStatus:output_type -> openshell.v1.GetSandboxPolicyStatusResponse
+	168, // 421: openshell.v1.OpenShell.ListSandboxPolicies:output_type -> openshell.v1.ListSandboxPoliciesResponse
+	170, // 422: openshell.v1.OpenShell.ReportPolicyStatus:output_type -> openshell.v1.ReportPolicyStatusResponse
+	241, // 423: openshell.v1.OpenShell.ReportEndpointStatus:output_type -> openshell.v1.ReportEndpointStatusResponse
+	81,  // 424: openshell.v1.OpenShell.ReportProviderReadiness:output_type -> openshell.v1.ReportProviderReadinessResponse
+	173, // 425: openshell.v1.OpenShell.ReportSandboxConfiguration:output_type -> openshell.v1.ReportSandboxConfigurationResponse
+	152, // 426: openshell.v1.OpenShell.GetSandboxProviderEnvironment:output_type -> openshell.v1.GetSandboxProviderEnvironmentResponse
+	154, // 427: openshell.v1.OpenShell.ExchangeProviderSubjectToken:output_type -> openshell.v1.ExchangeProviderSubjectTokenResponse
+	178, // 428: openshell.v1.OpenShell.GetSandboxLogs:output_type -> openshell.v1.GetSandboxLogsResponse
+	177, // 429: openshell.v1.OpenShell.PushSandboxLogs:output_type -> openshell.v1.PushSandboxLogsResponse
+	180, // 430: openshell.v1.OpenShell.ConnectSupervisor:output_type -> openshell.v1.GatewayMessage
+	187, // 431: openshell.v1.OpenShell.ReportMainProcessExit:output_type -> openshell.v1.ReportMainProcessExitResponse
+	189, // 432: openshell.v1.OpenShell.FinalizeMainProcessExit:output_type -> openshell.v1.FinalizeMainProcessExitResponse
+	194, // 433: openshell.v1.OpenShell.RelayStream:output_type -> openshell.v1.RelayFrame
+	106, // 434: openshell.v1.OpenShell.WatchSandbox:output_type -> openshell.v1.SandboxStreamEvent
+	204, // 435: openshell.v1.OpenShell.SubmitPolicyAnalysis:output_type -> openshell.v1.SubmitPolicyAnalysisResponse
+	206, // 436: openshell.v1.OpenShell.GetDraftPolicy:output_type -> openshell.v1.GetDraftPolicyResponse
+	208, // 437: openshell.v1.OpenShell.ApproveDraftChunk:output_type -> openshell.v1.ApproveDraftChunkResponse
+	210, // 438: openshell.v1.OpenShell.RejectDraftChunk:output_type -> openshell.v1.RejectDraftChunkResponse
+	213, // 439: openshell.v1.OpenShell.ApproveAllDraftChunks:output_type -> openshell.v1.ApproveAllDraftChunksResponse
+	215, // 440: openshell.v1.OpenShell.EditDraftChunk:output_type -> openshell.v1.EditDraftChunkResponse
+	217, // 441: openshell.v1.OpenShell.UndoDraftChunk:output_type -> openshell.v1.UndoDraftChunkResponse
+	219, // 442: openshell.v1.OpenShell.ClearDraftChunks:output_type -> openshell.v1.ClearDraftChunksResponse
+	222, // 443: openshell.v1.OpenShell.GetDraftHistory:output_type -> openshell.v1.GetDraftHistoryResponse
+	18,  // 444: openshell.v1.OpenShell.IssueSandboxToken:output_type -> openshell.v1.IssueSandboxTokenResponse
+	20,  // 445: openshell.v1.OpenShell.RefreshSandboxToken:output_type -> openshell.v1.RefreshSandboxTokenResponse
+	224, // 446: openshell.v1.OpenShell.CreateWorkspace:output_type -> openshell.v1.CreateWorkspaceResponse
+	226, // 447: openshell.v1.OpenShell.GetWorkspace:output_type -> openshell.v1.GetWorkspaceResponse
+	228, // 448: openshell.v1.OpenShell.ListWorkspaces:output_type -> openshell.v1.ListWorkspacesResponse
+	230, // 449: openshell.v1.OpenShell.DeleteWorkspace:output_type -> openshell.v1.DeleteWorkspaceResponse
+	233, // 450: openshell.v1.OpenShell.AddWorkspaceMember:output_type -> openshell.v1.AddWorkspaceMemberResponse
+	235, // 451: openshell.v1.OpenShell.RemoveWorkspaceMember:output_type -> openshell.v1.RemoveWorkspaceMemberResponse
+	237, // 452: openshell.v1.OpenShell.ListWorkspaceMembers:output_type -> openshell.v1.ListWorkspaceMembersResponse
+	375, // [375:453] is the sub-list for method output_type
+	297, // [297:375] is the sub-list for method input_type
+	297, // [297:297] is the sub-list for extension type_name
+	297, // [297:297] is the sub-list for extension extendee
+	0,   // [0:297] is the sub-list for field type_name
 }
 
 func init() { file_openshell_proto_init() }
@@ -16877,32 +19416,37 @@ func file_openshell_proto_init() {
 	file_openshell_proto_msgTypes[19].OneofWrappers = []any{}
 	file_openshell_proto_msgTypes[20].OneofWrappers = []any{}
 	file_openshell_proto_msgTypes[28].OneofWrappers = []any{}
-	file_openshell_proto_msgTypes[71].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[55].OneofWrappers = []any{
+		(*ConfigSnapshotRevision_SandboxConfig)(nil),
+		(*ConfigSnapshotRevision_ProviderEnvironment)(nil),
+		(*ConfigSnapshotRevision_ProviderTarget)(nil),
+	}
+	file_openshell_proto_msgTypes[82].OneofWrappers = []any{
 		(*ExecSandboxEvent_Stdout)(nil),
 		(*ExecSandboxEvent_Stderr)(nil),
 		(*ExecSandboxEvent_Exit)(nil),
 	}
-	file_openshell_proto_msgTypes[72].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[83].OneofWrappers = []any{
 		(*TcpForwardInit_Ssh)(nil),
 		(*TcpForwardInit_Tcp)(nil),
 	}
-	file_openshell_proto_msgTypes[73].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[84].OneofWrappers = []any{
 		(*TcpForwardFrame_Init)(nil),
 		(*TcpForwardFrame_Data)(nil),
 	}
-	file_openshell_proto_msgTypes[74].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[85].OneofWrappers = []any{
 		(*ExecSandboxInput_Start)(nil),
 		(*ExecSandboxInput_Stdin)(nil),
 		(*ExecSandboxInput_Resize)(nil),
 	}
-	file_openshell_proto_msgTypes[78].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[89].OneofWrappers = []any{
 		(*SandboxStreamEvent_Sandbox)(nil),
 		(*SandboxStreamEvent_Log)(nil),
 		(*SandboxStreamEvent_Event)(nil),
 		(*SandboxStreamEvent_Warning)(nil),
 		(*SandboxStreamEvent_DraftPolicyUpdate)(nil),
 	}
-	file_openshell_proto_msgTypes[128].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[139].OneofWrappers = []any{
 		(*PolicyMergeOperation_AddRule)(nil),
 		(*PolicyMergeOperation_RemoveEndpoint)(nil),
 		(*PolicyMergeOperation_RemoveRule)(nil),
@@ -16910,24 +19454,25 @@ func file_openshell_proto_init() {
 		(*PolicyMergeOperation_AddAllowRules)(nil),
 		(*PolicyMergeOperation_RemoveBinary)(nil),
 	}
-	file_openshell_proto_msgTypes[147].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[143].OneofWrappers = []any{}
+	file_openshell_proto_msgTypes[162].OneofWrappers = []any{
 		(*SupervisorMessage_Hello)(nil),
 		(*SupervisorMessage_Heartbeat)(nil),
 		(*SupervisorMessage_RelayOpenResult)(nil),
 		(*SupervisorMessage_RelayClose)(nil),
 	}
-	file_openshell_proto_msgTypes[148].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[163].OneofWrappers = []any{
 		(*GatewayMessage_SessionAccepted)(nil),
 		(*GatewayMessage_SessionRejected)(nil),
 		(*GatewayMessage_Heartbeat)(nil),
 		(*GatewayMessage_RelayOpen)(nil),
 		(*GatewayMessage_RelayClose)(nil),
 	}
-	file_openshell_proto_msgTypes[158].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[173].OneofWrappers = []any{
 		(*RelayOpen_Ssh)(nil),
 		(*RelayOpen_Tcp)(nil),
 	}
-	file_openshell_proto_msgTypes[162].OneofWrappers = []any{
+	file_openshell_proto_msgTypes[177].OneofWrappers = []any{
 		(*RelayFrame_Init)(nil),
 		(*RelayFrame_Data)(nil),
 	}
@@ -16936,8 +19481,8 @@ func file_openshell_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshell_proto_rawDesc), len(file_openshell_proto_rawDesc)),
-			NumEnums:      10,
-			NumMessages:   232,
+			NumEnums:      17,
+			NumMessages:   248,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -819,6 +819,7 @@ async fn handle_sandbox_delete(app: &mut App, tx: mpsc::UnboundedSender<Event>) 
     }
 
     let req = openshell_core::proto::DeleteSandboxRequest {
+        request_id: String::new(),
         allow_missing: true,
         name: sandbox_name,
         workspace_scope: Some(named_workspace_scope(app.selected_sandbox_workspace())),
@@ -1483,6 +1484,7 @@ fn spawn_create_sandbox(app: &mut App, tx: mpsc::UnboundedSender<Event>) {
         };
 
         let req = openshell_core::proto::CreateSandboxRequest {
+            request_id: String::new(),
             name,
             spec: Some(openshell_core::proto::SandboxSpec {
                 providers: selected_providers,
@@ -1757,6 +1759,7 @@ fn spawn_create_provider(app: &App, tx: mpsc::UnboundedSender<Event>) {
             };
 
             let req = openshell_core::proto::CreateProviderRequest {
+                request_id: String::new(),
                 provider: Some(openshell_core::proto::Provider {
                     metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                         id: String::new(),
@@ -1874,6 +1877,7 @@ fn spawn_update_provider(app: &App, tx: mpsc::UnboundedSender<Event>) {
         }
 
         let req = openshell_core::proto::UpdateProviderRequest {
+            request_id: String::new(),
             provider: Some(openshell_core::proto::Provider {
                 metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                     id: String::new(),
@@ -1924,6 +1928,7 @@ fn spawn_delete_provider(app: &App, tx: mpsc::UnboundedSender<Event>) {
 
     tokio::spawn(async move {
         let req = openshell_core::proto::DeleteProviderRequest {
+            request_id: String::new(),
             allow_missing: true,
             name,
             workspace_scope: Some(named_workspace_scope(workspace)),
@@ -1976,6 +1981,7 @@ fn spawn_draft_approve(app: &App, tx: mpsc::UnboundedSender<Event>) {
 
     tokio::spawn(async move {
         let req = openshell_core::proto::ApproveDraftChunkRequest {
+            request_id: String::new(),
             name,
             chunk_id,
             workspace_scope: Some(named_workspace_scope(workspace)),
@@ -2021,6 +2027,7 @@ fn spawn_draft_reject(app: &App, tx: mpsc::UnboundedSender<Event>) {
 
     tokio::spawn(async move {
         let req = openshell_core::proto::RejectDraftChunkRequest {
+            request_id: String::new(),
             name,
             chunk_id,
             reason: String::new(),
@@ -2071,6 +2078,7 @@ fn spawn_draft_approve_all(
             })
             .collect();
         let req = openshell_core::proto::ApproveAllDraftChunksRequest {
+            request_id: String::new(),
             name,
             include_security_flagged: false,
             workspace_scope: Some(named_workspace_scope(workspace)),
@@ -2728,6 +2736,62 @@ async fn fetch_sandboxes(
     }
 }
 
+fn sandbox_notes(sandbox: &openshell_core::proto::Sandbox, forwards: String) -> String {
+    sandbox_notes_for_view(sandbox, forwards, false)
+}
+
+fn sandbox_notes_for_view(
+    sandbox: &openshell_core::proto::Sandbox,
+    forwards: String,
+    detail: bool,
+) -> String {
+    if let Some(record) = sandbox
+        .status
+        .as_ref()
+        .and_then(|status| status.provisioning.as_ref())
+        && record.timeout_time.is_some()
+    {
+        let cleanup = if record.cleanup_completed_time.is_some() {
+            "compute reclaimed"
+        } else {
+            "compute cleanup pending"
+        };
+        let mut notes = format!("Provisioning timed out; {cleanup}");
+        if !forwards.is_empty() {
+            notes.push_str("; ");
+            notes.push_str(&forwards);
+        }
+        return notes;
+    }
+    let rejection = sandbox.status.as_ref().and_then(|status| {
+        status.conditions.iter().find(|condition| {
+            matches!(condition.r#type.as_str(), "ConfigurationReady" | "Ready")
+                && condition.status == "False"
+                && condition.reason == "ConfigurationInvalid"
+        })
+    });
+    let Some(rejection) = rejection else {
+        return forwards;
+    };
+    let mut notes = if detail {
+        format!(
+            "Invalid config: {}",
+            rejection
+                .message
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    } else {
+        "Invalid config".to_string()
+    };
+    if !forwards.is_empty() {
+        notes.push_str("; ");
+        notes.push_str(&forwards);
+    }
+    notes
+}
+
 fn apply_sandbox_refresh(app: &mut App, sandboxes: Vec<openshell_core::proto::Sandbox>) {
     app.sandbox_count = sandboxes.len();
     app.sandbox_ids = sandboxes
@@ -2777,13 +2841,22 @@ fn apply_sandbox_refresh(app: &mut App, sandboxes: Vec<openshell_core::proto::Sa
         .map(openshell_core::proto::Sandbox::current_policy_version)
         .collect();
 
-    // Build NOTES column from active port forwards.
+    // Show configuration blockers before active port forwards in NOTES.
     let forwards = openshell_core::forward::list_forwards().unwrap_or_default();
     app.sandbox_notes = sandboxes
         .iter()
         .map(|s| {
             let name = s.object_name();
-            openshell_core::forward::build_sandbox_notes(name, &forwards)
+            let forwards = openshell_core::forward::build_sandbox_notes(name, &forwards);
+            sandbox_notes(s, forwards)
+        })
+        .collect();
+
+    app.sandbox_detail_notes = sandboxes
+        .iter()
+        .map(|s| {
+            let forwards = openshell_core::forward::build_sandbox_notes(s.object_name(), &forwards);
+            sandbox_notes_for_view(s, forwards, true)
         })
         .collect();
 
@@ -3217,5 +3290,84 @@ mod provider_profile_pagination_tests {
         );
         assert_eq!(profiles.len(), PROVIDER_PROFILE_PAGE_SIZE as usize + 1);
         assert_eq!(profiles.last().unwrap().id, "page-two-profile");
+    }
+}
+
+#[cfg(test)]
+mod sandbox_notes_tests {
+    use super::sandbox_notes;
+    use openshell_core::proto::{Sandbox, SandboxCondition, SandboxStatus};
+
+    #[test]
+    fn provisioning_timeout_notes_distinguish_pending_and_completed_cleanup() {
+        let mut sandbox = Sandbox {
+            status: Some(SandboxStatus {
+                provisioning: Some(openshell_core::proto::SandboxProvisioning {
+                    timeout_time: openshell_core::time::timestamp_from_millis(300_000).ok(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            sandbox_notes(&sandbox, "fwd:8080".into()),
+            "Provisioning timed out; compute cleanup pending; fwd:8080"
+        );
+        sandbox
+            .status
+            .as_mut()
+            .unwrap()
+            .provisioning
+            .as_mut()
+            .unwrap()
+            .cleanup_completed_time = openshell_core::time::timestamp_from_millis(301_000).ok();
+        assert_eq!(
+            sandbox_notes(&sandbox, String::new()),
+            "Provisioning timed out; compute reclaimed"
+        );
+    }
+
+    #[test]
+    fn configuration_rejection_precedes_forwards_and_clears_after_repair() {
+        let condition = SandboxCondition {
+            r#type: "ConfigurationReady".into(),
+            status: "False".into(),
+            reason: "ConfigurationInvalid".into(),
+            message: "credentialed endpoint requires\nL7 inspection".into(),
+            ..Default::default()
+        };
+        let mut sandbox = Sandbox {
+            status: Some(SandboxStatus {
+                conditions: vec![
+                    condition.clone(),
+                    SandboxCondition {
+                        r#type: "Ready".into(),
+                        ..condition
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            sandbox_notes(&sandbox, "fwd:8080".into()),
+            "Invalid config; fwd:8080"
+        );
+        assert_eq!(
+            super::sandbox_notes_for_view(&sandbox, "fwd:8080".into(), true),
+            "Invalid config: credentialed endpoint requires L7 inspection; fwd:8080"
+        );
+        // Older gateways can expose only Ready; retain the note there too.
+        sandbox.status.as_mut().unwrap().conditions.remove(0);
+        assert_eq!(sandbox_notes(&sandbox, String::new()), "Invalid config");
+        sandbox.status.as_mut().unwrap().conditions[0]
+            .message
+            .clear();
+        assert_eq!(sandbox_notes(&sandbox, String::new()), "Invalid config");
+        sandbox.status.as_mut().unwrap().conditions[0].status = "True".into();
+        assert_eq!(sandbox_notes(&sandbox, "fwd:8080".into()), "fwd:8080");
+        sandbox.status = None;
+        assert_eq!(sandbox_notes(&sandbox, String::new()), "");
     }
 }

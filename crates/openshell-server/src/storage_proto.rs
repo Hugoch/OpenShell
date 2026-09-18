@@ -47,6 +47,7 @@ pub(crate) fn encode_sandbox(sandbox: &Sandbox) -> Result<Vec<u8>, String> {
                 resource_requirements: spec.resource_requirements.clone(),
                 command: spec.command.clone(),
                 tty: spec.tty,
+                provider_attachment_epoch: spec.provider_attachment_epoch.clone(),
             })
         })
         .transpose()?;
@@ -79,6 +80,7 @@ pub(crate) fn decode_sandbox(payload: &[u8]) -> Result<Sandbox, String> {
                 resource_requirements: spec.resource_requirements,
                 command: spec.command,
                 tty: spec.tty,
+                provider_attachment_epoch: spec.provider_attachment_epoch,
             })
         })
         .transpose()?;
@@ -259,13 +261,13 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
     const STORAGE_V1_SCHEMA_SHA256: &str =
-        "e414ab3eaa6fece515212188b76f24a199e907b4d8c60f39a95303a8235bf662";
+        "1df02ba6a9656566dea0388ba9fbcf84bb56895db7ec97ffa2d44fa0636e4fd4";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "33854d7b13ca7a43669beaca3fbcf744b0e43919da464fbac34846e659002a53";
+        "6e6acb6894034d986e6de0c2f7bb0b649751de7ef85c78f30b07d5625f27e800";
     const DURABLE_SCHEMA_SHA256: &str =
-        "d1b6602680c3336ea0c9d3500fe154012132111eadd712cb3a07b67e1e958dbf";
+        "e8d7ba901cdd1cb027eb34d75adb430172f1abc7c60f28cfa820c1d5eacde83e";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
-        "d51c0f38d9fd062b419672c9140d691b6f8ca1267201c6b9a3e9bd99af5b371d";
+        "b440eace76e44b002f7c16426ac83962eda1d1c959472ae307ee08b5041f1df7";
     // A persisted Sandbox without endpoint status retains its lifecycle fields;
     // the absent repeated field decodes empty and needs no database rewrite.
     const SANDBOX_WITHOUT_ENDPOINT_STATUS: &str = "0a1e0a0a73616e64626f782d6964120773616e64626f783a0764656661756c741a2b0a0773616e64626f782a0d0a05526561647912045472756530023807420d73757065727669736f722d6964";
@@ -281,9 +283,10 @@ mod tests {
         "0a0472756c651a07666978747572652d0000403f3a0b6578616d706c652e636f6d40bb035002";
     const V0_0_116_POLICY_RECORD: &str = "0a09706f6c6963792d6964120a73616e64626f782d6964180222030102032a0673686132353632066c6f616465643a046e6f6e6540fa0148ac0252110a06736f75726365120766697874757265";
     const V0_0_116_DRAFT_RECORD: &str = "0a086368756e6b2d6964120a73616e64626f782d69641802220770656e64696e672a0472756c65320204053a076669787475726549000000000000e83f50de02589003620b6578616d706c652e636f6d68bb037801";
-    const STORAGE_MESSAGE_NAMES: [&str; 12] = [
+    const STORAGE_MESSAGE_NAMES: [&str; 13] = [
         "DraftChunkPayload",
         "PolicyRevisionPayload",
+        "StoredConfigUpdateOperation",
         "StoredDraftChunk",
         "StoredPolicyRevision",
         "StoredProviderCredentialRefreshState",
@@ -295,12 +298,21 @@ mod tests {
         "StoredSandbox",
         "StoredSandboxSpec",
     ];
-    const DURABLE_ROOTS: [&str; 12] = [
+    const PROVIDER_READINESS_RPC_SIGNATURES: [&str; 2] = [
+        "openshell.v1.OpenShell/GetSandboxProviderStatus|.openshell.v1.GetSandboxProviderStatusRequest|.openshell.v1.GetSandboxProviderStatusResponse|false|false",
+        "openshell.v1.OpenShell/ReportProviderReadiness|.openshell.v1.ReportProviderReadinessRequest|.openshell.v1.ReportProviderReadinessResponse|false|false",
+    ];
+    // Synthetic SandboxSpec bytes with log level, provider, and command fields,
+    // emitted before the gateway-owned attachment epoch field was introduced.
+    const PRE_READINESS_SANDBOX_SPEC: &str =
+        "0a04696e666f421273796e7468657469632d70726f766964657262046563686f";
+    const DURABLE_ROOTS: &[&str] = &[
         ".openshell.datamodel.v1.Provider",
         ".openshell.datamodel.v1.Workspace",
         ".openshell.sandbox.v1.SandboxPolicy",
         ".openshell.storage.v1.DraftChunkPayload",
         ".openshell.storage.v1.PolicyRevisionPayload",
+        ".openshell.storage.v1.StoredConfigUpdateOperation",
         ".openshell.storage.v1.StoredProviderCredentialRefreshStateV2",
         ".openshell.storage.v1.StoredProviderProfileWire",
         ".openshell.storage.v1.StoredSandbox",
@@ -642,19 +654,34 @@ mod tests {
             }
         }
         methods.sort();
-        assert_eq!(compiled_method_count, 101, "classify every compiled RPC");
-        assert_eq!(methods.len(), 75, "inventory every public gateway RPC");
+        for signature in PROVIDER_READINESS_RPC_SIGNATURES {
+            assert!(
+                methods.iter().any(|method| method == signature),
+                "provider readiness RPC is missing or changed: {signature}"
+            );
+        }
+        assert_eq!(
+            compiled_method_count,
+            102 + PROVIDER_READINESS_RPC_SIGNATURES.len(),
+            "classify every compiled RPC"
+        );
+        assert_eq!(
+            methods.len(),
+            76 + PROVIDER_READINESS_RPC_SIGNATURES.len(),
+            "inventory every public gateway RPC"
+        );
         assert_eq!(
             methods
                 .iter()
                 .filter(|method| method.starts_with("openshell.v1.OpenShell/"))
                 .count(),
-            75
+            76 + PROVIDER_READINESS_RPC_SIGNATURES.len()
         );
         assert!(methods.iter().all(|method| !method.contains(".storage.")));
 
         let public_closure = schema_closure(&index, public_roots);
-        let durable_closure = schema_closure(&index, DURABLE_ROOTS.into_iter().map(str::to_string));
+        let durable_closure =
+            schema_closure(&index, DURABLE_ROOTS.iter().copied().map(str::to_string));
         let overlap_messages = public_closure
             .messages
             .intersection(&durable_closure.messages)
@@ -680,28 +707,58 @@ mod tests {
         let durable_inventory_hash = schema_fingerprint(&index, &durable_closure);
         let overlap_hash = format!("{:x}", Sha256::digest(overlap_inventory.as_bytes()));
 
+        // Report the complete measured inventory on failure so one schema
+        // change exposes every affected boundary in the same focused run.
         assert_eq!(
-            (public_closure.messages.len(), public_closure.enums.len()),
-            (311, 14)
+            (
+                (public_closure.messages.len(), public_closure.enums.len()),
+                (durable_closure.messages.len(), durable_closure.enums.len()),
+                (overlap_messages.len(), overlap_enums.len()),
+                public_inventory_hash.as_str(),
+                durable_inventory_hash.as_str(),
+                overlap_hash.as_str(),
+            ),
+            (
+                (327, 21),
+                (92, 16),
+                (75, 16),
+                PUBLIC_RPC_SCHEMA_SHA256,
+                DURABLE_SCHEMA_SHA256,
+                PUBLIC_DURABLE_OVERLAP_SHA256
+            ),
+            "the public/durable schema inventory changed; review API and storage ownership, preserve prior-payload decoding, and update the reviewed fingerprints"
         );
-        assert_eq!(
-            (durable_closure.messages.len(), durable_closure.enums.len()),
-            (83, 9)
-        );
-        assert_eq!((overlap_messages.len(), overlap_enums.len()), (68, 9));
+    }
 
-        assert_eq!(
-            public_inventory_hash, PUBLIC_RPC_SCHEMA_SHA256,
-            "the public RPC schema closure changed; review API compatibility and update the inventory and architecture/gateway.md"
-        );
-        assert_eq!(
-            durable_inventory_hash, DURABLE_SCHEMA_SHA256,
-            "a durable protobuf root or transitive dependency changed; record migration handling and a prior-version fixture before updating this fingerprint"
-        );
-        assert_eq!(
-            overlap_hash, PUBLIC_DURABLE_OVERLAP_SHA256,
-            "the public/durable protobuf overlap changed; review both API and storage compatibility before updating this inventory"
-        );
+    #[test]
+    fn pre_readiness_sandbox_spec_decodes_with_initial_attachment_epoch() {
+        let spec = openshell_core::proto::SandboxSpec::decode(
+            legacy_bytes(PRE_READINESS_SANDBOX_SPEC).as_slice(),
+        )
+        .expect("prior sandbox spec must decode");
+        assert_eq!(spec.log_level, "info");
+        assert_eq!(spec.providers, ["synthetic-provider"]);
+        assert_eq!(spec.command, ["echo"]);
+        assert!(spec.provider_attachment_epoch.is_empty());
+    }
+
+    #[test]
+    fn pre_admission_sandbox_bytes_preserve_legacy_status() {
+        use openshell_core::proto::{Sandbox, SandboxPhase};
+        // Synthetic Sandbox encoded with main 0357daee, before admission fields.
+        let bytes =
+            legacy_bytes("0a180a096c65676163792d6964120b6c65676163792d6e616d651a0430023807");
+        let sandbox = Sandbox::decode(bytes.as_slice()).unwrap();
+        let status = sandbox.status.as_ref().unwrap();
+        assert_eq!(status.phase, SandboxPhase::Ready as i32);
+        assert_eq!(status.current_policy_version, 7);
+        assert!(status.configuration_admission.is_none());
+        assert_eq!(status.configuration_activated, None);
+        assert!(status.provisioning.is_none());
+        assert!(!crate::policy_store::permits_initial_static_policy_repair(
+            &sandbox
+        ));
+        assert_eq!(sandbox.encode_to_vec(), bytes);
     }
 
     fn legacy_bytes(encoded: &str) -> Vec<u8> {

@@ -21,7 +21,7 @@ pub use crate::commands::gateway::{
     gateway_logout, gateway_remove, gateway_select, gateway_status, gateway_use,
 };
 
-use crate::commands::provider::inferred_provider_type;
+use crate::commands::provider::fetch_provider_profile_catalog;
 pub use crate::commands::provider::{
     ProviderCreateCredentialSource, ProviderCreateOptions, ProviderRefreshConfigInput,
     ProviderUpdateOptions, ensure_required_providers, provider_create,
@@ -32,6 +32,7 @@ pub use crate::commands::provider::{
     provider_refresh_status, provider_rotate, provider_update, sandbox_provider_attach,
     sandbox_provider_detach, sandbox_provider_list,
 };
+pub use crate::commands::provider_readiness::{ProviderWaitOptions, sandbox_provider_status};
 
 use crate::color::Colorize;
 use crate::policy_update::build_policy_update_plan;
@@ -448,6 +449,7 @@ pub struct SandboxCreateConfig<'a> {
     pub approval_mode: &'a str,
     pub output: &'a str,
     pub detach: bool,
+    pub suppress_credential_warnings: bool,
 }
 
 impl Default for SandboxCreateConfig<'_> {
@@ -474,6 +476,7 @@ impl Default for SandboxCreateConfig<'_> {
             approval_mode: "manual",
             output: "table",
             detach: false,
+            suppress_credential_warnings: false,
         }
     }
 }
@@ -508,6 +511,7 @@ pub async fn sandbox_create(
         approval_mode,
         output,
         detach,
+        suppress_credential_warnings,
     } = config;
 
     if editor.is_some() && !command.is_empty() {
@@ -541,6 +545,15 @@ pub async fn sandbox_create(
     })?;
     let effective_server = server.to_string();
     let effective_tls = tls.clone();
+
+    // Provider profiles are import-only, so the catalog lives on the gateway.
+    // Its only consumer is the credential warning, which is advisory: an
+    // unreachable catalog degrades the warning to its generic form rather than
+    // blocking sandbox creation. Nothing else derives authority from it.
+    let profile_catalog = fetch_provider_profile_catalog(&mut client, workspace)
+        .await
+        .unwrap_or_default();
+    warn_credential_env_vars(&environment, &profile_catalog, suppress_credential_warnings);
 
     if template.is_some()
         && (from.is_some()
@@ -576,15 +589,9 @@ pub async fn sandbox_create(
             None => (None, None),
         }
     };
-    let inferred_types: Vec<String> = inferred_provider_type(command).into_iter().collect();
-    let configured_providers = ensure_required_providers(
-        &mut client,
-        providers,
-        &inferred_types,
-        auto_providers_override,
-        workspace,
-    )
-    .await?;
+    let configured_providers =
+        ensure_required_providers(&mut client, providers, auto_providers_override, workspace)
+            .await?;
 
     let policy = load_sandbox_policy(policy)?;
     let resource_limits = if template.is_none() {
@@ -643,6 +650,7 @@ pub async fn sandbox_create(
         )])
     };
     let request = CreateSandboxRequest {
+        request_id: String::new(),
         spec: Some(SandboxSpec {
             resource_requirements,
             environment: if template.is_none() {
@@ -1166,7 +1174,16 @@ pub async fn sandbox_create(
         SandboxPhase::Error => {
             drop(stream);
             drop(client);
-            let create_result = if last_error_reason.is_empty() {
+            let provisioning_timed_out = last_sandbox
+                .status
+                .as_ref()
+                .and_then(|status| status.provisioning.as_ref())
+                .is_some_and(|record| record.timeout_time.is_some());
+            let create_result = if provisioning_timed_out {
+                Err(miette::miette!(
+                    "{last_error_reason}\nSandbox '{sandbox_name}' was retained. Inspect it with `openshell sandbox get {sandbox_name}`; repair its configuration, then run `openshell sandbox start {sandbox_name}` after cleanup completes."
+                ))
+            } else if last_error_reason.is_empty() {
                 Err(miette::miette!(
                     "sandbox entered error phase while provisioning"
                 ))
@@ -1179,7 +1196,12 @@ pub async fn sandbox_create(
             finalize_sandbox_create_session(
                 &effective_server,
                 &sandbox_name,
-                persist,
+                persist
+                    || last_sandbox
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.provisioning.as_ref())
+                        .is_some_and(|record| record.timeout_time.is_some()),
                 create_result,
                 workspace,
                 &effective_tls,
@@ -1560,11 +1582,23 @@ where
         sandbox.object_id().to_string()
     };
 
-    let config = client
+    let config_result = client
         .get_sandbox_config(GetSandboxConfigRequest { sandbox_id })
-        .await
-        .into_diagnostic()?
-        .into_inner();
+        .await;
+    let config = match config_result {
+        Ok(response) => response.into_inner(),
+        Err(_) if !policy_only && configuration_failure_message(&sandbox).is_some() => {
+            // An invalid desired policy must not hide the status needed to
+            // repair it. Keep payload-only reads strict.
+            GetSandboxConfigResponse {
+                configuration_error: configuration_failure_message(&sandbox)
+                    .unwrap_or_default()
+                    .to_string(),
+                ..Default::default()
+            }
+        }
+        Err(error) => return Err(error).into_diagnostic(),
+    };
 
     if policy_only {
         let Some(ref policy) = config.policy else {
@@ -1598,6 +1632,22 @@ where
     println!("  {} {}", "Id:".dimmed(), id);
     println!("  {} {}", "Name:".dimmed(), name);
     println!("  {} {}", "Phase:".dimmed(), phase_name(sandbox.phase()));
+    if let Some(status) = sandbox.status.as_ref() {
+        for condition in &status.conditions {
+            if matches!(
+                condition.r#type.as_str(),
+                "ConfigurationReady" | "DesiredConfigurationReady"
+            ) && condition.status.eq_ignore_ascii_case("false")
+            {
+                println!(
+                    "  {} {}: {}",
+                    "Configuration:".dimmed(),
+                    condition.reason,
+                    condition.message
+                );
+            }
+        }
+    }
     if let Some(exit_code) = sandbox.status.as_ref().and_then(|status| status.exit_code) {
         println!("  {} {}", "Exit Code:".dimmed(), exit_code);
     }
@@ -2460,7 +2510,19 @@ pub async fn sandbox_list(
     Ok(())
 }
 
+fn configuration_failure_message(sandbox: &Sandbox) -> Option<&str> {
+    sandbox
+        .status
+        .as_ref()?
+        .configuration_admission
+        .as_ref()
+        .map(|admission| admission.error.as_str())
+        .filter(|message| !message.is_empty())
+}
+
 fn sandbox_to_json(sandbox: &Sandbox) -> serde_json::Value {
+    use openshell_core::proto::ConfigurationAdmissionState;
+
     let meta = sandbox.metadata.as_ref();
     let labels = meta.map_or_else(|| serde_json::json!({}), |m| serde_json::json!(m.labels));
     let annotations = meta.map_or_else(
@@ -2500,6 +2562,37 @@ fn sandbox_to_json(sandbox: &Sandbox) -> serde_json::Value {
             })
             .collect::<Vec<_>>()
     });
+    let admission = sandbox
+        .status
+        .as_ref()
+        .and_then(|status| status.configuration_admission.as_ref())
+        .map(|admission| {
+            serde_json::json!({
+                "state": match ConfigurationAdmissionState::try_from(admission.state) {
+                    Ok(ConfigurationAdmissionState::Pending) => "pending",
+                    Ok(ConfigurationAdmissionState::Accepted) => "accepted",
+                    Ok(ConfigurationAdmissionState::Rejected) => "rejected",
+                    _ => "unknown",
+                },
+                "error": admission.error,
+                "policy_version": admission.policy_version,
+                "policy_hash": admission.policy_hash,
+                "config_revision": admission.config_revision,
+                "provider_env_revision": admission.provider_env_revision,
+            })
+        });
+    let provisioning = sandbox.status.as_ref().and_then(|status| status.provisioning.as_ref())
+        .map(|record| serde_json::json!({
+            "attempt_id": record.attempt_id,
+            "configuration_change_id": record.configuration_change_id,
+            "configuration_change_time": record.configuration_change_time.as_ref().map(ToString::to_string),
+            "first_rejection_time": record.first_rejection_time.as_ref().map(ToString::to_string),
+            "deadline": record.deadline.as_ref().map(ToString::to_string),
+            "timeout_time": record.timeout_time.as_ref().map(ToString::to_string),
+            "cleanup_completed_time": record.cleanup_completed_time.as_ref().map(ToString::to_string),
+            "cleanup_error": record.cleanup_error,
+            "cleanup_retry_time": record.cleanup_retry_time.as_ref().map(ToString::to_string),
+        }));
     serde_json::json!({
         "id": sandbox.object_id(),
         "name": sandbox.object_name(),
@@ -2513,6 +2606,8 @@ fn sandbox_to_json(sandbox: &Sandbox) -> serde_json::Value {
         "exit_code": sandbox.status.as_ref().and_then(|status| status.exit_code),
         "conditions": conditions,
         "endpoint_statuses": endpoint_statuses,
+        "configuration_admission": admission,
+        "provisioning": provisioning,
         "created_from_workload_template": created_from_workload_template,
     })
 }
@@ -2662,6 +2757,7 @@ pub async fn sandbox_template_create(
     output: &str,
     workspace: &str,
     tls: &TlsOptions,
+    suppress_credential_warnings: bool,
 ) -> Result<()> {
     let resources = if cpu.is_some() || memory.is_some() || gpu_requirements.is_some() {
         Some(SandboxResources {
@@ -2684,8 +2780,13 @@ pub async fn sandbox_template_create(
     let desired_service_level = build_template_service_level(ready_within, max_burst)?;
 
     let mut client = grpc_client(server, tls).await?;
+    let profile_catalog = fetch_provider_profile_catalog(&mut client, workspace)
+        .await
+        .unwrap_or_default();
+    warn_credential_env_vars(&environment, &profile_catalog, suppress_credential_warnings);
     let response = client
         .create_sandbox_template(CreateSandboxTemplateRequest {
+            request_id: String::new(),
             template: Some(SandboxWorkloadTemplate {
                 metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                     id: String::new(),
@@ -2873,6 +2974,7 @@ pub async fn sandbox_template_delete(
     for name in names {
         let response = client
             .delete_sandbox_template(DeleteSandboxTemplateRequest {
+                request_id: String::new(),
                 allow_missing: true,
                 name: name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
@@ -3301,6 +3403,7 @@ pub async fn sandbox_delete(
 
         let response = match client
             .delete_sandbox(DeleteSandboxRequest {
+                request_id: String::new(),
                 allow_missing: true,
                 name: name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
@@ -3361,6 +3464,7 @@ pub async fn sandbox_stop(
     let mut client = grpc_client(server, tls).await?;
     let sandbox = client
         .stop_sandbox(StopSandboxRequest {
+            request_id: String::new(),
             name: name.to_string(),
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
         })
@@ -3384,6 +3488,7 @@ pub async fn sandbox_start(
     let mut client = grpc_client(server, tls).await?;
     let sandbox = client
         .start_sandbox(StartSandboxRequest {
+            request_id: String::new(),
             name: name.to_string(),
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
         })
@@ -3482,6 +3587,7 @@ pub async fn service_expose(
     let mut client = grpc_client(server, tls).await?;
     let response = client
         .expose_service(ExposeServiceRequest {
+            request_id: String::new(),
             sandbox: sandbox.to_string(),
             service: service.to_string(),
             target_port: u32::from(target_port),
@@ -3608,6 +3714,7 @@ pub async fn service_delete(
     let mut client = grpc_client(server, tls).await?;
     let response = client
         .delete_service(DeleteServiceRequest {
+            request_id: String::new(),
             allow_missing: false,
             sandbox: sandbox.to_string(),
             service: service.to_string(),
@@ -3828,6 +3935,7 @@ pub async fn workspace_create(
     let mut client = grpc_client(server, tls).await?;
     let response = client
         .create_workspace(CreateWorkspaceRequest {
+            request_id: String::new(),
             name: name.to_string(),
             labels,
         })
@@ -3982,6 +4090,7 @@ pub async fn workspace_delete(server: &str, names: &[String], tls: &TlsOptions) 
     for name in names {
         let response = client
             .delete_workspace(DeleteWorkspaceRequest {
+                request_id: String::new(),
                 allow_missing: false,
                 name: name.clone(),
             })
@@ -4019,6 +4128,7 @@ pub async fn workspace_member_add(
     let mut client = grpc_client(server, tls).await?;
     let response = client
         .add_workspace_member(AddWorkspaceMemberRequest {
+            request_id: String::new(),
             workspace: workspace.to_string(),
             principal_subject: subject.to_string(),
             role: role_val.into(),
@@ -4053,6 +4163,7 @@ pub async fn workspace_member_remove(
     let mut client = grpc_client(server, tls).await?;
     let response = client
         .remove_workspace_member(RemoveWorkspaceMemberRequest {
+            request_id: String::new(),
             allow_missing: true,
             workspace: workspace.to_string(),
             principal_subject: subject.to_string(),
@@ -4877,6 +4988,7 @@ pub async fn sandbox_policy_set(
     }
 }
 
+/// Preview or atomically submit explicitly scoped incremental policy operations.
 #[allow(clippy::too_many_arguments)]
 pub async fn sandbox_policy_update(
     server: &str,
@@ -4888,6 +5000,8 @@ pub async fn sandbox_policy_update(
     remove_rules: &[String],
     binaries: &[String],
     rule_name: Option<&str>,
+    any_binary: bool,
+    endpoint_path: Option<&str>,
     dry_run: bool,
     wait: bool,
     timeout_secs: u64,
@@ -4906,6 +5020,8 @@ pub async fn sandbox_policy_update(
         remove_rules,
         binaries,
         rule_name,
+        any_binary,
+        endpoint_path,
     )?;
 
     let mut client = grpc_client(server, tls).await?;
@@ -5892,6 +6008,7 @@ pub async fn sandbox_draft_approve(
 
     let response = client
         .approve_draft_chunk(ApproveDraftChunkRequest {
+            request_id: String::new(),
             name: name.to_string(),
             chunk_id: chunk_id.to_string(),
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
@@ -5924,6 +6041,7 @@ pub async fn sandbox_draft_reject(
 
     client
         .reject_draft_chunk(RejectDraftChunkRequest {
+            request_id: String::new(),
             name: name.to_string(),
             chunk_id: chunk_id.to_string(),
             reason: reason.to_string(),
@@ -5965,6 +6083,7 @@ pub async fn sandbox_draft_approve_all(
 
     let response = client
         .approve_all_draft_chunks(ApproveAllDraftChunksRequest {
+            request_id: String::new(),
             name: name.to_string(),
             include_security_flagged,
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
@@ -5996,6 +6115,7 @@ pub async fn sandbox_draft_clear(
 
     let response = client
         .clear_draft_chunks(ClearDraftChunksRequest {
+            request_id: String::new(),
             name: name.to_string(),
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
         })
@@ -7349,6 +7469,69 @@ mod tests {
         let json = super::sandbox_template_to_json(&template);
 
         assert_eq!(json["resources"]["gpu"], 2);
+    }
+
+    #[test]
+    fn provisioning_json_exposes_deadline_and_cleanup_separately() {
+        let mut sandbox = Sandbox::default();
+        sandbox.set_phase(SandboxPhase::Error.into());
+        sandbox.status.as_mut().unwrap().provisioning =
+            Some(openshell_core::proto::SandboxProvisioning {
+                attempt_id: "attempt".into(),
+                timeout_time: openshell_core::time::timestamp_from_millis(300_000).ok(),
+                cleanup_error: "Compute reclamation is pending; the gateway will retry".into(),
+                ..Default::default()
+            });
+        let json = super::sandbox_to_json(&sandbox);
+        assert_eq!(json["provisioning"]["attempt_id"], "attempt");
+        assert!(json["provisioning"]["deadline"].is_null());
+        assert!(json["provisioning"]["cleanup_completed_time"].is_null());
+        assert_eq!(json["provisioning"]["timeout_time"], "1970-01-01T00:05:00Z");
+        assert!(
+            json["provisioning"]["cleanup_error"]
+                .as_str()
+                .unwrap()
+                .contains("pending")
+        );
+    }
+
+    #[test]
+    fn sandbox_json_exposes_repair_diagnostic_and_accepted_generation() {
+        use openshell_core::proto::{ConfigurationAdmissionState, SandboxConfigurationAdmission};
+
+        let mut sandbox = Sandbox::default();
+        sandbox.set_phase(SandboxPhase::Provisioning as i32);
+        let status = sandbox.status.as_mut().unwrap();
+        status.configuration_admission = Some(SandboxConfigurationAdmission {
+            state: ConfigurationAdmissionState::Rejected as i32,
+            error: "rule image_api requires L7 inspection".to_string(),
+            policy_hash: "candidate-hash".to_string(),
+            ..Default::default()
+        });
+        status.conditions.push(SandboxCondition {
+            r#type: "ConfigurationReady".to_string(),
+            status: "False".to_string(),
+            reason: "ConfigurationInvalid".to_string(),
+            message: "rule image_api requires L7 inspection".to_string(),
+            ..Default::default()
+        });
+        let json = super::sandbox_to_json(&sandbox);
+        assert_eq!(json["configuration_admission"]["state"], "rejected");
+        assert_eq!(json["conditions"][0]["reason"], "ConfigurationInvalid");
+        assert_eq!(
+            super::configuration_failure_message(&sandbox),
+            Some("rule image_api requires L7 inspection")
+        );
+        sandbox
+            .status
+            .as_mut()
+            .unwrap()
+            .configuration_admission
+            .as_mut()
+            .unwrap()
+            .error
+            .clear();
+        assert_eq!(super::configuration_failure_message(&sandbox), None);
     }
 
     #[test]
