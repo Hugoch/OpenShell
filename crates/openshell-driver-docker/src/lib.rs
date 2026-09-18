@@ -4341,11 +4341,11 @@ async fn prepare_docker_boundary_files(
             server_name: tls.server_name.clone(),
             trust_anchor_pem: tls.trust_anchor_pem.clone(),
         },
-        // The supervisor shares the Docker host network, so mediated
-        // connections to the reserved host alias terminate on host loopback.
-        // Publishing this through the backend descriptor lets policy DNS
-        // synthesize the alias without relying on container DNS or /etc/hosts.
-        host_gateway_ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        // Pin the reserved host alias to the same address used by the
+        // host-networked supervisor. This is normally loopback, but container
+        // CI reaches the gateway and host fixtures through the job
+        // container's bridge address.
+        host_gateway_ip: docker_supervisor_host_address(&config.supervisor_grpc_endpoint),
         workload_identity: workload_identity.clone(),
         child_env: docker_child_environment(sandbox),
     }
@@ -4767,20 +4767,24 @@ fn docker_supervisor_host_config(mounts: Vec<Mount>, grpc_endpoint: &str) -> Hos
 }
 
 fn docker_supervisor_host_aliases(grpc_endpoint: &str) -> Option<Vec<String>> {
-    let endpoint = Url::parse(grpc_endpoint).ok()?;
-    let address = match endpoint.host()? {
-        url::Host::Ipv4(address) => address.to_string(),
-        url::Host::Domain(domain) if domain.eq_ignore_ascii_case("localhost") => {
-            Ipv4Addr::LOCALHOST.to_string()
-        }
-        // Docker's extra-host syntax for IPv6 differs across daemon versions.
-        // Leave IPv6 and named remote endpoints to normal name resolution.
-        url::Host::Ipv6(_) | url::Host::Domain(_) => return None,
-    };
+    let address = docker_supervisor_host_address(grpc_endpoint)?;
     Some(vec![
         format!("{HOST_OPEN_SHELL_INTERNAL}:{address}"),
         format!("{HOST_DOCKER_INTERNAL}:{address}"),
     ])
+}
+
+fn docker_supervisor_host_address(grpc_endpoint: &str) -> Option<IpAddr> {
+    let endpoint = Url::parse(grpc_endpoint).ok()?;
+    match endpoint.host()? {
+        url::Host::Ipv4(address) => Some(IpAddr::V4(address)),
+        url::Host::Domain(domain) if domain.eq_ignore_ascii_case("localhost") => {
+            Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        }
+        // Docker's extra-host syntax for IPv6 differs across daemon versions.
+        // Leave IPv6 and named remote endpoints to normal name resolution.
+        url::Host::Ipv6(_) | url::Host::Domain(_) => None,
+    }
 }
 
 async fn spawn_docker_control_process(

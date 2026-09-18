@@ -2561,6 +2561,10 @@ fn docker_supervisor_maps_host_aliases_to_the_gateway_address() {
             "host.docker.internal:172.20.0.4".to_string(),
         ])
     );
+    assert_eq!(
+        docker_supervisor_host_address("https://172.20.0.4:17670"),
+        Some("172.20.0.4".parse().unwrap())
+    );
 }
 
 #[test]
@@ -2568,6 +2572,10 @@ fn docker_supervisor_leaves_named_gateway_hosts_to_dns() {
     let host = docker_supervisor_host_config(Vec::new(), "https://gateway.example.com:17670");
 
     assert_eq!(host.extra_hosts, None);
+    assert_eq!(
+        docker_supervisor_host_address("https://gateway.example.com:17670"),
+        None
+    );
 }
 
 #[test]
