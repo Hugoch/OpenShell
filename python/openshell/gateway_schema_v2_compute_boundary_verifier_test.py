@@ -141,7 +141,7 @@ socket_path = "/tmp/{variant}.sock"
             "cli_trace_wrapper_sha256_before_execution": result[
                 "cli_trace_wrapper_sha256"
             ],
-            "external_driver_grpc_endpoint": "https://host.containers.internal:18181",
+            "external_driver_grpc_endpoint": "https://127.0.0.1:18181",
             "external_driver_host_gateway_ip": "host-gateway",
             "external_driver_userns": None,
             "external_driver_spiffe": False,
@@ -154,7 +154,7 @@ socket_path = "/tmp/{variant}.sock"
                 "OPENSHELL_SANDBOX_IMAGE": "example.invalid/sandbox@" + IMAGE_DIGEST,
                 "OPENSHELL_SANDBOX_IMAGE_PULL_POLICY": policy,
                 "OPENSHELL_HEALTH_CHECK_INTERVAL_SECS": 10,
-                "OPENSHELL_GRPC_ENDPOINT": "https://host.containers.internal:18181",
+                "OPENSHELL_GRPC_ENDPOINT": "https://127.0.0.1:18181",
                 "OPENSHELL_GATEWAY_PORT": 18181,
                 "OPENSHELL_NETWORK_NAME": f"{variant}-network",
                 "OPENSHELL_STOP_TIMEOUT": 15,
