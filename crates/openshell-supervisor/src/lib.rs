@@ -1203,6 +1203,24 @@ pub async fn run_sandbox(
     };
     tokio::pin!(proxy_exited);
 
+    // Report the stream-delivered bootstrap result while the boundary remains
+    // confirmed but held. Docker and other admission-aware drivers do not
+    // release the workload until the gateway accepts this result, so delaying
+    // the stream until after `start_agent` would deadlock activation.
+    let prestarted_supervisor_session = match prepared_supervisor_session.take() {
+        Some(prepared) => Some(
+            openshell_supervisor_process::delegated::start_prepared_supervisor_session(
+                prepared,
+                prepared_bootstrap_result.take(),
+                ssh_socket_path.as_deref(),
+                config_apply_tx.clone(),
+                Some(supervisor_session_updates.clone()),
+            )
+            .await?,
+        ),
+        None => None,
+    };
+
     let (confirmed, backend_name) = remote_ready;
     let exit_code = {
         let running = confirmed
@@ -1226,8 +1244,7 @@ pub async fn run_sandbox(
             running.loopback_connector(),
             agent.clone(),
             Some(supervisor_session_updates),
-            prepared_supervisor_session,
-            prepared_bootstrap_result.take(),
+            prestarted_supervisor_session,
             Some(config_apply_tx),
         )
         .await?;
