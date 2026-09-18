@@ -4505,8 +4505,20 @@ async fn run_policy_poll_loop_with_client<C: PolicyGatewayClient>(
         match client.poll_settings(&ctx.sandbox_id).await {
             Ok(result) => {
                 let _ = ctx.workspace_tx.send(client.workspace());
-                match initial_poll_disposition(&ctx.loaded_policy_origin, &result) {
-                    InitialPollDisposition::Acknowledge(candidate) => {
+                match (
+                    initial_poll_disposition(&ctx.loaded_policy_origin, &result),
+                    initial_generation.as_ref(),
+                ) {
+                    (InitialPollDisposition::Acknowledge(candidate), Some(generation))
+                        if middleware_registry_status == MiddlewareRegistryStatus::Synchronized
+                            && !generation.is_stale() =>
+                    {
+                        ctx.provider_readiness.policy_activated(
+                            &EnvironmentIdentity::from_settings(&result),
+                            result.config_revision,
+                            generation.clone(),
+                        );
+                        current_policy_generation = Some(generation.clone());
                         apply_ocsf_json_setting(&ctx.ocsf_enabled, &result.settings);
                         apply_agent_proposals_enabled(
                             &ctx.agent_proposals,
@@ -4539,8 +4551,15 @@ async fn run_policy_poll_loop_with_client<C: PolicyGatewayClient>(
                             "Settings poll: initial policy matches loaded revision"
                         );
                     }
-                    InitialPollDisposition::Reconcile => pending_result = Some(result),
-                    InitialPollDisposition::TrackOnly => {
+                    (
+                        InitialPollDisposition::Acknowledge(_) | InitialPollDisposition::Reconcile,
+                        _,
+                    ) => {
+                        // Matching policy bytes cannot prove an unavailable registry
+                        // or a replaced generation. Install this snapshot immediately.
+                        pending_result = Some(result);
+                    }
+                    (InitialPollDisposition::TrackOnly, _) => {
                         apply_ocsf_json_setting(&ctx.ocsf_enabled, &result.settings);
                         apply_agent_proposals_enabled(
                             &ctx.agent_proposals,
@@ -6200,6 +6219,7 @@ network_policies:
             >,
         >,
         reports: UnboundedSender<(u32, bool, String)>,
+        environment_identity: Arc<std::sync::Mutex<EnvironmentIdentity>>,
         poll_calls: Arc<AtomicUsize>,
     }
 
@@ -6217,6 +6237,8 @@ network_policies:
                 .recv()
                 .await
                 .ok_or_else(|| miette::miette!("scripted policy poll channel closed"))?;
+            *self.environment_identity.lock().unwrap() =
+                EnvironmentIdentity::from_settings(&result);
             Ok(result)
         }
 
@@ -6225,7 +6247,14 @@ network_policies:
             _endpoint: &str,
             _sandbox_id: &str,
         ) -> Result<openshell_core::grpc_client::ProviderEnvironmentResult> {
-            Ok(startup_provider(0))
+            let identity = self.environment_identity.lock().unwrap().clone();
+            let mut provider = startup_provider(identity.revision);
+            provider.provider_attachment_epoch = identity.attachment_epoch;
+            provider.policy_hash = identity.policy_hash;
+            if provider.policy_hash.is_empty() {
+                provider.readiness_reason = ProviderReadinessReason::SnapshotMismatch;
+            }
+            Ok(provider)
         }
 
         async fn report_policy_status(
@@ -6309,6 +6338,9 @@ network_policies:
             ScriptedPolicyGateway {
                 polls: Arc::new(tokio::sync::Mutex::new(poll_rx)),
                 reports: report_tx,
+                environment_identity: Arc::new(std::sync::Mutex::new(
+                    EnvironmentIdentity::default(),
+                )),
                 poll_calls: Arc::new(AtomicUsize::new(0)),
             },
             poll_tx,

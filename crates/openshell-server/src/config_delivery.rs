@@ -743,7 +743,10 @@ mod tests {
 
     use super::*;
     use crate::grpc::test_support::{connect_supervisor_stream, test_server_state};
-    use openshell_core::proto::{GatewayMessage, ObjectMeta, SandboxSpec, gateway_message};
+    use openshell_core::proto::{
+        GatewayMessage, ObjectMeta, SandboxSpec, StartupConfigPrepared, SupervisorMessage,
+        gateway_message, startup_config_prepared, supervisor_message,
+    };
 
     fn key(sandbox_id: &str, component: ConfigComponentKind) -> DeliveryKey {
         DeliveryKey {
@@ -1263,8 +1266,29 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+        let Some(gateway_message::Payload::StartupConfigCandidate(candidate)) = first.payload
+        else {
+            panic!("expected StartupConfigCandidate");
+        };
+        harness
+            .outbound
+            .send(SupervisorMessage {
+                payload: Some(supervisor_message::Payload::StartupConfigPrepared(
+                    StartupConfigPrepared {
+                        candidate_id: candidate.candidate_id,
+                        result: Some(startup_config_prepared::Result::Unchanged(())),
+                    },
+                )),
+            })
+            .await
+            .unwrap();
+        let accepted = tokio::time::timeout(Duration::from_secs(5), harness.inbound.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         assert!(matches!(
-            first.payload,
+            accepted.payload,
             Some(gateway_message::Payload::SessionAccepted(_))
         ));
 

@@ -14,6 +14,7 @@
 )]
 
 include!(concat!(env!("OUT_DIR"), "/openshell.storage.v1.rs"));
+include!(concat!(env!("OUT_DIR"), "/openshell.storage.v2.rs"));
 
 pub(crate) const STORAGE_FILE_DESCRIPTOR_SET: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/storage_descriptor.bin"));
@@ -158,13 +159,13 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
     const STORAGE_V1_SCHEMA_SHA256: &str =
-        "13d0c7eacbb928bae595c6f8e0cc2188da1a541ab5c045cb7d199d4e11005865";
+        "d68401809d8cea445c35233ef32412bbd041cb2ac5acaf368a0d0bf74d2ddf17";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "d9f83bbaa7644565731e157831d825be47765a905f18d6a2b6f2c3b00d1b6804";
+        "68b67a499144ebe9e8c9ac67fd51ed174b8f90e1c895c407a1ec83821ab71734";
     const DURABLE_SCHEMA_SHA256: &str =
-        "a278a932ce48bcb1d5dd2966e1310ddb1b43ce424e7289930f80e2a696e92131";
+        "c794edf1c7838e33562b2601681129c87d6430ad26893db864f30dfcc299df3b";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
-        "aba0066e854f0b3bf21fc86e627e0cf4104bdbe8d05cc044d4386ddfafd8a3c4";
+        "376cc8ecbc8b9b995e2170ccb5c2f18ef82adf9b5f55f1683571410722dfd4cf";
     // A persisted Sandbox without endpoint status retains its lifecycle fields;
     // the absent repeated field decodes empty and needs no database rewrite.
     const SANDBOX_WITHOUT_ENDPOINT_STATUS: &str = "0a1e0a0a73616e64626f782d6964120773616e64626f783a0764656661756c741a2b0a0773616e64626f782a0d0a05526561647912045472756530023807420d73757065727669736f722d6964";
@@ -180,10 +181,9 @@ mod tests {
         "0a0472756c651a07666978747572652d0000403f3a0b6578616d706c652e636f6d40bb035002";
     const V0_0_116_POLICY_RECORD: &str = "0a09706f6c6963792d6964120a73616e64626f782d6964180222030102032a0673686132353632066c6f616465643a046e6f6e6540fa0148ac0252110a06736f75726365120766697874757265";
     const V0_0_116_DRAFT_RECORD: &str = "0a086368756e6b2d6964120a73616e64626f782d69641802220770656e64696e672a0472756c65320204053a076669787475726549000000000000e83f50de02589003620b6578616d706c652e636f6d68bb037801";
-    const STORAGE_MESSAGE_NAMES: [&str; 10] = [
+    const STORAGE_MESSAGE_NAMES: [&str; 9] = [
         "DraftChunkPayload",
         "PolicyRevisionPayload",
-        "StoredConfigComponentObservation",
         "StoredConfigUpdateOperation",
         "StoredDraftChunk",
         "StoredPolicyRevision",
@@ -206,7 +206,7 @@ mod tests {
         ".openshell.sandbox.v1.SandboxPolicy",
         ".openshell.storage.v1.DraftChunkPayload",
         ".openshell.storage.v1.PolicyRevisionPayload",
-        ".openshell.storage.v1.StoredConfigComponentObservation",
+        ".openshell.storage.v2.StoredConfigComponentObservation",
         ".openshell.storage.v1.StoredConfigUpdateOperation",
         ".openshell.storage.v1.StoredProviderCredentialRefreshStateV2",
         ".openshell.storage.v1.StoredProviderProfile",
@@ -614,8 +614,8 @@ mod tests {
                 overlap_hash.as_str(),
             ),
             (
-                (310, 22),
-                (92, 16),
+                (314, 22),
+                (93, 16),
                 (80, 16),
                 PUBLIC_RPC_SCHEMA_SHA256,
                 DURABLE_SCHEMA_SHA256,

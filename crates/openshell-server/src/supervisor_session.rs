@@ -2308,7 +2308,7 @@ async fn record_config_component_observation(
             | ConfigApplyOutcome::Unsupported => "gateway",
         }
         .to_string(),
-        observed_at_ms: now_ms,
+        observed_at_time: openshell_core::time::timestamp_from_millis(now_ms).ok(),
         sanitized_error,
     };
     state
@@ -2590,7 +2590,7 @@ mod tests {
         );
         assert_eq!(observation.effective_source, "last_known_good");
         assert_eq!(observation.sanitized_error.len(), 1_024);
-        assert!(observation.observed_at_ms > 0);
+        assert!(observation.observed_at_time.is_some());
     }
 
     async fn first_gateway_message(
