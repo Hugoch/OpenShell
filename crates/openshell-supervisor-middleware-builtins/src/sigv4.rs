@@ -8,7 +8,160 @@ use aws_sigv4::http_request::{
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
 use miette::{Result, miette};
+use std::fmt;
 use std::time::SystemTime;
+
+/// Built-in name used for the trusted post-credential signing stage.
+pub const NAME: &str = "openshell/sigv4";
+
+/// Maximum body retained by the built-in when the AWS signature covers the
+/// complete payload.
+pub const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+
+/// Endpoint-selected signing behavior. This mirrors the existing policy
+/// values without exposing network-policy types to the built-in crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestedPayloadMode {
+    /// Preserve the payload mode selected by the AWS client when possible.
+    Auto,
+    /// Hash and sign the complete request body.
+    SignBody,
+    /// Sign only the request head with `UNSIGNED-PAYLOAD`.
+    UnsignedPayload,
+}
+
+/// Normalized request framing relevant to payload-mode selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyFraming {
+    None,
+    ContentLength,
+    Chunked,
+}
+
+/// Payload representation covered by the generated signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadMode {
+    /// Hash the complete request body.
+    SignBody,
+    /// Sign headers with the AWS `UNSIGNED-PAYLOAD` sentinel.
+    UnsignedPayload,
+    /// Sign an `aws-chunked` stream that carries an unsigned trailer.
+    StreamingUnsignedTrailer,
+}
+
+impl fmt::Display for PayloadMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SignBody => formatter.write_str("sign_body"),
+            Self::UnsignedPayload => formatter.write_str("unsigned_payload"),
+            Self::StreamingUnsignedTrailer => formatter.write_str("streaming_unsigned_trailer"),
+        }
+    }
+}
+
+/// Resolve the concrete AWS payload mode from endpoint policy and the
+/// caller's original request head.
+pub fn resolve_payload_mode(
+    requested: RequestedPayloadMode,
+    original_headers: &str,
+    framing: BodyFraming,
+) -> Result<PayloadMode> {
+    match requested {
+        RequestedPayloadMode::SignBody => return Ok(PayloadMode::SignBody),
+        RequestedPayloadMode::UnsignedPayload => return Ok(PayloadMode::UnsignedPayload),
+        RequestedPayloadMode::Auto => {}
+    }
+
+    for line in original_headers.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.eq_ignore_ascii_case("x-amz-content-sha256") {
+            continue;
+        }
+        let value = value.trim().to_ascii_lowercase();
+        return match value.as_str() {
+            "streaming-unsigned-payload-trailer" => Ok(PayloadMode::StreamingUnsignedTrailer),
+            "unsigned-payload" => Ok(PayloadMode::UnsignedPayload),
+            value if value.starts_with("streaming-") => Err(miette!(
+                "SigV4 auto-detect does not support chunk-signed streaming mode \
+                 '{value}'; use credential_signing: sigv4:no_body to stream \
+                 with UNSIGNED-PAYLOAD instead"
+            )),
+            _ => Ok(PayloadMode::SignBody),
+        };
+    }
+
+    Ok(if framing == BodyFraming::ContentLength {
+        PayloadMode::SignBody
+    } else {
+        PayloadMode::UnsignedPayload
+    })
+}
+
+/// Credential values kept inside the trusted built-in boundary.
+#[derive(Debug, Clone, Copy)]
+pub struct SigningCredentials<'a> {
+    pub access_key: &'a str,
+    pub secret_key: &'a str,
+    pub session_token: Option<&'a str>,
+}
+
+/// Non-secret signing target selected from the admitted endpoint policy.
+#[derive(Debug, Clone, Copy)]
+pub struct SigningTarget<'a> {
+    pub host: &'a str,
+    pub region: &'a str,
+    pub service: &'a str,
+}
+
+/// Restricted in-process signer invoked only after credential resolution.
+#[derive(Debug, Default)]
+pub struct SigV4Middleware;
+
+impl SigV4Middleware {
+    /// Remove caller-provided AWS authorization fields before credential
+    /// placeholder rewriting and trusted re-signing.
+    pub fn strip_existing_auth(raw: &[u8]) -> Result<Vec<u8>> {
+        strip_aws_headers(raw)
+    }
+
+    /// Sign a complete request, including its body hash.
+    pub fn sign_body(
+        raw: &[u8],
+        target: SigningTarget<'_>,
+        credentials: SigningCredentials<'_>,
+    ) -> Result<Vec<u8>> {
+        apply_sigv4_to_request(
+            raw,
+            target.host,
+            target.region,
+            target.service,
+            credentials.access_key,
+            credentials.secret_key,
+            credentials.session_token,
+        )
+    }
+
+    /// Sign a request head without retaining the request body.
+    pub fn sign_headers(
+        raw_headers: &[u8],
+        target: SigningTarget<'_>,
+        credentials: SigningCredentials<'_>,
+        payload_mode: PayloadMode,
+    ) -> Result<Vec<u8>> {
+        apply_sigv4_headers_only_with_body(
+            raw_headers,
+            target.host,
+            target.region,
+            target.service,
+            credentials.access_key,
+            credentials.secret_key,
+            credentials.session_token,
+            payload_mode,
+        )
+    }
+}
 
 /// AWS regions contain a hyphen followed by a digit (e.g., `us-east-1`).
 /// Service names like `s3` or `bedrock-runtime` do not.
@@ -326,7 +479,7 @@ pub fn apply_sigv4_headers_only(
         access_key,
         secret_key,
         session_token,
-        SignableBody::UnsignedPayload,
+        PayloadMode::UnsignedPayload,
     )
 }
 
@@ -344,7 +497,7 @@ pub fn apply_sigv4_headers_only_with_body(
     access_key: &str,
     secret_key: &str,
     session_token: Option<&str>,
-    body: SignableBody<'_>,
+    body: PayloadMode,
 ) -> Result<Vec<u8>> {
     let header_str = std::str::from_utf8(raw_headers)
         .map_err(|e| miette!("SigV4 signing: request headers are not valid UTF-8: {e}"))?;
@@ -353,6 +506,15 @@ pub fn apply_sigv4_headers_only_with_body(
     let identity = build_identity(access_key, secret_key, session_token);
     let signing_params = build_signing_params(&identity, region, service)?;
 
+    let body = match body {
+        PayloadMode::SignBody => {
+            return Err(miette!(
+                "headers-only SigV4 signing cannot select full body hashing"
+            ));
+        }
+        PayloadMode::UnsignedPayload => SignableBody::UnsignedPayload,
+        PayloadMode::StreamingUnsignedTrailer => SignableBody::StreamingUnsignedPayloadTrailer,
+    };
     let signable_request = SignableRequest::new(
         parts.method,
         &uri,
@@ -374,6 +536,56 @@ pub fn apply_sigv4_headers_only_with_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_payload_mode_preserves_unsigned_payload() {
+        assert_eq!(
+            resolve_payload_mode(
+                RequestedPayloadMode::Auto,
+                "PUT / HTTP/1.1\r\nX-Amz-Content-Sha256: UNSIGNED-PAYLOAD\r\n\r\n",
+                BodyFraming::ContentLength,
+            )
+            .unwrap(),
+            PayloadMode::UnsignedPayload
+        );
+    }
+
+    #[test]
+    fn auto_payload_mode_preserves_streaming_unsigned_trailer() {
+        assert_eq!(
+            resolve_payload_mode(
+                RequestedPayloadMode::Auto,
+                "PUT / HTTP/1.1\r\nX-Amz-Content-Sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER\r\n\r\n",
+                BodyFraming::Chunked,
+            )
+            .unwrap(),
+            PayloadMode::StreamingUnsignedTrailer
+        );
+    }
+
+    #[test]
+    fn auto_payload_mode_uses_body_hash_for_content_length() {
+        assert_eq!(
+            resolve_payload_mode(
+                RequestedPayloadMode::Auto,
+                "POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\n",
+                BodyFraming::ContentLength,
+            )
+            .unwrap(),
+            PayloadMode::SignBody
+        );
+    }
+
+    #[test]
+    fn auto_payload_mode_rejects_chunk_signed_streams() {
+        let error = resolve_payload_mode(
+            RequestedPayloadMode::Auto,
+            "PUT / HTTP/1.1\r\nX-Amz-Content-Sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD\r\n\r\n",
+            BodyFraming::Chunked,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("chunk-signed streaming mode"));
+    }
 
     #[test]
     fn extract_region_from_hostname() {

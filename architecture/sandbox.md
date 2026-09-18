@@ -283,12 +283,27 @@ host selectors choose the chain independently of the network rule that admitted
 the request. Policy-local map keys identify configs, while built-in names or
 operator-owned registration names identify implementations.
 
-Built-ins run in-process against a borrowed view of the chain's current HTTP
-request state. Operator services retain the bounded protobuf/gRPC contract, and
-the remote adapter materializes an owned HTTP evaluation only when a request
-crosses that transport boundary. Both paths support bounded bidirectional
-WebSocket sessions, so a manifest advertises capabilities independently of
-transport.
+Built-ins and operator services use the same event-oriented request contract.
+Each selected `HTTP_REQUEST/PRE_CREDENTIALS` stage opens a bidirectional stream,
+receives preflight, and selects header-only, whole-body, lockstep stream, or
+owned-stream processing. The HTTP/1 relay normalizes fixed and chunked bodies
+into bounded units. A chain made only of lockstep stream stages can forward each
+approved unit upstream immediately with bounded channel and socket backpressure.
+The relay switches the upstream request to chunked framing when transformations
+can change unit sizes and concurrently watches for an early upstream response.
+It cancels the middleware session and never replays the request if the upstream
+responds before upload completes. Chains containing whole-body or owned stages,
+body-aware policy re-evaluation, request-body credential rewriting, or signing
+that needs the complete payload retain a hold barrier and spool output first.
+Whole-body stages receive one data-bearing final unit; streaming and owned
+stages receive nonempty data units followed by one empty terminal unit. Body
+receipt, middleware processing, and output delivery share a two-minute
+wall-clock deadline.
+Owned streams transfer replay responsibility to a fail-closed stage, allowing
+whole-request transformations larger than the per-message protobuf limit while
+keeping input, output, and backpressure bounded. Body-aware GraphQL, JSON-RPC,
+and MCP paths retain a hold barrier so policy can re-evaluate every accepted
+replacement before later stages or upstream delivery.
 When a stage ends, the remote adapter sends its terminal event, half-closes the
 request stream, and briefly drains the response stream before releasing the
 transport. This keeps a queued terminal event from being canceled with the
@@ -304,6 +319,12 @@ validation. `openshell-policy` validates policy-owned structure, and the active
 middleware registry validates implementation-owned config. The generic
 registry and chain runner live in `openshell-supervisor-middleware`; first-party
 implementations live in `openshell-supervisor-middleware-builtins`.
+
+The restricted `HTTP_REQUEST/POST_CREDENTIALS` phase is available only to
+trusted in-process built-ins. External manifests advertising that phase are
+rejected because it can observe resolved credentials. `openshell/sigv4` owns
+AWS request signing at this phase while existing endpoint policy fields select
+its signing mode and target.
 
 The selected middleware chain can also inspect the final HTTP response before
 it returns to the workload. Stages select header-only, whole-body, or streaming
@@ -530,10 +551,11 @@ subject, and gateway SPIFFE subject, and their cache lifetime is capped by the
 intermediate token response, stored subject-token expiry, and supervisor SVID
 expiry.
 
-For AWS endpoints that require request-level signing, the proxy supports SigV4
-re-signing. When `credential_signing: sigv4` is set on an L7 endpoint, the proxy
-strips the client's placeholder-based AWS auth headers, re-signs with real
-credentials from the provider, and forwards the request upstream. The signing
+For AWS endpoints that require request-level signing, the restricted in-process
+`openshell/sigv4` middleware performs SigV4 re-signing after provider credential
+resolution. When `credential_signing: sigv4` is set on an L7 endpoint, it strips
+the client's placeholder-based AWS auth headers, re-signs with real credentials
+from the provider, and forwards the request upstream. The signing
 endpoint must have a credential source before the policy generation activates:
 an attached endpoint-bearing AWS profile whose boundary covers the endpoint, or
 an attached endpointless AWS profile explicitly named by the endpoint's

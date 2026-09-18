@@ -17,10 +17,13 @@ For each inspected HTTP request, the supervisor:
 
 1. Evaluates network and L7 policy.
 2. Selects middleware whose host selectors match the admitted destination.
-3. Buffers the request body using the largest body limit in the selected chain.
-4. Runs matching middleware by ascending `order`. Policy validation rejects duplicate order values.
-5. Re-checks body-aware protocol policy (GraphQL, JSON-RPC, MCP) after each stage that replaces the body. Every middleware receives a payload the policy admits, and a transformation cannot smuggle a denied or unparseable operation to a later stage or the upstream.
-6. Applies allowed transformations, injects provider credentials, and forwards the request.
+3. Opens one `HttpRequestPreCredentials.Evaluate` bidirectional stream for each matching request binding, in ascending `order`.
+4. Sends preflight with the admitted target, safe headers, config, limits, and permitted body modes. The stage skips, blocks, or selects header-only, whole-body, lockstep streaming, or owned streaming inspection.
+5. Streams normalized body bytes and trailers through the active chain with bounded units and backpressure. A chain made only of `STREAM_BYTES` stages can forward each approved unit upstream immediately. Whole-body, owned, and other withholding paths spool transformed output outside the RPC envelope first.
+6. Re-checks body-aware protocol policy (GraphQL, JSON-RPC, MCP) after each stage that replaces the body. These protocols retain a bounded hold barrier so every later stage and the upstream receive a payload admitted by policy.
+7. Injects provider credentials and forwards the request.
+
+The request stream carries HTTP/1.x payload bytes without transfer framing. OpenShell decodes chunked input before evaluation, validates request trailers, and computes the final `Content-Length` or chunked framing after the chain completes. A stage never receives credential, routing, framing, hop-by-hop, or `Connection`-nominated headers.
 
 Response middleware advertising `HTTP_RESPONSE/PRE_RETURN` inspects the final upstream response before OpenShell returns it to the workload. Its preflight includes upstream `Content-Length`, `Content-Encoding`, and `Content-Range` fields as read-only metadata, except when `Connection` nominates the field as hop-by-hop. Middleware cannot write or remove these fields. OpenShell computes downstream framing separately and emits the final `Content-Length` or `Transfer-Encoding` exactly once after middleware processing.
 
@@ -35,7 +38,7 @@ The protobuf represents each logical message with a `text` or `binary` payload v
 
 The network supervisor reserves process-wide assembly capacity before buffering every parsed WebSocket text message, even when no middleware is selected. At most 32 assemblies run while 64 additional callers wait without buffering payload bytes. When both bounds are full, OpenShell closes the WebSocket with code `1013` before reading the new message payload. A text message may contain at most 4,096 fragments, must make input progress within 30 seconds, and must finish assembly within 2 minutes. Forwarding the completed text frame must finish within another 2 minutes. The assembly budget lasts for the supervisor process lifetime, so policy reloads do not reset its capacity.
 
-Active middleware sessions additionally reserve shared middleware capacity before buffering WebSocket text, and HTTP middleware reserves the same capacity before buffering request bodies; at most 32 evaluations run and 64 additional unbuffered callers wait for capacity. When both middleware bounds are full, OpenShell sheds an HTTP request with `503 Service Unavailable` before reading its body. Persistent middleware streams use a separate process-wide budget of 32 sessions. WebSocket session admission does not wait: if the budget is full, OpenShell applies each selected config's `on_error` behavior before opening a stream.
+Active middleware sessions additionally reserve shared middleware capacity before buffering WebSocket text or advancing an HTTP request stream; at most 32 evaluations run and 64 additional callers wait without buffering payload bytes. When both middleware bounds are full, OpenShell sheds an HTTP request with `503 Service Unavailable` before reading its body. Persistent middleware streams use a separate process-wide budget of 32 sessions. WebSocket session admission does not wait: if the budget is full, OpenShell applies each selected config's `on_error` behavior before opening a stream.
 
 Because each transformed body is re-checked before the next stage runs, a middleware hook always receives a request that satisfies the sandbox policy. A stage whose output the policy rejects stops the chain; under `enforcement: audit` the rejection is logged and the request proceeds.
 
@@ -54,7 +57,9 @@ The request context identifies the originating sandbox to operator-run services.
 
 `openshell/regex` is an example built-in middleware. It replaces only simple, self-contained token patterns in UTF-8 HTTP bodies and client WebSocket text messages; the initial pattern recognizes `sk-` tokens. It does not infer values from keyword assignments such as JSON `password` fields. This best-effort text transformation is not parser-aware and does not guarantee that it will detect or fully remove sensitive values. Its `config` accepts one field, `mode: redact`, which is also the default when the field is omitted. Unknown config fields and non-string values are rejected at policy validation. Custom expressions are not configurable yet.
 
-Operator-run services expose bindings for supported operation and phase pairs. A binding is identified by its operation and phase. V1 supports `HttpRequest/pre_credentials` and `WebSocketMessage/pre_credentials`; a service may expose either or both. Policies attach the complete middleware by its operator-owned gateway registration name.
+Operator-run services expose bindings for supported operation and phase pairs. A binding is identified by its operation and phase. V1 supports external `HTTP_REQUEST/PRE_CREDENTIALS`, `HTTP_RESPONSE/PRE_RETURN`, and `WEBSOCKET_MESSAGE/PRE_CREDENTIALS` bindings. Policies attach the complete middleware by its operator-owned gateway registration name.
+
+`openshell/sigv4` is a restricted in-process built-in at `HTTP_REQUEST/POST_CREDENTIALS`. The REST endpoint's `credential_signing` fields configure it; do not attach it through `network_middlewares`. External registrations that advertise `POST_CREDENTIALS` are rejected because that phase can see supervisor-resolved credentials.
 
 ## Register a Middleware Service
 
@@ -77,14 +82,39 @@ timeout = "500ms"
 | `tls_ca_cert_path` | Optional PEM trust roots for a private HTTPS service. Custom roots replace platform roots and retain hostname verification. |
 | `audience` | Exact audience expected by the service. Defaults to `urn:openshell:extension:middleware:<name>`. |
 | `allow_insecure_transport` | Opt this registration out of extension authentication, permitting a plaintext `http://` endpoint with no bearer credential. Defaults to `false`. Development and trusted-network deployments only. |
-| `max_payload_bytes` | Shared operator limit applied to inspectable logical payloads across every binding exposed by the service, up to the 4 MiB platform maximum. It caps HTTP bodies and complete WebSocket text messages. |
+| `max_payload_bytes` | Shared operator limit applied across every binding, up to the 4 MiB platform maximum. For streamed HTTP request and response modes it caps each unit; for whole-body modes and WebSocket text it caps the complete logical payload. |
 | `timeout` | Optional service-wide RPC timeout using an integer with an `ms` or `s` suffix. Defaults to `500ms`; valid values range from `10ms` through `30s`. |
 
-Each binding returned by `Describe` may advertise a shorter `timeout` using the same syntax and bounds. The operator-configured service timeout is a ceiling: OpenShell uses the smaller of the binding and service values. An omitted binding timeout inherits the service setting, and an omitted service setting uses the 500 ms platform default. OpenShell rejects an invalid timeout before accepting the manifest. The operator-configured service timeout applies to `Describe` and `ValidateConfig`. The effective binding timeout applies only to `EvaluateHttpRequest`, WebSocket preflight, and each WebSocket message. WebSocket streams have no connection-wide deadline.
+Each binding returned by `Describe` may advertise a shorter `timeout` using the same syntax and bounds. The operator-configured service timeout is a ceiling: OpenShell uses the smaller of the binding and service values. An omitted binding timeout inherits the service setting, and an omitted service setting uses the 500 ms platform default. OpenShell rejects an invalid timeout before accepting the manifest. The operator-configured service timeout applies to `Describe` and `ValidateConfig`. The effective binding timeout applies to HTTP stream open and each request or response exchange, WebSocket preflight, and each WebSocket message. A 30-second chain deadline separately bounds one HTTP body-unit pass, one HTTP finalization pass, or one WebSocket message across all stages; it is not a lifetime limit on an accepted stream. Request body receipt, middleware processing, and output delivery share a 2-minute wall-clock deadline. WebSocket streams have no connection-wide middleware deadline.
 
 The gateway connects to every registered service and verifies its capabilities before accepting traffic. Gateway startup fails when a service is unavailable, reports an invalid capability, or exposes more than one binding for the same operation and phase. The manifest `name` is diagnostic metadata and does not need to match the operator registration name. Operator-run registration names cannot claim the reserved `openshell/` namespace.
 
 Registration is static. Restart the gateway after adding, removing, or changing a service. See [Gateway Configuration](/reference/gateway-config#supervisor-middleware-services) for the complete gateway TOML context.
+
+### Implement the HTTP request stream
+
+HTTP request middleware implements the `HttpRequestPreCredentials` service. Its `Evaluate` RPC is bidirectional streaming and follows this lifecycle:
+
+1. OpenShell sends one `HttpRequestPreflight`. Return `skip`, `block_request`, or `inspect`. An inspecting stage applies any request-header mutations and selects one permitted body mode.
+2. For a body mode, OpenShell sends contiguous `HttpRequestBodyUnit` sequences. `WHOLE_BODY_BYTES` receives the complete body in its final unit. Streaming and owned modes receive nonempty data units followed by one empty unit with `end_of_stream`; an empty body also produces that empty final unit.
+3. Return one matching `HttpRequestBodyResult` per input unit. `STREAM_BYTES` must account for the current unit without retaining bytes. `OWNED_STREAM_BYTES` acknowledges each unit with `take_ownership`, then returns contiguous `body_output` units and exactly one `body_finalize` after final input.
+4. OpenShell sends one trailers event to active body stages, including an empty trailer set. Return ordered mutations only for safe, existing trailer fields.
+5. OpenShell sends a best-effort `session_end`, half-closes the request stream, and briefly drains results.
+
+The body modes are:
+
+| Mode | Contract | Failure recovery |
+| --- | --- | --- |
+| `HEADERS_ONLY` | Inspect preflight and mutate safe request headers. | Follows `on_error`. |
+| `WHOLE_BODY_BYTES` | Receive one final normalized body unit. The complete body and replacement must fit `max_payload_bytes`. | Follows `on_error`; the original remains available. |
+| `STREAM_BYTES` | Receive and return bounded units in lockstep. A result cannot retain input across units. | Follows `on_error`; the current unit remains available. |
+| `OWNED_STREAM_BYTES` | Durably accept each input unit, then emit a new bounded representation and final accounting. Intended for transformations such as Git pack signing. | Permitted only for `fail_closed`; the original is no longer replayable. |
+
+OpenShell caps request stream units at 64 KiB even when the binding advertises more. Owned input and output are each capped at 1 GiB and should be spooled rather than retained in memory. The service must respect the `max_deferred_bytes` advertised in preflight.
+
+For a chain made only of `STREAM_BYTES` stages, OpenShell may send each approved unit upstream before receiving the rest of the request. A later block or failure terminates the upstream upload but cannot retract bytes already sent. OpenShell does not retry or replay the request. It also reads the upstream response concurrently; an early response cancels the middleware session, stops upload, and makes the downstream HTTP/1 connection non-reusable. Any whole-body or owned stage forces withholding for the complete chain. Body-aware policy re-evaluation, request-body credential rewriting, and body-dependent request signing also force withholding.
+
+The former unary `SupervisorMiddleware.EvaluateHttpRequest` RPC and its `HttpRequestEvaluation` and `HttpRequestResult` messages have been removed. Services must expose `HttpRequestPreCredentials` alongside `SupervisorMiddleware`; OpenShell does not fall back to the unary API.
 
 ### Authenticate OpenShell Callers
 
@@ -170,16 +200,18 @@ Middleware decisions are enforced regardless of the endpoint's `enforcement` mod
 
 ## Set Payload Limits
 
-Every middleware binding declares the largest logical payload or replacement it supports through `max_payload_bytes`. For `HTTP_REQUEST`, that payload is one request body. For `WEBSOCKET_MESSAGE`, it is one complete message rather than the whole session.
+Every middleware binding declares the largest payload unit or complete buffered payload it supports through `max_payload_bytes`.
 
 - Built-in middleware uses its OpenShell-defined limit.
 - Each operator-run registration sets one `max_payload_bytes` ceiling no higher than any binding's advertised `max_payload_bytes` capability.
-- A selected chain buffers using its largest stage limit, so every stage that can process the body receives it.
-- The same per-stage limit applies to request bodies and replacement bodies.
+- Whole-body request and response modes apply it to the complete body and replacement.
+- Streaming request and response modes apply it to each input or output unit. OpenShell further caps request units at 64 KiB.
+- WebSocket mode applies it to one complete text message or replacement, not the whole session.
+- Owned request streams separately advertise a 1 GiB deferred input/output limit and require `fail_closed`.
 
-The gateway rejects a registration whose operator limit exceeds the service capability or the 4 MiB platform maximum instead of silently clamping it. OpenShell also bounds the non-payload protobuf components: 64 KiB for service config, 4 KiB for request context, 32 KiB for the target, and 128 request header lines totaling at most 64 KiB encoded. Results allow a 4 KiB discarded free-form reason, a 64-byte validated reason code, 64 header mutations totaling at most 64 KiB encoded, 32 findings of at most 4 KiB encoded each, and 64 metadata entries totaling at most 32 KiB. Middleware gRPC servers should configure request and response message limits to at least 4 MiB plus 293 KiB so every platform-valid envelope fits.
+The gateway rejects a registration whose operator limit exceeds the service capability or the 4 MiB platform maximum instead of silently clamping it. OpenShell also bounds the non-payload protobuf components: 64 KiB for service config, 4 KiB for request context, 32 KiB for the target, and 128 request header lines totaling at most 64 KiB encoded. Results allow a 4 KiB discarded free-form reason, a 64-byte validated reason code, 64 header mutations totaling at most 64 KiB encoded, 32 findings of at most 4 KiB encoded each, and 64 metadata entries totaling at most 32 KiB. Middleware gRPC servers should configure messages for their advertised limit plus the bounded envelope. Request streaming needs only the 64 KiB unit plus that envelope even when the complete body is larger than 4 MiB.
 
-At request time, exceeding a selected stage's limit is a middleware failure for that stage alone and follows that config's `on_error` behavior; other stages in the chain still run against their own limits. OpenShell can apply `fail_open` to an oversized `Content-Length` before consuming body bytes. A chunked body can cross the limit only after bytes have been consumed, so OpenShell denies that request because it cannot safely resume the original stream.
+At request time, an unavailable selected mode, oversized unit, invalid sequence, or incomplete finalization is a middleware failure. A non-owned stage follows its config's `on_error`; an owned stage always fails closed after ownership begins. Whole-body stages can fail independently when the complete body exceeds their limit, while streaming stages continue with bounded units.
 
 For a WebSocket binding, `max_payload_bytes` covers complete client text messages and replacements. Exceeding a selected stage's effective text-message limit follows that stage's `on_error`. The 4 MiB parsed-text platform cap and other protocol-safety limits are independent of middleware failure policy. Binary messages are not delivered to middleware, so the operator ceiling does not become a binary relay limit; individual raw binary frames retain the 16 MiB relay-safety bound. Oversized parsed text closes the connection with code `1009`; invalid UTF-8 uses `1007`; protocol errors use `1002`; middleware or policy denials use `1008`; and policy reload uses `1012`.
 
@@ -229,6 +261,8 @@ See [Logging](/observability/logging) for log access and [OCSF JSON Export](/obs
 The [content guard example](https://github.com/NVIDIA/OpenShell/tree/main/examples/supervisor-middleware-content-guard) matches configured literal terms in UTF-8 request bodies, complete response bodies, and client WebSocket text messages. It supports redaction and denial. Responses require whole-body inspection; unavailable inspection or invalid UTF-8 invokes the configured `on_error` policy. It is not a general PII detector.
 
 The example includes a policy, local fixture, and smoke launcher.
+
+The [Git signing example](https://github.com/NVIDIA/OpenShell/tree/main/examples/supervisor-middleware-git-signing) uses owned request streaming to spool a Git smart-HTTP push, sign rewritten commit objects with a host-held SSH key, and stream the replacement pack back. Its tests exercise a receive-pack body larger than 4 MiB. It is a proof of concept, not a production signing service.
 
 ## Current Limitations
 

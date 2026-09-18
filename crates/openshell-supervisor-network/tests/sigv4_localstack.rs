@@ -5,7 +5,9 @@
 // Requires LocalStack running on localhost:4566.
 // Run with: cargo test -p openshell-supervisor-network --test sigv4_localstack -- --ignored --nocapture
 
-use openshell_supervisor_network::sigv4::{apply_sigv4_headers_only, apply_sigv4_to_request};
+use openshell_supervisor_middleware_builtins::sigv4::{
+    apply_sigv4_headers_only, apply_sigv4_to_request,
+};
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

@@ -4,20 +4,29 @@
 //! First-party in-process supervisor middleware implementations.
 
 mod regex;
+pub mod sigv4;
 
 use std::sync::Arc;
 
 use miette::{Result, miette};
-use openshell_core::middleware::{HttpRequestView, InProcessMiddleware, WebSocketResponseStream};
+use openshell_core::middleware::{
+    HttpRequestResultStream, InProcessMiddleware, WebSocketResponseStream,
+};
 use openshell_core::proto::{
-    HttpRequestResult, MiddlewareManifest, SupervisorMiddlewarePhase, WebSocketPreflightAction,
+    HttpRequestBodyMode, HttpRequestBodyPassThrough, HttpRequestBodyResult,
+    HttpRequestBodyTransform, HttpRequestEvent, HttpRequestEventResult,
+    HttpRequestPreflightInspect, HttpRequestPreflightResult, HttpRequestTrailersResult,
+    MiddlewareManifest, SupervisorMiddlewarePhase, WebSocketPreflightAction,
     WebSocketPreflightDecision, WebSocketSessionEvent, WebSocketSessionEventResult,
+    http_request_body_result, http_request_body_transform, http_request_body_unit,
+    http_request_event, http_request_event_result, http_request_preflight_result,
     web_socket_message, web_socket_session_event, web_socket_session_event_result,
 };
 use tokio_stream::{Stream, StreamExt};
 use tonic::Status;
 
 pub use regex::{NAME as BUILTIN_REGEX, RegexConfig, RegexMode};
+pub use sigv4::NAME as BUILTIN_SIGV4;
 
 /// Return the first-party services that the gateway and supervisor install.
 pub fn services() -> Vec<Arc<dyn InProcessMiddleware>> {
@@ -35,20 +44,144 @@ pub fn validate_config(implementation: &str, config: &prost_types::Struct) -> Re
     }
 }
 
-fn evaluate_http_request(request: HttpRequestView<'_>) -> Result<HttpRequestResult> {
-    match request.middleware_name() {
-        BUILTIN_REGEX => regex::evaluate_http_request(request.config(), request.body()),
-        other => Err(miette!(
-            "middleware implementation '{other}' is not a registered OpenShell built-in"
-        )),
-    }
-}
-
-/// Aggregate service exposing first-party middleware through the borrowed in-process contract.
+/// Aggregate service exposing first-party middleware through the in-process contract.
 #[derive(Debug, Default)]
 pub struct BuiltinMiddlewareService;
 
 impl BuiltinMiddlewareService {
+    fn request_stream(
+        mut requests: tokio::sync::mpsc::Receiver<HttpRequestEvent>,
+    ) -> HttpRequestResultStream {
+        let (responses_tx, responses_rx) = tokio::sync::mpsc::channel(4);
+        tokio::spawn(async move {
+            let mut config = None;
+            let mut inspected_body = false;
+            while let Some(request) = requests.recv().await {
+                let Some(event) = request.event else {
+                    let _ = responses_tx
+                        .send(Err(Status::invalid_argument("empty request event")))
+                        .await;
+                    break;
+                };
+                let result = match event {
+                    http_request_event::Event::Preflight(preflight) if config.is_none() => {
+                        if preflight.middleware_name != BUILTIN_REGEX {
+                            Err(Status::invalid_argument(format!(
+                                "middleware implementation '{}' is not a registered OpenShell built-in",
+                                preflight.middleware_name
+                            )))
+                        } else if !preflight
+                            .permitted_body_modes
+                            .contains(&(HttpRequestBodyMode::WholeBodyBytes as i32))
+                        {
+                            Err(Status::failed_precondition(
+                                "openshell/regex requires whole-body request inspection",
+                            ))
+                        } else {
+                            let selected = preflight.config.unwrap_or_default();
+                            match regex::validate_config(&selected) {
+                                Ok(()) => {
+                                    config = Some(selected);
+                                    Ok(HttpRequestEventResult {
+                                        result: Some(
+                                            http_request_event_result::Result::PreflightResult(
+                                                HttpRequestPreflightResult {
+                                                    action: Some(
+                                                        http_request_preflight_result::Action::Inspect(
+                                                            HttpRequestPreflightInspect {
+                                                                body_mode: HttpRequestBodyMode::WholeBodyBytes as i32,
+                                                                header_mutations: Vec::new(),
+                                                            },
+                                                        ),
+                                                    ),
+                                                    ..Default::default()
+                                                },
+                                            ),
+                                        ),
+                                    })
+                                }
+                                Err(error) => Err(Status::invalid_argument(error.to_string())),
+                            }
+                        }
+                    }
+                    http_request_event::Event::Body(body)
+                        if config.is_some() && !inspected_body && body.end_of_stream =>
+                    {
+                        let Some(http_request_body_unit::Payload::Data(data)) = body.payload else {
+                            let _ = responses_tx
+                                .send(Err(Status::invalid_argument(
+                                    "missing request body payload",
+                                )))
+                                .await;
+                            break;
+                        };
+                        inspected_body = true;
+                        match regex::evaluate_http_body(
+                            config.as_ref().expect("validated request config"),
+                            &data,
+                        ) {
+                            Ok(evaluation) => {
+                                let action = evaluation.replacement.map_or_else(
+                                    || {
+                                        http_request_body_result::Action::PassThrough(
+                                            HttpRequestBodyPassThrough {},
+                                        )
+                                    },
+                                    |replacement| {
+                                        http_request_body_result::Action::Transform(
+                                            HttpRequestBodyTransform {
+                                                replacement: Some(
+                                                    http_request_body_transform::Replacement::Data(
+                                                        replacement,
+                                                    ),
+                                                ),
+                                            },
+                                        )
+                                    },
+                                );
+                                Ok(HttpRequestEventResult {
+                                    result: Some(http_request_event_result::Result::BodyResult(
+                                        HttpRequestBodyResult {
+                                            sequence: body.sequence,
+                                            action: Some(action),
+                                            findings: evaluation.findings,
+                                            metadata: evaluation.metadata,
+                                            ..Default::default()
+                                        },
+                                    )),
+                                })
+                            }
+                            Err(error) => Err(Status::invalid_argument(error.to_string())),
+                        }
+                    }
+                    http_request_event::Event::Trailers(_) if inspected_body => {
+                        Ok(HttpRequestEventResult {
+                            result: Some(http_request_event_result::Result::TrailersResult(
+                                HttpRequestTrailersResult::default(),
+                            )),
+                        })
+                    }
+                    http_request_event::Event::SessionEnd(_) if config.is_some() => break,
+                    _ => Err(Status::failed_precondition(
+                        "invalid built-in HTTP request lifecycle",
+                    )),
+                };
+                match result {
+                    Ok(result) => {
+                        if responses_tx.send(Ok(result)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = responses_tx.send(Err(error)).await;
+                        break;
+                    }
+                }
+            }
+        });
+        Box::pin(tokio_stream::wrappers::ReceiverStream::new(responses_rx))
+    }
+
     fn websocket_stream<S>(mut requests: S) -> WebSocketResponseStream
     where
         S: Stream<Item = std::result::Result<WebSocketSessionEvent, Status>>
@@ -204,11 +337,11 @@ impl InProcessMiddleware for BuiltinMiddlewareService {
         validate_config(middleware_name, config)
     }
 
-    async fn evaluate_http_request(
+    async fn open_http_request_pre_credentials(
         &self,
-        request: HttpRequestView<'_>,
-    ) -> Result<HttpRequestResult> {
-        evaluate_http_request(request)
+        requests: tokio::sync::mpsc::Receiver<HttpRequestEvent>,
+    ) -> std::result::Result<HttpRequestResultStream, Status> {
+        Ok(Self::request_stream(requests))
     }
 
     async fn open_websocket_session(
@@ -225,8 +358,7 @@ impl InProcessMiddleware for BuiltinMiddlewareService {
 mod tests {
     use super::*;
     use openshell_core::proto::{
-        Decision, HttpRequestTarget, RequestContext, SupervisorMiddlewareOperation,
-        SupervisorMiddlewarePhase, WebSocketPreflight,
+        Decision, SupervisorMiddlewareOperation, SupervisorMiddlewarePhase, WebSocketPreflight,
     };
 
     fn string_config(key: &str, value: &str) -> prost_types::Struct {
@@ -241,18 +373,11 @@ mod tests {
         }
     }
 
-    fn evaluate_body(body: &[u8], config: &prost_types::Struct) -> Result<HttpRequestResult> {
-        let context = RequestContext::default();
-        let target = HttpRequestTarget::default();
-        evaluate_http_request(HttpRequestView::new(
-            SupervisorMiddlewarePhase::PreCredentials,
-            &context,
-            config,
-            &target,
-            &[],
-            body,
-            BUILTIN_REGEX,
-        ))
+    fn evaluate_body(
+        body: &[u8],
+        config: &prost_types::Struct,
+    ) -> Result<regex::HttpBodyEvaluation> {
+        regex::evaluate_http_body(config, body)
     }
 
     #[tokio::test]
@@ -329,9 +454,7 @@ mod tests {
         )
         .expect("evaluate regex binding");
 
-        assert_eq!(result.decision, Decision::Allow as i32);
-        assert!(result.has_body);
-        let body = String::from_utf8(result.body).unwrap();
+        let body = String::from_utf8(result.replacement.expect("replacement")).unwrap();
         assert!(body.contains("top-secret"));
         assert!(!body.contains("sk-ABCDEFGHIJKLMNOP"));
         assert!(
@@ -389,9 +512,7 @@ mod tests {
         let result = evaluate_body(body.as_bytes(), &prost_types::Struct::default())
             .expect("evaluate regex binding");
 
-        assert_eq!(result.decision, Decision::Allow as i32);
-        assert!(!result.has_body);
-        assert!(result.body.is_empty());
+        assert!(result.replacement.is_none());
         assert!(result.findings.is_empty());
     }
 

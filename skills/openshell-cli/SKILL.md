@@ -533,6 +533,8 @@ Edit `current-policy.yaml` to allow the blocked actions. **For policy content au
 
 `network_policies` and `network_middlewares` can be modified at runtime when the selected compute driver supports live policy updates. Use `--wait` to verify that the active runtime loaded the revision; do not infer enforcement from the gateway accepting the update. If `filesystem_policy`, `landlock`, or `process` need changes, the sandbox must be recreated. Built-in middleware such as `openshell/regex` needs no gateway registration. An operator-run middleware must already be registered under `[[openshell.supervisor.middleware]]`; changing that static registration requires a gateway restart.
 
+`openshell/sigv4` is not a `network_middlewares` attachment. The endpoint's `credential_signing`, `signing_service`, and optional `signing_region` fields synthesize a trusted in-process `HTTP_REQUEST/POST_CREDENTIALS` stage after AWS credentials resolve. External middleware cannot advertise this credential-visible phase. Middleware that selects `OWNED_STREAM_BYTES`, such as a Git signing service, must use `fail_closed`; the original request is no longer replayable after ownership transfer.
+
 Middleware can inspect HTTP requests, HTTP responses, or client WebSocket text
 messages when the implementation advertises the matching binding. The built-in
 `openshell/regex` supports request bodies and client WebSocket text messages.

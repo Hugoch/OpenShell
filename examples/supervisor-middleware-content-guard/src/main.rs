@@ -6,7 +6,12 @@ use std::net::SocketAddr;
 use std::ops::Range;
 
 use clap::Parser;
-use openshell_core::middleware::{HttpResponseResultStream, WebSocketResponseStream};
+use openshell_core::middleware::{
+    HttpRequestResultStream, HttpResponseResultStream, WebSocketResponseStream,
+};
+use openshell_core::proto::middleware::v1::http_request_pre_credentials_server::{
+    HttpRequestPreCredentials, HttpRequestPreCredentialsServer,
+};
 use openshell_core::proto::middleware::v1::http_response_pre_return_server::{
     HttpResponsePreReturn, HttpResponsePreReturnServer,
 };
@@ -14,17 +19,21 @@ use openshell_core::proto::middleware::v1::supervisor_middleware_server::{
     SupervisorMiddleware, SupervisorMiddlewareServer,
 };
 use openshell_core::proto::{
-    Decision, Finding, HttpRequestEvaluation, HttpRequestResult, HttpResponseBlockDelivery,
-    HttpResponseBodyMode, HttpResponseBodyResult, HttpResponseBodyTransform, HttpResponseEvent,
-    HttpResponseEventResult, HttpResponsePreflightInspect, HttpResponsePreflightResult,
-    HttpResponseTrailersResult, MiddlewareBinding, MiddlewareManifest,
-    SupervisorMiddlewareOperation, SupervisorMiddlewarePhase, ValidateConfigRequest,
-    ValidateConfigResponse, WebSocketMessage, WebSocketMessageResult, WebSocketPreflightAction,
-    WebSocketPreflightDecision, WebSocketSessionEvent, WebSocketSessionEventResult,
-    http_response_body_result, http_response_body_transform, http_response_body_unit,
-    http_response_event, http_response_event_result, http_response_preflight_result,
-    web_socket_message, web_socket_message_result, web_socket_session_event,
-    web_socket_session_event_result,
+    Decision, Finding, HttpRequestBlock, HttpRequestBodyMode, HttpRequestBodyPassThrough,
+    HttpRequestBodyResult, HttpRequestBodyTransform, HttpRequestEvent, HttpRequestEventResult,
+    HttpRequestPreflightInspect, HttpRequestPreflightResult, HttpRequestTrailersResult,
+    HttpResponseBlockDelivery, HttpResponseBodyMode, HttpResponseBodyResult,
+    HttpResponseBodyTransform, HttpResponseEvent, HttpResponseEventResult,
+    HttpResponsePreflightInspect, HttpResponsePreflightResult, HttpResponseTrailersResult,
+    MiddlewareBinding, MiddlewareManifest, SupervisorMiddlewareOperation,
+    SupervisorMiddlewarePhase, ValidateConfigRequest, ValidateConfigResponse, WebSocketMessage,
+    WebSocketMessageResult, WebSocketPreflightAction, WebSocketPreflightDecision,
+    WebSocketSessionEvent, WebSocketSessionEventResult, http_request_body_result,
+    http_request_body_transform, http_request_body_unit, http_request_event,
+    http_request_event_result, http_request_preflight_result, http_response_body_result,
+    http_response_body_transform, http_response_body_unit, http_response_event,
+    http_response_event_result, http_response_preflight_result, web_socket_message,
+    web_socket_message_result, web_socket_session_event, web_socket_session_event_result,
 };
 use prost_types::Struct;
 use prost_types::value::Kind;
@@ -277,24 +286,152 @@ impl SupervisorMiddleware for ContentGuard {
         }))
     }
 
-    async fn evaluate_http_request(
-        &self,
-        request: Request<HttpRequestEvaluation>,
-    ) -> Result<Response<HttpRequestResult>, Status> {
-        let request = request.into_inner();
-        validate_phase(request.phase).map_err(Status::invalid_argument)?;
-        let config =
-            GuardConfig::parse(request.config.as_ref()).map_err(Status::invalid_argument)?;
-        let body = String::from_utf8(request.body)
-            .map_err(|_| Status::invalid_argument("content guard requires a UTF-8 body"))?;
-        Ok(Response::new(evaluate(&config, &body)))
-    }
-
     async fn evaluate_web_socket_session(
         &self,
         request: Request<tonic::Streaming<WebSocketSessionEvent>>,
     ) -> Result<Response<Self::EvaluateWebSocketSessionStream>, Status> {
         Ok(Response::new(Self::websocket_stream(request.into_inner())))
+    }
+}
+
+#[derive(Debug, Default)]
+struct RequestSessionState {
+    config: Option<GuardConfig>,
+    body_ended: bool,
+    trailers_seen: bool,
+}
+
+impl RequestSessionState {
+    fn preflight(
+        &mut self,
+        preflight: openshell_core::proto::HttpRequestPreflight,
+    ) -> Result<HttpRequestEventResult, Status> {
+        if self.config.is_some() {
+            return Err(Status::failed_precondition("duplicate preflight"));
+        }
+        let config =
+            GuardConfig::parse(preflight.config.as_ref()).map_err(Status::invalid_argument)?;
+        if !preflight
+            .permitted_body_modes
+            .contains(&(HttpRequestBodyMode::WholeBodyBytes as i32))
+        {
+            return Err(Status::failed_precondition(
+                "content guard requires WHOLE_BODY_BYTES",
+            ));
+        }
+        self.config = Some(config);
+        Ok(HttpRequestEventResult {
+            result: Some(http_request_event_result::Result::PreflightResult(
+                HttpRequestPreflightResult {
+                    action: Some(http_request_preflight_result::Action::Inspect(
+                        HttpRequestPreflightInspect {
+                            body_mode: HttpRequestBodyMode::WholeBodyBytes as i32,
+                            header_mutations: vec![],
+                        },
+                    )),
+                    ..Default::default()
+                },
+            )),
+        })
+    }
+
+    fn body(
+        &mut self,
+        body: openshell_core::proto::HttpRequestBodyUnit,
+    ) -> Result<HttpRequestEventResult, Status> {
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("body before preflight"))?;
+        if self.body_ended || body.sequence != 1 || !body.end_of_stream {
+            return Err(Status::failed_precondition(
+                "expected one complete request body",
+            ));
+        }
+        let Some(http_request_body_unit::Payload::Data(data)) = body.payload else {
+            return Err(Status::invalid_argument("body data required"));
+        };
+        let text = std::str::from_utf8(&data)
+            .map_err(|_| Status::invalid_argument("content guard requires a UTF-8 body"))?;
+        let result = inspect(config, text);
+        let action = if result.denied {
+            http_request_body_result::Action::BlockRequest(HttpRequestBlock {})
+        } else if let Some(replacement) = result.replacement {
+            http_request_body_result::Action::Transform(HttpRequestBodyTransform {
+                replacement: Some(http_request_body_transform::Replacement::Data(
+                    replacement.into_bytes(),
+                )),
+            })
+        } else {
+            http_request_body_result::Action::PassThrough(HttpRequestBodyPassThrough {})
+        };
+        self.body_ended = true;
+        Ok(HttpRequestEventResult {
+            result: Some(http_request_event_result::Result::BodyResult(
+                HttpRequestBodyResult {
+                    sequence: body.sequence,
+                    action: Some(action),
+                    reason: result.reason,
+                    reason_code: result.reason_code,
+                    findings: result.findings,
+                    metadata: result.metadata,
+                },
+            )),
+        })
+    }
+
+    fn trailers(&mut self) -> Result<HttpRequestEventResult, Status> {
+        if !self.body_ended || self.trailers_seen {
+            return Err(Status::failed_precondition("expected trailers after body"));
+        }
+        self.trailers_seen = true;
+        Ok(HttpRequestEventResult {
+            result: Some(http_request_event_result::Result::TrailersResult(
+                HttpRequestTrailersResult::default(),
+            )),
+        })
+    }
+}
+
+#[tonic::async_trait]
+impl HttpRequestPreCredentials for ContentGuard {
+    type EvaluateStream = HttpRequestResultStream;
+
+    async fn evaluate(
+        &self,
+        request: Request<tonic::Streaming<HttpRequestEvent>>,
+    ) -> Result<Response<Self::EvaluateStream>, Status> {
+        let mut events = request.into_inner();
+        let (sender, receiver) = mpsc::channel(4);
+        tokio::spawn(async move {
+            let mut state = RequestSessionState::default();
+            while let Some(event) = events.next().await {
+                let result = match event {
+                    Ok(event) => match event.event {
+                        Some(http_request_event::Event::Preflight(preflight)) => {
+                            state.preflight(preflight)
+                        }
+                        Some(http_request_event::Event::Body(body)) => state.body(body),
+                        Some(http_request_event::Event::Trailers(_)) => state.trailers(),
+                        Some(http_request_event::Event::SessionEnd(_)) => break,
+                        None => Err(Status::invalid_argument("request event is required")),
+                    },
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(result) => {
+                        if sender.send(Ok(result)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error)).await;
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
     }
 }
 
@@ -453,23 +590,6 @@ struct GuardOutcome {
     reason_code: String,
     findings: Vec<Finding>,
     metadata: HashMap<String, String>,
-}
-fn evaluate(config: &GuardConfig, body: &str) -> HttpRequestResult {
-    let result = inspect(config, body);
-    HttpRequestResult {
-        decision: if result.denied {
-            Decision::Deny
-        } else {
-            Decision::Allow
-        } as i32,
-        has_body: result.replacement.is_some(),
-        body: result.replacement.unwrap_or_default().into_bytes(),
-        reason: result.reason,
-        reason_code: result.reason_code,
-        findings: result.findings,
-        metadata: result.metadata,
-        ..Default::default()
-    }
 }
 fn inspect(config: &GuardConfig, body: &str) -> GuardOutcome {
     let (ranges, match_count, matched_term_count) = find_match_ranges(body, &config.terms);
@@ -632,6 +752,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("serving {MANIFEST_NAME} on http://{}", cli.bind);
     Server::builder()
         .add_service(SupervisorMiddlewareServer::new(ContentGuard))
+        .add_service(HttpRequestPreCredentialsServer::new(ContentGuard))
         .add_service(HttpResponsePreReturnServer::new(ContentGuard))
         .serve(cli.bind)
         .await?;
@@ -642,8 +763,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use openshell_core::proto::{
-        HttpResponseBodyUnit, HttpResponsePreflight, MiddlewareSessionEnd, WebSocketPreflight,
-        WebSocketSessionStart,
+        HttpRequestBodyUnit, HttpRequestPreflight, HttpResponseBodyUnit, HttpResponsePreflight,
+        MiddlewareSessionEnd, WebSocketPreflight, WebSocketSessionStart,
     };
     use prost_types::{ListValue, Value};
     use std::collections::BTreeMap;
@@ -711,6 +832,89 @@ mod tests {
             ..Default::default()
         }
     }
+
+    fn request_preflight(mode: &str) -> HttpRequestPreflight {
+        HttpRequestPreflight {
+            config: Some(config(mode, &["prototype-secret", "秘密"], None)),
+            permitted_body_modes: vec![HttpRequestBodyMode::WholeBodyBytes as i32],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn request_guard_uses_streamed_whole_body_contract() {
+        let mut state = RequestSessionState::default();
+        let preflight = state.preflight(request_preflight("redact")).unwrap();
+        assert!(matches!(
+            preflight.result,
+            Some(http_request_event_result::Result::PreflightResult(
+                HttpRequestPreflightResult {
+                    action: Some(http_request_preflight_result::Action::Inspect(
+                        HttpRequestPreflightInspect { body_mode, .. }
+                    )),
+                    ..
+                }
+            )) if body_mode == HttpRequestBodyMode::WholeBodyBytes as i32
+        ));
+
+        let result = state
+            .body(HttpRequestBodyUnit {
+                sequence: 1,
+                payload: Some(http_request_body_unit::Payload::Data(
+                    b"contains prototype-secret".to_vec(),
+                )),
+                end_of_stream: true,
+            })
+            .unwrap();
+        let Some(http_request_event_result::Result::BodyResult(result)) = result.result else {
+            panic!("body result");
+        };
+        let Some(http_request_body_result::Action::Transform(transform)) = result.action else {
+            panic!("transform");
+        };
+        assert_eq!(
+            transform.replacement,
+            Some(http_request_body_transform::Replacement::Data(
+                b"contains [REDACTED]".to_vec()
+            ))
+        );
+        assert!(matches!(
+            state.trailers().unwrap().result,
+            Some(http_request_event_result::Result::TrailersResult(_))
+        ));
+    }
+
+    #[test]
+    fn request_guard_denies_and_rejects_unavailable_whole_body_mode() {
+        let mut unavailable = request_preflight("redact");
+        unavailable.permitted_body_modes = vec![HttpRequestBodyMode::HeadersOnly as i32];
+        assert!(
+            RequestSessionState::default()
+                .preflight(unavailable)
+                .is_err()
+        );
+
+        let mut state = RequestSessionState::default();
+        state.preflight(request_preflight("deny")).unwrap();
+        let result = state
+            .body(HttpRequestBodyUnit {
+                sequence: 1,
+                payload: Some(http_request_body_unit::Payload::Data(
+                    b"prototype-secret".to_vec(),
+                )),
+                end_of_stream: true,
+            })
+            .unwrap();
+        let Some(http_request_event_result::Result::BodyResult(result)) = result.result else {
+            panic!("body result");
+        };
+        assert!(matches!(
+            result.action,
+            Some(http_request_body_result::Action::BlockRequest(_))
+        ));
+        assert_eq!(result.reason_code, "content_match");
+    }
+
     #[test]
     fn response_guard_passes_redacts_and_denies() {
         for (mode, input, expected) in [
@@ -887,17 +1091,16 @@ mod tests {
             Some("[FILTERED]"),
         )))
         .expect("valid config");
-        let result = evaluate(
+        let result = inspect(
             &config,
             "prototype-secret then internal-only then prototype-secret",
         );
 
-        assert_eq!(result.decision, Decision::Allow as i32);
         assert_eq!(
-            String::from_utf8(result.body).unwrap(),
-            "[FILTERED] then [FILTERED] then [FILTERED]"
+            result.replacement.as_deref(),
+            Some("[FILTERED] then [FILTERED] then [FILTERED]")
         );
-        assert!(result.has_body);
+        assert!(!result.denied);
         assert_eq!(result.findings[0].count, 3);
     }
 
@@ -907,9 +1110,9 @@ mod tests {
             GuardConfig::parse(Some(&config("redact", &["aba", "bab"], Some("[FILTERED]"))))
                 .expect("valid config");
 
-        let result = evaluate(&config, "abab");
+        let result = inspect(&config, "abab");
 
-        assert_eq!(String::from_utf8(result.body).unwrap(), "[FILTERED]");
+        assert_eq!(result.replacement.as_deref(), Some("[FILTERED]"));
         assert_eq!(result.findings[0].count, 2);
         assert_eq!(result.metadata["matched_term_count"], "2");
     }
@@ -919,9 +1122,9 @@ mod tests {
         let config = GuardConfig::parse(Some(&config("redact", &["aba"], Some("[FILTERED]"))))
             .expect("valid config");
 
-        let result = evaluate(&config, "ababa");
+        let result = inspect(&config, "ababa");
 
-        assert_eq!(String::from_utf8(result.body).unwrap(), "[FILTERED]");
+        assert_eq!(result.replacement.as_deref(), Some("[FILTERED]"));
         assert_eq!(result.findings[0].count, 2);
         assert_eq!(result.metadata["matched_term_count"], "1");
     }
@@ -931,12 +1134,9 @@ mod tests {
         let config = GuardConfig::parse(Some(&config("redact", &["abc"], Some("[FILTERED]"))))
             .expect("valid config");
 
-        let result = evaluate(&config, "abcabc");
+        let result = inspect(&config, "abcabc");
 
-        assert_eq!(
-            String::from_utf8(result.body).unwrap(),
-            "[FILTERED][FILTERED]"
-        );
+        assert_eq!(result.replacement.as_deref(), Some("[FILTERED][FILTERED]"));
         assert_eq!(result.findings[0].count, 2);
     }
 
@@ -944,23 +1144,22 @@ mod tests {
     fn deny_returns_a_generic_reason_without_echoing_the_term() {
         let config = GuardConfig::parse(Some(&config("deny", &["prototype-secret"], None)))
             .expect("valid config");
-        let result = evaluate(&config, "contains prototype-secret");
+        let result = inspect(&config, "contains prototype-secret");
 
-        assert_eq!(result.decision, Decision::Deny as i32);
+        assert!(result.denied);
         assert!(!result.reason.contains("prototype-secret"));
         assert_eq!(result.reason_code, "content_match");
-        assert!(!result.has_body);
+        assert!(result.replacement.is_none());
     }
 
     #[test]
     fn no_match_allows_without_replacing_the_body() {
         let config =
             GuardConfig::parse(Some(&config("redact", &["blocked"], None))).expect("valid config");
-        let result = evaluate(&config, "safe content");
+        let result = inspect(&config, "safe content");
 
-        assert_eq!(result.decision, Decision::Allow as i32);
-        assert!(!result.has_body);
-        assert!(result.body.is_empty());
+        assert!(!result.denied);
+        assert!(result.replacement.is_none());
     }
 
     #[test]

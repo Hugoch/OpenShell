@@ -218,8 +218,10 @@ Is L7 inspection needed?
 Add `network_middlewares` only when the user asks to inspect, transform, redact, or independently authorize admitted HTTP requests, final HTTP responses, or client WebSocket text messages. Request middleware runs after network and L7 policy admission and before provider credential injection. Response middleware runs on the matching final response before it returns to the sandbox.
 
 - Use `openshell/regex` without gateway registration for fixed-pattern redaction of UTF-8 HTTP request bodies or complete client-to-upstream WebSocket text messages.
+- Do not add `openshell/sigv4` to `network_middlewares`. Endpoint `credential_signing`, `signing_service`, and optional `signing_region` fields synthesize this trusted in-process `HTTP_REQUEST/POST_CREDENTIALS` stage after provider credentials resolve. External services cannot advertise that phase.
 - Use an operator-owned middleware name only when it is already registered under `[[openshell.supervisor.middleware]]` and reachable from both the gateway and sandbox supervisors.
 - Confirm that the implementation advertises the requested binding: `HTTP_REQUEST/PRE_CREDENTIALS`, `HTTP_RESPONSE/PRE_RETURN`, or `WEBSOCKET_MESSAGE/PRE_CREDENTIALS`. A host match alone does not enable inspection.
+- Use `fail_closed` for an implementation that selects `OWNED_STREAM_BYTES`. Ownership removes the platform replay copy, so an owned-stage failure cannot fail open. Request stream units are at most 64 KiB; the advertised deferred input and output limit is 1 GiB each.
 - WebSocket middleware inspects client text messages only, over both `ws://` and `wss://`. Binary and upstream-to-client messages pass without inspection, even with `fail_closed`.
 - `on_error` controls selected-stage failures. Explicit denials always block traffic. A failed WebSocket stage with `fail_open` can remain bypassed for the rest of the connection.
 - Default `on_error` to `fail_closed`. Use `fail_open` only when bypassing the stage preserves the user's stated security requirement.
@@ -386,6 +388,8 @@ Before presenting the policy to the user, verify correctness **and** flag breadt
 - [ ] No fail-closed middleware selector can cover a `tls: skip` endpoint
 - [ ] Any required WebSocket control advertises `WEBSOCKET_MESSAGE/PRE_CREDENTIALS`, and the user understands that V1 does not inspect binary messages
 - [ ] Any required response control advertises `HTTP_RESPONSE/PRE_RETURN`
+- [ ] SigV4 uses endpoint credential-signing fields rather than a `network_middlewares` attachment, and the endpoint's provider binding covers the signed destination
+- [ ] Any middleware that requires `OWNED_STREAM_BYTES` uses `on_error: fail_closed`
 - [ ] Endpoints contributed by a credentialed provider are not L4-only or `tls: skip` unless `allow_uninspected_credentials: true` explicitly records the exception
 
 ### Schema Warnings (log-only, but should be fixed)

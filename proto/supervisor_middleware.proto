@@ -19,10 +19,6 @@ service SupervisorMiddleware {
   // ValidateConfig checks service-specific configuration for one binding.
   rpc ValidateConfig(ValidateConfigRequest) returns (ValidateConfigResponse);
 
-  // EvaluateHttpRequest returns an allow, deny, or mutation decision for one
-  // buffered HTTP request.
-  rpc EvaluateHttpRequest(HttpRequestEvaluation) returns (HttpRequestResult);
-
   // EvaluateWebSocketSession opens one ordered, phase-specific stream for a
   // single middleware stage and WebSocket upgrade attempt. The current
   // implementation supports client-to-upstream text messages at
@@ -32,6 +28,17 @@ service SupervisorMiddleware {
   // stream when its transport is still writable.
   rpc EvaluateWebSocketSession(stream WebSocketSessionEvent)
       returns (stream WebSocketSessionEventResult);
+}
+
+// HttpRequestPreCredentials begins after network-policy admission and before
+// OpenShell injects credentials. A STREAM_BYTES stage may remain active while
+// OpenShell forwards already-approved units upstream.
+service HttpRequestPreCredentials {
+  // Evaluate starts with preflight and may continue with selected body units
+  // and trailers. A body unit marked end_of_stream ends body input, not the
+  // event stream. Trailers and one best-effort session_end may follow.
+  rpc Evaluate(stream HttpRequestEvent)
+      returns (stream HttpRequestEventResult);
 }
 
 // HttpResponsePreReturn evaluates one response for one middleware stage before
@@ -96,36 +103,198 @@ message ValidateConfigResponse {
   string reason = 2;
 }
 
-// HttpRequestEvaluation contains one buffered HTTP request to evaluate.
-message HttpRequestEvaluation {
-  // Evaluation phase selected for this request.
-  SupervisorMiddlewarePhase phase = 1;
-  // Sandbox and request identity available to the supervisor.
-  // The encoded context is limited to 4 KiB.
-  RequestContext context = 2;
-  // Validated service-specific policy configuration.
-  // The encoded configuration is limited to 64 KiB.
-  google.protobuf.Struct config = 3;
-  // Destination and HTTP request target.
-  // The encoded target is limited to 32 KiB.
-  HttpRequestTarget target = 4;
-  // HTTP request headers before OpenShell injects credentials, in wire
-  // order. Repeated header names are preserved as separate entries. Protected
-  // credential, routing, framing, and hop-by-hop headers are omitted.
-  // At most 128 lines and 64 KiB of encoded headers are included.
-  repeated HttpHeader headers = 5;
-  // Buffered request body, limited to 4 MiB. Empty for a bodyless request.
-  bytes body = 6;
-  // Built-in middleware name or operator-owned registration name.
-  string middleware_name = 7;
-}
-
 // HttpHeader is one HTTP header line.
 message HttpHeader {
   // Lowercased header name.
   string name = 1;
   // Header value with surrounding whitespace trimmed.
   string value = 2;
+}
+
+// One ordered request event. A stream starts with preflight, may continue with
+// body units ending in end_of_stream, may then include trailers, and may end
+// with one best-effort session_end.
+message HttpRequestEvent {
+  oneof event {
+    HttpRequestPreflight preflight = 1;
+    HttpRequestBodyUnit body = 2;
+    MiddlewareSessionEnd session_end = 3;
+    HttpRequestTrailers trailers = 4;
+  }
+}
+
+// Each preflight, body, and trailers event requires one ordered result.
+// session_end has no result. An owned stage may additionally produce output
+// units and one finalization after accepting its final body unit.
+message HttpRequestEventResult {
+  oneof result {
+    HttpRequestPreflightResult preflight_result = 1;
+    HttpRequestBodyResult body_result = 2;
+    HttpRequestTrailersResult trailers_result = 3;
+    HttpRequestBodyOutput body_output = 4;
+    HttpRequestBodyFinalize body_finalize = 5;
+  }
+}
+
+// HttpRequestPreflight exposes the current admitted request head to one stage.
+message HttpRequestPreflight {
+  // Request identity. Limited to 4 KiB encoded.
+  RequestContext context = 1;
+  // Admitted destination and request target. Limited to 32 KiB encoded.
+  HttpRequestTarget target = 2;
+  // Current headers after earlier stages and before credential injection, in
+  // wire order. Protected fields are omitted. Limited to 128 lines and 64 KiB.
+  repeated HttpHeader headers = 3;
+  // Built-in middleware name or operator-owned registration name.
+  string middleware_name = 4;
+  // Validated service configuration. Limited to 64 KiB encoded.
+  google.protobuf.Struct config = 5;
+  // Effective per-unit or whole-body input/replacement limit.
+  uint64 max_payload_bytes = 6;
+  // Modes OpenShell permits for this request and binding. HEADERS_ONLY is
+  // always present. OWNED_STREAM_BYTES is present only for fail-closed stages
+  // with a non-zero deferred-byte limit.
+  repeated HttpRequestBodyMode permitted_body_modes = 7;
+  // Effective per-representation input and output limit for
+  // OWNED_STREAM_BYTES. Input and output are each bounded by this value.
+  uint64 max_deferred_bytes = 8;
+  // Present when the normalized body length is known before inspection.
+  optional uint64 declared_body_length = 9;
+}
+
+// Selects skip, inspect, or block. Invalid diagnostics make the complete
+// result a middleware failure handled according to on_error.
+message HttpRequestPreflightResult {
+  oneof action {
+    HttpRequestPreflightSkip skip = 1;
+    HttpRequestPreflightInspect inspect = 2;
+    HttpRequestBlock block_request = 7;
+  }
+  // Service diagnostic, never sent to the sandbox or security logs.
+  string reason = 3;
+  // Optional stable audit code, returned only for an accepted block.
+  string reason_code = 4;
+  repeated Finding findings = 5;
+  map<string, string> metadata = 6;
+}
+
+message HttpRequestPreflightSkip {}
+
+// Selects body inspection and request-header mutations.
+message HttpRequestPreflightInspect {
+  HttpRequestBodyMode body_mode = 1;
+  repeated HeaderMutation header_mutations = 2;
+}
+
+// Authoritatively rejects the request. A preflight rejection occurs before
+// upstream contact; a streaming body rejection may terminate a partial upload.
+message HttpRequestBlock {}
+
+// Controls which request body units a stage receives.
+enum HttpRequestBodyMode {
+  HTTP_REQUEST_BODY_MODE_UNSPECIFIED = 0;
+  // Inspect only the request head.
+  HTTP_REQUEST_BODY_MODE_HEADERS_ONLY = 1;
+  // Receive the complete normalized body as one final unit. Input and
+  // replacement must fit max_payload_bytes.
+  HTTP_REQUEST_BODY_MODE_WHOLE_BODY_BYTES = 2;
+  // Receive normalized units in lockstep. Each result fully accounts for its
+  // input; the stage cannot retain bytes across units.
+  HTTP_REQUEST_BODY_MODE_STREAM_BYTES = 3;
+  // Take ownership of normalized input units without requiring OpenShell to
+  // retain a replay copy. The stage must accept every unit with take_ownership,
+  // then emit bounded output units and one body_finalize after the final input.
+  // Failure is always fail closed because the original bytes are no longer
+  // available for replay.
+  HTTP_REQUEST_BODY_MODE_OWNED_STREAM_BYTES = 4;
+}
+
+// One normalized body unit. Boundaries have no transport or application
+// meaning.
+message HttpRequestBodyUnit {
+  // Contiguous and stage-local, starting at 1.
+  uint64 sequence = 1;
+  oneof payload {
+    bytes data = 2;
+  }
+  // Marks the final input unit. WHOLE_BODY_BYTES receives the complete body in
+  // this unit. STREAM_BYTES and OWNED_STREAM_BYTES receive nonempty data units
+  // with this unset, followed by one empty final unit. A body-capable request
+  // with no bytes also receives one empty final unit. Trailers and session_end
+  // may follow.
+  bool end_of_stream = 3;
+}
+
+// Result for one body unit.
+message HttpRequestBodyResult {
+  uint64 sequence = 1;
+  oneof action {
+    HttpRequestBodyPassThrough pass_through = 2;
+    HttpRequestBodyTransform transform = 3;
+    HttpRequestBlock block_request = 8;
+    HttpRequestBodySkipRemaining skip_remaining = 9;
+    HttpRequestBodyTakeOwnership take_ownership = 10;
+  }
+  string reason = 4;
+  string reason_code = 5;
+  repeated Finding findings = 6;
+  map<string, string> metadata = 7;
+}
+
+message HttpRequestBodyPassThrough {}
+
+message HttpRequestBodyTransform {
+  oneof replacement {
+    bytes data = 1;
+  }
+}
+
+// Finalizes the current unit and ends inspection for this stage.
+message HttpRequestBodySkipRemaining {
+  oneof current {
+    HttpRequestBodyPassThrough pass_through = 1;
+    HttpRequestBodyTransform transform = 2;
+  }
+}
+
+// Acknowledges that an owned stage durably accepted the complete input unit.
+message HttpRequestBodyTakeOwnership {}
+
+// One owned-stage output unit. Output sequence is contiguous from 1 and each
+// unit fits max_payload_bytes. The complete output fits max_deferred_bytes.
+message HttpRequestBodyOutput {
+  uint64 sequence = 1;
+  bytes data = 2;
+}
+
+// Completes owned output and proves how much input and output it accounts for.
+message HttpRequestBodyFinalize {
+  // Must equal the final accepted input sequence.
+  uint64 through_input_sequence = 1;
+  // Must equal the final output sequence, or zero for empty output.
+  uint64 through_output_sequence = 2;
+  // Final owned-stage diagnostic, never sent to the sandbox or security logs.
+  string reason = 3;
+  // Optional stable audit code for the completed transformation.
+  string reason_code = 4;
+  repeated Finding findings = 5;
+  map<string, string> metadata = 6;
+}
+
+// Current normalized request trailers in wire order. An inspecting body stage
+// receives exactly one trailers event, including when the set is empty.
+message HttpRequestTrailers {
+  repeated HttpHeader headers = 1;
+}
+
+// Applies ordered mutations to existing request trailers. V1 cannot create a
+// trailer name that was not announced by the sender.
+message HttpRequestTrailersResult {
+  repeated HeaderMutation trailer_mutations = 1;
+  string reason = 2;
+  string reason_code = 3;
+  repeated Finding findings = 4;
+  map<string, string> metadata = 5;
 }
 
 // One ordered response event. A stream starts with preflight, may continue with
@@ -209,7 +378,7 @@ message HttpResponsePreflightResult {
   // Service diagnostic, never sent to the sandbox or security logs. Maximum
   // 4 KiB.
   string reason = 3;
-  // Optional audit code using the HttpRequestResult.reason_code format and
+  // Optional audit code using the HttpRequestPreflightResult.reason_code format and
   // 64-byte maximum. Returned to the sandbox only for block_delivery.
   string reason_code = 4;
   // Up to 32 audit-safe findings, each limited to 4 KiB encoded.
@@ -318,7 +487,7 @@ message HttpResponseBodyResult {
   // Service diagnostic, never sent to the sandbox or security logs. Maximum
   // 4 KiB.
   string reason = 4;
-  // Optional audit code using the HttpRequestResult.reason_code format and
+  // Optional audit code using the HttpRequestPreflightResult.reason_code format and
   // 64-byte maximum. When OpenShell accepts block_delivery before response
   // commitment, it includes this code in the canonical denial response. It is
   // never returned after commitment.
@@ -380,7 +549,7 @@ message HttpResponseTrailersResult {
   // Service diagnostic, never sent to the sandbox or security logs. Maximum
   // 4 KiB.
   string reason = 2;
-  // Optional audit code using the HttpRequestResult.reason_code format and
+  // Optional audit code using the HttpRequestPreflightResult.reason_code format and
   // 64-byte maximum. Never sent to the sandbox.
   string reason_code = 3;
   // Up to 32 audit-safe findings, each limited to 4 KiB encoded.
@@ -456,6 +625,9 @@ enum SupervisorMiddlewarePhase {
   SUPERVISOR_MIDDLEWARE_PHASE_UNSPECIFIED = 0;
   SUPERVISOR_MIDDLEWARE_PHASE_PRE_CREDENTIALS = 1;
   SUPERVISOR_MIDDLEWARE_PHASE_PRE_RETURN = 2;
+  // Restricted to trusted in-process middleware. External services cannot
+  // advertise this phase because credentials must not cross the extension API.
+  SUPERVISOR_MIDDLEWARE_PHASE_POST_CREDENTIALS = 3;
 }
 
 // WebSocketSessionEvent is one ordered event in a stage-local stream.
@@ -530,7 +702,7 @@ message WebSocketPreflightDecision {
   // Optional stable machine-readable code for a deny decision. Because
   // preflight runs before the HTTP upgrade completes, OpenShell may return
   // this code to the requester. Codes follow the same format and 64-byte
-  // maximum as HttpRequestResult.reason_code.
+  // maximum as HttpRequestPreflightResult.reason_code.
   string reason_code = 3;
   // Audit-safe findings produced during preflight. At most 32 findings of at
   // most 4 KiB encoded each are accepted.
@@ -673,40 +845,4 @@ message HeaderMutation {
     WriteHeader write = 1;
     RemoveHeader remove = 2;
   }
-}
-
-// HttpRequestResult contains the decision and optional request mutations.
-message HttpRequestResult {
-  // Allow or deny decision for this request.
-  Decision decision = 1;
-  // Free-form service diagnostic. OpenShell does not relay this text into
-  // denied responses or security logs. Limited to 4 KiB before discarding.
-  string reason = 2;
-  // Replacement request body when has_body is true. Limited to 4 MiB.
-  bytes body = 3;
-  // True when body should replace the request body, including with an empty body.
-  bool has_body = 4;
-  // Ordered request-header mutations applied before the next middleware and
-  // before forwarding. Writes and removals may target visible end-to-end
-  // request headers, but credential, routing, framing, and hop-by-hop headers
-  // are always protected. Written values cannot contain OpenShell credential
-  // placeholder syntax. A violating result is a middleware failure handled
-  // according to the policy failure mode. At most 64 operations, 32 KiB of
-  // validated name/value data, and 64 KiB encoded are accepted.
-  repeated HeaderMutation header_mutations = 5;
-  // Audit-safe findings produced during evaluation. For operator-run services,
-  // OpenShell logs platform-owned fields derived from the operator-owned
-  // registration name rather than service-provided type, label, confidence,
-  // or metadata text.
-  // At most 32 findings of at most 4 KiB encoded each are accepted per stage.
-  // A policy selects at most 10 stages, so one chain retains at most 320.
-  repeated Finding findings = 6;
-  // Non-secret service-defined metadata included in diagnostics. At most 64
-  // entries and 32 KiB of combined key/value data are accepted.
-  map<string, string> metadata = 7;
-  // Optional stable machine-readable code for a deny decision. Codes must
-  // start with a lowercase ASCII letter and contain only lowercase ASCII
-  // letters, digits, and underscores, with a maximum length of 64 bytes.
-  // OpenShell may return this code to the requester, unlike free-form reason.
-  string reason_code = 8;
 }

@@ -5,8 +5,15 @@
 
 pub mod headers;
 mod remote;
+mod request;
 mod response;
 mod websocket;
+
+pub use request::{
+    HttpRequestDiagnostics, HttpRequestFinish, HttpRequestInvocation, HttpRequestInvocationOutcome,
+    HttpRequestMiddlewareFailure, HttpRequestPreflightInput, HttpRequestPreflightOutcome,
+    HttpRequestSession, MAX_HTTP_REQUEST_DEFERRED_BYTES, MAX_HTTP_REQUEST_STREAM_UNIT_BYTES,
+};
 
 pub use response::{
     HttpResponseDiagnostics, HttpResponseFinish, HttpResponseInvocation,
@@ -30,113 +37,19 @@ use std::time::Duration;
 use miette::{Result, miette};
 use prost::Message;
 
-use openshell_core::proto::middleware::v1::supervisor_middleware_server::SupervisorMiddleware;
 use openshell_core::proto::{
-    Decision, Finding, HeaderMutation, HttpHeader, HttpRequestEvaluation, HttpRequestTarget,
-    MiddlewareBinding, MiddlewareManifest, NetworkMiddlewareConfig, RequestContext, SandboxPolicy,
+    Decision, Finding, HeaderMutation, HttpHeader, HttpRequestTarget, MiddlewareBinding,
+    MiddlewareManifest, NetworkMiddlewareConfig, RequestContext, SandboxPolicy,
     SupervisorMiddlewareOperation, SupervisorMiddlewarePhase, SupervisorMiddlewareService,
     ValidateConfigRequest, ValidateConfigResponse,
 };
 use tokio::sync::{OnceCell, OwnedSemaphorePermit, Semaphore};
-use tonic::{Request, Response as TonicResponse, Status as TonicStatus};
+use tonic::Request;
 
 pub use openshell_core::middleware::{
-    HttpRequestView, HttpResponseResultStream, InProcessMiddleware, SupervisorMiddlewareEndpoint,
-    WebSocketResponseStream,
+    HttpRequestResultStream, HttpResponseResultStream, InProcessMiddleware,
+    SupervisorMiddlewareEndpoint, WebSocketResponseStream,
 };
-pub type MiddlewareService =
-    dyn SupervisorMiddleware<EvaluateWebSocketSessionStream = WebSocketResponseStream>;
-
-struct GeneratedMiddlewareEndpoint {
-    service: Arc<MiddlewareService>,
-}
-
-#[tonic::async_trait]
-impl SupervisorMiddlewareEndpoint for GeneratedMiddlewareEndpoint {
-    async fn describe(
-        &self,
-        request: Request<()>,
-    ) -> std::result::Result<TonicResponse<MiddlewareManifest>, TonicStatus> {
-        self.service.describe(request).await
-    }
-
-    async fn validate_config(
-        &self,
-        request: Request<ValidateConfigRequest>,
-    ) -> std::result::Result<TonicResponse<ValidateConfigResponse>, TonicStatus> {
-        self.service.validate_config(request).await
-    }
-
-    async fn evaluate_http_request(
-        &self,
-        request: Request<HttpRequestEvaluation>,
-    ) -> std::result::Result<TonicResponse<openshell_core::proto::HttpRequestResult>, TonicStatus>
-    {
-        self.service.evaluate_http_request(request).await
-    }
-
-    async fn open_websocket_session(
-        &self,
-        _receiver: tokio::sync::mpsc::Receiver<openshell_core::proto::WebSocketSessionEvent>,
-    ) -> std::result::Result<WebSocketResponseStream, TonicStatus> {
-        Err(TonicStatus::unimplemented(
-            "middleware service does not expose an in-process WebSocket stream",
-        ))
-    }
-}
-
-#[tonic::async_trait]
-impl InProcessMiddleware for GeneratedMiddlewareEndpoint {
-    async fn describe(&self) -> MiddlewareManifest {
-        self.service
-            .describe(Request::new(()))
-            .await
-            .expect("generated in-process Describe failed")
-            .into_inner()
-    }
-
-    async fn validate_config(
-        &self,
-        middleware_name: &str,
-        config: &prost_types::Struct,
-    ) -> Result<()> {
-        let response = self
-            .service
-            .validate_config(Request::new(ValidateConfigRequest {
-                config: Some(config.clone()),
-                middleware_name: middleware_name.to_string(),
-            }))
-            .await
-            .map_err(|error| miette!("{error}"))?
-            .into_inner();
-        if response.valid {
-            Ok(())
-        } else {
-            Err(miette!("{}", response.reason))
-        }
-    }
-
-    async fn evaluate_http_request(
-        &self,
-        request: HttpRequestView<'_>,
-    ) -> Result<openshell_core::proto::HttpRequestResult> {
-        self.service
-            .evaluate_http_request(Request::new(request_view_to_evaluation(request)))
-            .await
-            .map(tonic::Response::into_inner)
-            .map_err(|error| miette!("{error}"))
-    }
-}
-
-/// Adapt a generated HTTP-only service to the borrowed in-process contract.
-///
-/// This compatibility adapter is intended for tests and downstream HTTP-only
-/// implementations. First-party built-ins implement [`InProcessMiddleware`]
-/// directly so their HTTP path remains allocation-free.
-pub fn http_only_endpoint(service: Arc<MiddlewareService>) -> Arc<dyn InProcessMiddleware> {
-    Arc::new(GeneratedMiddlewareEndpoint { service })
-}
-
 struct EndpointInProcessAdapter {
     endpoint: Arc<dyn SupervisorMiddlewareEndpoint>,
 }
@@ -172,15 +85,13 @@ impl InProcessMiddleware for EndpointInProcessAdapter {
         }
     }
 
-    async fn evaluate_http_request(
+    async fn open_http_request_pre_credentials(
         &self,
-        request: HttpRequestView<'_>,
-    ) -> Result<openshell_core::proto::HttpRequestResult> {
+        requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+    ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
         self.endpoint
-            .evaluate_http_request(Request::new(request_view_to_evaluation(request)))
+            .open_http_request_pre_credentials(requests)
             .await
-            .map(tonic::Response::into_inner)
-            .map_err(|error| miette!("{error}"))
     }
 
     async fn open_websocket_session(
@@ -201,8 +112,8 @@ impl InProcessMiddleware for EndpointInProcessAdapter {
 /// Adapt a transport-neutral endpoint to the in-process registry contract.
 ///
 /// Prefer implementing [`InProcessMiddleware`] directly. This compatibility
-/// path materializes an owned HTTP request, but preserves direct WebSocket
-/// streams for endpoint implementations that predate the borrowed contract.
+/// path preserves the request, response, and WebSocket event streams while
+/// adapting configuration calls to the transport-neutral endpoint surface.
 pub fn in_process_endpoint(
     endpoint: Arc<dyn SupervisorMiddlewareEndpoint>,
 ) -> Arc<dyn InProcessMiddleware> {
@@ -262,8 +173,8 @@ impl MiddlewareWorkAdmissionOutcome {
 ///
 /// Protocol-specific session runners retain this guard while at least one
 /// streaming stage remains active. Registry replacement preserves the shared
-/// admission state so future streaming HTTP middleware can use the same
-/// process-wide bound.
+/// admission state so HTTP and WebSocket streams use the same process-wide
+/// bound across registry replacement.
 #[derive(Debug)]
 struct MiddlewareSessionPermit {
     _session: OwnedSemaphorePermit,
@@ -334,6 +245,7 @@ const EXTERNAL_FINDING_LABEL: &str = "External middleware finding";
 #[cfg(test)]
 const HTTP_REQUEST_OPERATION: SupervisorMiddlewareOperation =
     SupervisorMiddlewareOperation::HttpRequest;
+#[cfg(test)]
 const PRE_CREDENTIALS_PHASE: SupervisorMiddlewarePhase = SupervisorMiddlewarePhase::PreCredentials;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnError {
@@ -515,56 +427,6 @@ pub struct MiddlewareInvocation {
     pub failed: bool,
 }
 
-enum OnErrorAction {
-    /// `fail_open`: skip this middleware, leaving the request unchanged.
-    FailOpen,
-    /// `fail_closed`: short-circuit the chain and deny with the given reason.
-    FailClosed(String),
-}
-
-/// Apply a middleware entry's `on_error` policy after a failure (service error or
-/// malformed response). Records a `failed` invocation for telemetry in both cases.
-fn apply_on_error(
-    entry: &DescribedChainEntry,
-    reason: &str,
-    applied: &mut Vec<MiddlewareInvocation>,
-) -> OnErrorAction {
-    match entry.entry.on_error {
-        OnError::FailOpen => {
-            applied.push(MiddlewareInvocation {
-                name: entry.entry.name.clone(),
-                implementation: entry.entry.implementation.clone(),
-                decision: Decision::Allow,
-                transformed: false,
-                failed: true,
-            });
-            OnErrorAction::FailOpen
-        }
-        OnError::FailClosed => {
-            applied.push(MiddlewareInvocation {
-                name: entry.entry.name.clone(),
-                implementation: entry.entry.implementation.clone(),
-                decision: Decision::Deny,
-                transformed: false,
-                failed: true,
-            });
-            OnErrorAction::FailClosed(format!("middleware_failed: {reason}"))
-        }
-    }
-}
-
-fn request_view_to_evaluation(request: HttpRequestView<'_>) -> HttpRequestEvaluation {
-    HttpRequestEvaluation {
-        phase: request.phase() as i32,
-        context: Some(request.context().clone()),
-        config: Some(request.config().clone()),
-        target: Some(request.target().clone()),
-        headers: request.headers().to_vec(),
-        body: request.body().to_vec(),
-        middleware_name: request.middleware_name().to_string(),
-    }
-}
-
 #[derive(Clone)]
 pub struct ChainRunner {
     registry: Arc<MiddlewareRegistry>,
@@ -610,18 +472,13 @@ impl MiddlewareDispatch {
         }
     }
 
-    async fn evaluate_http_request(
+    async fn open_http_request_pre_credentials(
         &self,
-        request: HttpRequestView<'_>,
-    ) -> std::result::Result<tonic::Response<openshell_core::proto::HttpRequestResult>, tonic::Status>
-    {
+        receiver: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+    ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
         match self {
-            Self::InProcess(service) => service
-                .evaluate_http_request(request)
-                .await
-                .map(tonic::Response::new)
-                .map_err(|error| tonic::Status::invalid_argument(error.to_string())),
-            Self::Grpc(service) => service.evaluate_http_request(request).await,
+            Self::InProcess(service) => service.open_http_request_pre_credentials(receiver).await,
+            Self::Grpc(service) => service.open_http_request_pre_credentials(receiver).await,
         }
     }
 
@@ -691,16 +548,6 @@ impl MiddlewareDiagnosticPolicy {
         match self {
             Self::Preserve => safe_reason(&error.to_string()),
             Self::Normalize => "external_service_error".to_string(),
-        }
-    }
-
-    fn process_result(
-        self,
-        middleware_name: &str,
-        result: &mut openshell_core::proto::HttpRequestResult,
-    ) {
-        if self == Self::Normalize {
-            normalize_untrusted_diagnostics(middleware_name, result);
         }
     }
 
@@ -854,6 +701,7 @@ fn validate_payload_limit(source: &str, binding: &MiddlewareBinding) -> Result<u
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SupportedBinding {
     HttpPreCredentials,
+    HttpPostCredentials,
     HttpResponsePreReturn,
     WebSocketPreCredentials,
 }
@@ -867,6 +715,10 @@ fn supported_binding(source: &str, binding: &MiddlewareBinding) -> Result<Suppor
             Some(SupervisorMiddlewareOperation::HttpRequest),
             Some(SupervisorMiddlewarePhase::PreCredentials),
         ) => Ok(SupportedBinding::HttpPreCredentials),
+        (
+            Some(SupervisorMiddlewareOperation::HttpRequest),
+            Some(SupervisorMiddlewarePhase::PostCredentials),
+        ) => Ok(SupportedBinding::HttpPostCredentials),
         (
             Some(SupervisorMiddlewareOperation::HttpResponse),
             Some(SupervisorMiddlewarePhase::PreReturn),
@@ -948,6 +800,15 @@ fn validate_external_manifest(
     operator_max_payload_bytes: usize,
     authenticated: bool,
 ) -> Result<()> {
+    if manifest.bindings.iter().any(|binding| {
+        SupervisorMiddlewarePhase::try_from(binding.phase)
+            .is_ok_and(|phase| phase == SupervisorMiddlewarePhase::PostCredentials)
+    }) {
+        return Err(miette!(
+            "external middleware registration '{}' advertises POST_CREDENTIALS, which is reserved for trusted in-process built-ins",
+            registration.name
+        ));
+    }
     validate_manifest_bindings(
         &format!("external middleware registration '{}'", registration.name),
         manifest,
@@ -981,113 +842,6 @@ fn validate_expected_audience(
             "middleware registration '{registration_name}' expects audience \
              '{advertised}' but OpenShell is configured to mint '{configured}'"
         ));
-    }
-    Ok(())
-}
-
-/// External diagnostic text is untrusted and may contain request data. Keep
-/// only values derived from the validated, operator-owned registration name
-/// and numeric finding counts; do not carry per-request free-form text into
-/// logs.
-fn normalize_untrusted_diagnostics(
-    middleware_name: &str,
-    result: &mut openshell_core::proto::HttpRequestResult,
-) {
-    let reason_id: String = middleware_name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    result.reason = format!("middleware_denied:{reason_id}");
-    result.metadata.clear();
-    for finding in &mut result.findings {
-        finding.r#type = format!("{middleware_name}.finding");
-        finding.label = EXTERNAL_FINDING_LABEL.to_string();
-        finding.confidence.clear();
-        finding.severity = match finding.severity.as_str() {
-            "low" => "low",
-            "high" => "high",
-            _ => "medium",
-        }
-        .to_string();
-    }
-}
-
-fn validate_request_view(request: HttpRequestView<'_>) -> std::result::Result<(), &'static str> {
-    if request.body().len() > MAX_MIDDLEWARE_PAYLOAD_BYTES {
-        return Err("request_body_over_capacity");
-    }
-    if request.config().encoded_len() > MAX_MIDDLEWARE_CONFIG_BYTES {
-        return Err("request_config_over_capacity");
-    }
-    if request.context().encoded_len() > MAX_MIDDLEWARE_CONTEXT_BYTES {
-        return Err("request_context_over_capacity");
-    }
-    if request.target().encoded_len() > MAX_MIDDLEWARE_TARGET_BYTES {
-        return Err("request_target_over_capacity");
-    }
-    if request.headers().len() > MAX_MIDDLEWARE_HEADERS {
-        return Err("request_header_count_over_capacity");
-    }
-    let header_bytes = request.headers().iter().fold(0usize, |total, header| {
-        total.saturating_add(header.encoded_len())
-    });
-    if header_bytes > MAX_MIDDLEWARE_HEADER_BYTES {
-        return Err("request_header_bytes_over_capacity");
-    }
-    Ok(())
-}
-
-fn validate_response_envelope(
-    result: &openshell_core::proto::HttpRequestResult,
-) -> std::result::Result<(), &'static str> {
-    if result.body.len() > MAX_MIDDLEWARE_PAYLOAD_BYTES {
-        return Err("response_body_over_capacity");
-    }
-    if result.reason.len() > MAX_MIDDLEWARE_REASON_BYTES {
-        return Err("response_reason_over_capacity");
-    }
-    if !result.reason_code.is_empty() && !is_stable_reason_code(&result.reason_code) {
-        return Err("response_reason_code_invalid");
-    }
-    if result.header_mutations.len() > headers::MAX_HEADER_MUTATIONS {
-        return Err("header_mutation_count_over_capacity");
-    }
-    let mutation_bytes = result
-        .header_mutations
-        .iter()
-        .fold(0usize, |total, mutation| {
-            total.saturating_add(mutation.encoded_len())
-        });
-    if mutation_bytes > MAX_MIDDLEWARE_HEADER_MUTATION_WIRE_BYTES {
-        return Err("header_mutation_bytes_over_capacity");
-    }
-    if result.findings.len() > MAX_MIDDLEWARE_FINDINGS_PER_STAGE {
-        return Err("response_findings_over_capacity");
-    }
-    if result
-        .findings
-        .iter()
-        .any(|finding| finding.encoded_len() > MAX_MIDDLEWARE_FINDING_BYTES)
-    {
-        return Err("response_finding_over_capacity");
-    }
-    if result.metadata.len() > MAX_MIDDLEWARE_METADATA_ENTRIES {
-        return Err("response_metadata_count_over_capacity");
-    }
-    let metadata_bytes = result.metadata.iter().fold(0usize, |total, (key, value)| {
-        total.saturating_add(key.len()).saturating_add(value.len())
-    });
-    if metadata_bytes > MAX_MIDDLEWARE_METADATA_BYTES {
-        return Err("response_metadata_bytes_over_capacity");
-    }
-    if result.encoded_len() > MIDDLEWARE_GRPC_MESSAGE_BYTES {
-        return Err("response_envelope_over_capacity");
     }
     Ok(())
 }
@@ -1346,9 +1100,7 @@ impl ChainRunner {
     }
 
     #[cfg(test)]
-    fn new_protobuf_for_tests(service: Arc<MiddlewareService>) -> Self {
-        let endpoint: Arc<dyn SupervisorMiddlewareEndpoint> =
-            Arc::new(GeneratedMiddlewareEndpoint { service });
+    fn new_protobuf_for_tests(endpoint: Arc<dyn SupervisorMiddlewareEndpoint>) -> Self {
         Self::from_service(MiddlewareDispatch::Grpc(
             remote::GrpcMiddlewareService::from_service(endpoint),
         ))
@@ -1663,9 +1415,6 @@ impl ChainRunner {
             connection_nominated_headers,
             body,
         } = input;
-        // The request envelope is moved into one stable chain state. Built-ins
-        // borrow these values for every stage; only the gRPC adapter clones them
-        // when an operator service requires an owned protobuf message.
         let context = RequestContext {
             request_id,
             sandbox_id,
@@ -1681,305 +1430,143 @@ impl ChainRunner {
             path,
             query,
         };
-        let mut headers: Vec<HttpHeader> = headers
+        let mut headers = headers
             .into_iter()
             .map(|(name, value)| HttpHeader { name, value })
-            .collect();
+            .collect::<Vec<_>>();
         let mut body = body;
         let mut header_mutations = Vec::new();
         let mut findings = Vec::new();
         let mut metadata = BTreeMap::new();
         let mut applied = Vec::new();
-        let _admission = admission;
-        let chain_deadline = tokio::time::Instant::now() + MAX_MIDDLEWARE_CHAIN_TIMEOUT;
+        // The request session budget now bounds the streaming lifecycle, so a
+        // compatibility caller's pre-buffer admission can be released before
+        // opening the stage stream.
+        drop(admission);
 
+        // The compatibility collector evaluates one stage at a time so
+        // body-aware protocols can re-run policy after every accepted
+        // replacement. The HTTP relay uses the streaming session API directly
+        // and does not collect a complete request in memory.
         for entry in entries {
-            let Some(_binding) = entry.binding.as_ref() else {
-                match apply_on_error(entry, "binding_not_described", &mut applied) {
-                    OnErrorAction::FailOpen => continue,
-                    OnErrorAction::FailClosed(reason) => {
-                        return Ok(ChainOutcome {
-                            allowed: false,
-                            reason,
-                            body,
-                            header_mutations,
-                            findings,
-                            metadata,
-                            applied,
-                            denial: None,
-                        });
-                    }
-                }
-            };
-            if body.len() > entry.max_payload_bytes {
-                match apply_on_error(entry, "request_body_over_capacity", &mut applied) {
-                    OnErrorAction::FailOpen => continue,
-                    OnErrorAction::FailClosed(reason) => {
-                        return Ok(ChainOutcome {
-                            allowed: false,
-                            reason,
-                            body,
-                            header_mutations,
-                            findings,
-                            metadata,
-                            applied,
-                            denial: None,
-                        });
-                    }
-                }
-            }
-            let request = HttpRequestView::new(
-                PRE_CREDENTIALS_PHASE,
-                &context,
-                &entry.entry.config,
-                &target,
-                &headers,
-                &body,
-                &entry.entry.implementation,
-            );
-            if let Err(reason) = validate_request_view(request) {
-                match apply_on_error(entry, reason, &mut applied) {
-                    OnErrorAction::FailOpen => continue,
-                    OnErrorAction::FailClosed(reason) => {
-                        return Ok(ChainOutcome {
-                            allowed: false,
-                            reason,
-                            body,
-                            header_mutations,
-                            findings,
-                            metadata,
-                            applied,
-                            denial: None,
-                        });
-                    }
-                }
-            }
-            let Some(service) = entry.service.as_ref() else {
-                unreachable!("described binding always has a service")
-            };
-            let remaining = chain_deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                match apply_on_error(entry, "middleware_chain_timeout", &mut applied) {
-                    OnErrorAction::FailOpen => continue,
-                    OnErrorAction::FailClosed(reason) => {
-                        return Ok(ChainOutcome {
-                            allowed: false,
-                            reason,
-                            body,
-                            header_mutations,
-                            findings,
-                            metadata,
-                            applied,
-                            denial: None,
-                        });
-                    }
-                }
-            }
-            let mut result = match call_with_timeout(
-                entry.timeout.min(remaining),
-                "EvaluateHttpRequest",
-                service.service.evaluate_http_request(request),
-            )
-            .await
-            {
-                Ok(result) => result.into_inner(),
-                Err(err) => {
-                    let reason = if err.code() == tonic::Code::DeadlineExceeded {
-                        "middleware_timeout".to_string()
-                    } else {
-                        service.diagnostic_policy.error_reason(&err)
-                    };
-                    match apply_on_error(entry, &reason, &mut applied) {
-                        OnErrorAction::FailOpen => continue,
-                        OnErrorAction::FailClosed(reason) => {
-                            return Ok(ChainOutcome {
-                                allowed: false,
-                                reason,
-                                body,
-                                header_mutations,
-                                findings,
-                                metadata,
-                                applied,
-                                denial: None,
-                            });
-                        }
-                    }
-                }
-            };
+            let preflight = self
+                .preflight_described_http_request_with_owned(
+                    vec![entry.clone()],
+                    HttpRequestPreflightInput {
+                        context: context.clone(),
+                        target: target.clone(),
+                        declared_body_length: Some(body.len() as u64),
+                        headers: headers.clone(),
+                        connection_nominated_headers: connection_nominated_headers.clone(),
+                    },
+                    false,
+                )
+                .await?;
 
-            if let Err(reason) = validate_response_envelope(&result) {
-                match apply_on_error(entry, reason, &mut applied) {
-                    OnErrorAction::FailOpen => continue,
-                    OnErrorAction::FailClosed(reason) => {
-                        return Ok(ChainOutcome {
-                            allowed: false,
-                            reason,
-                            body,
-                            header_mutations,
-                            findings,
-                            metadata,
-                            applied,
-                            denial: None,
-                        });
-                    }
-                }
-            }
+            findings.extend(preflight.findings.clone());
+            metadata.extend(preflight.metadata.clone());
+            let mut stage_failed = preflight.invocations.iter().any(|item| item.failed);
+            let headers_transformed = preflight.headers != headers;
+            headers = preflight.headers;
+            header_mutations.extend(preflight.header_mutations);
 
-            service
-                .diagnostic_policy
-                .process_result(&entry.entry.implementation, &mut result);
-
-            let decision = match Decision::try_from(result.decision) {
-                Ok(decision @ (Decision::Allow | Decision::Deny)) => decision,
-                Ok(Decision::Unspecified) | Err(_) => {
-                    match apply_on_error(entry, "invalid_response_decision", &mut applied) {
-                        OnErrorAction::FailOpen => continue,
-                        OnErrorAction::FailClosed(reason) => {
-                            return Ok(ChainOutcome {
-                                allowed: false,
-                                reason,
-                                body,
-                                header_mutations,
-                                findings,
-                                metadata,
-                                applied,
-                                denial: None,
-                            });
-                        }
-                    }
-                }
-            };
-
-            if decision == Decision::Deny {
-                let reason_code =
-                    (!result.reason_code.is_empty()).then(|| result.reason_code.clone());
-                let denial = MiddlewareDenial {
-                    config_name: entry.entry.name.clone(),
-                    reason_code,
-                };
-                for finding in result.findings {
-                    findings.push(NamespacedFinding {
-                        middleware: entry.entry.name.clone(),
-                        finding,
-                    });
-                }
-                if !result.metadata.is_empty() {
-                    metadata.insert(
-                        entry.entry.name.clone(),
-                        result.metadata.into_iter().collect(),
-                    );
-                }
+            if !preflight.allowed {
                 applied.push(MiddlewareInvocation {
                     name: entry.entry.name.clone(),
                     implementation: entry.entry.implementation.clone(),
-                    decision,
+                    decision: Decision::Deny,
                     transformed: false,
-                    failed: false,
+                    failed: preflight.denial.is_none(),
                 });
                 return Ok(ChainOutcome {
                     allowed: false,
-                    reason: middleware_denial_reason(
-                        &denial.config_name,
-                        denial.reason_code.as_deref(),
-                    ),
+                    reason: preflight.reason,
                     body,
                     header_mutations,
                     findings,
                     metadata,
                     applied,
-                    denial: Some(denial),
+                    denial: preflight.denial,
                 });
             }
 
-            if result.has_body && result.body.len() > entry.max_payload_bytes {
-                match apply_on_error(entry, "response_body_over_capacity", &mut applied) {
-                    OnErrorAction::FailOpen => continue,
-                    OnErrorAction::FailClosed(reason) => {
+            let mut body_transformed = false;
+            if let Some(mut session) = preflight.session {
+                let original_body = body.clone();
+                let mut output = Vec::new();
+                let unit_limit = session.stream_unit_limit();
+                let mut failed = None;
+                for chunk in body.chunks(unit_limit) {
+                    match session.push_body(chunk.to_vec()).await {
+                        Ok(units) => output.extend(units),
+                        Err(error) => {
+                            failed = Some(error);
+                            break;
+                        }
+                    }
+                }
+                if let Some(error) = failed {
+                    findings.extend(error.diagnostics.findings);
+                    metadata.extend(error.diagnostics.metadata);
+                    applied.push(MiddlewareInvocation {
+                        name: entry.entry.name.clone(),
+                        implementation: entry.entry.implementation.clone(),
+                        decision: Decision::Deny,
+                        transformed: false,
+                        failed: error.denial.is_none(),
+                    });
+                    return Ok(ChainOutcome {
+                        allowed: false,
+                        reason: error.reason,
+                        body: original_body,
+                        header_mutations,
+                        findings,
+                        metadata,
+                        applied,
+                        denial: error.denial,
+                    });
+                }
+                match session.finish(Vec::new()).await {
+                    Ok(finish) => {
+                        output.extend(finish.body_units);
+                        body_transformed = finish.body_transformed;
+                        stage_failed |= finish.invocations.iter().any(|item| item.failed);
+                        findings.extend(finish.findings);
+                        metadata.extend(finish.metadata);
+                        body = output.concat();
+                    }
+                    Err(error) => {
+                        findings.extend(error.diagnostics.findings);
+                        metadata.extend(error.diagnostics.metadata);
+                        applied.push(MiddlewareInvocation {
+                            name: entry.entry.name.clone(),
+                            implementation: entry.entry.implementation.clone(),
+                            decision: Decision::Deny,
+                            transformed: false,
+                            failed: error.denial.is_none(),
+                        });
                         return Ok(ChainOutcome {
                             allowed: false,
-                            reason,
-                            body,
+                            reason: error.reason,
+                            body: original_body,
                             header_mutations,
                             findings,
                             metadata,
                             applied,
-                            denial: None,
+                            denial: error.denial,
                         });
                     }
                 }
             }
 
-            // Validate and apply the entire stage atomically. Under fail-open,
-            // one malformed mutation must not leave earlier mutations from the
-            // same response visible to later middleware.
-            let updated_headers = if result.header_mutations.is_empty() {
-                None
-            } else {
-                match headers::apply(
-                    headers::HeaderAuthority::Request,
-                    &headers,
-                    &connection_nominated_headers,
-                    &result.header_mutations,
-                ) {
-                    Ok(updated) => Some(updated),
-                    Err(error) => {
-                        let reason = service
-                            .diagnostic_policy
-                            .header_mutation_error_reason(&error);
-                        match apply_on_error(entry, &reason, &mut applied) {
-                            OnErrorAction::FailOpen => continue,
-                            OnErrorAction::FailClosed(reason) => {
-                                return Ok(ChainOutcome {
-                                    allowed: false,
-                                    reason,
-                                    body,
-                                    header_mutations,
-                                    findings,
-                                    metadata,
-                                    applied,
-                                    denial: None,
-                                });
-                            }
-                        }
-                    }
-                }
-            };
-            let headers_transformed = updated_headers
-                .as_ref()
-                .is_some_and(|updated| updated != &headers);
-            if let Some(updated) = updated_headers {
-                headers = updated;
-            }
-            header_mutations.extend(std::mem::take(&mut result.header_mutations));
-
-            let body_transformed = result.has_body;
-            if body_transformed {
-                body = std::mem::take(&mut result.body);
-            }
-            for finding in result.findings {
-                findings.push(NamespacedFinding {
-                    middleware: entry.entry.name.clone(),
-                    finding,
-                });
-            }
-            if !result.metadata.is_empty() {
-                metadata.insert(
-                    entry.entry.name.clone(),
-                    result.metadata.into_iter().collect(),
-                );
-            }
             applied.push(MiddlewareInvocation {
                 name: entry.entry.name.clone(),
                 implementation: entry.entry.implementation.clone(),
-                decision,
+                decision: Decision::Allow,
                 transformed: body_transformed || headers_transformed,
-                failed: false,
+                failed: stage_failed,
             });
 
-            // The stage ran successfully but its output must still satisfy the
-            // sandbox policy the original body was admitted under. Re-check now,
-            // before the next stage or the upstream sees the replaced body. A
-            // policy deny here is a hard deny, independent of `on_error`.
             if body_transformed
                 && let TransformedBodyPolicy::Reevaluate(validate) = transformed_body_policy
             {
@@ -2058,13 +1645,200 @@ pub(crate) fn safe_reason(reason: &str) -> String {
 mod tests {
     use super::*;
     use futures::{FutureExt, Stream, StreamExt};
+    use openshell_core::proto::middleware::v1::http_request_pre_credentials_server::{
+        HttpRequestPreCredentials, HttpRequestPreCredentialsServer,
+    };
     use openshell_core::proto::middleware::v1::supervisor_middleware_server::{
         SupervisorMiddleware, SupervisorMiddlewareServer,
     };
     use openshell_core::proto::{ExistingHeaderAction, header_mutation};
     use openshell_supervisor_middleware_builtins::{BUILTIN_REGEX, services};
 
-    use tokio_stream::wrappers::TcpListenerStream;
+    use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
+
+    #[derive(Clone, Default)]
+    struct TestRequestEvaluation {
+        phase: i32,
+        context: Option<RequestContext>,
+        config: Option<prost_types::Struct>,
+        target: Option<HttpRequestTarget>,
+        headers: Vec<HttpHeader>,
+        body: Vec<u8>,
+        middleware_name: String,
+    }
+
+    #[derive(Clone, Default)]
+    struct TestRequestResult {
+        decision: i32,
+        reason: String,
+        body: Vec<u8>,
+        has_body: bool,
+        header_mutations: Vec<HeaderMutation>,
+        findings: Vec<Finding>,
+        metadata: HashMap<String, String>,
+        reason_code: String,
+    }
+
+    type TestBodyHandler =
+        Box<dyn FnOnce(Vec<u8>, TestRequestEvaluation) -> TestRequestResult + Send + 'static>;
+
+    struct TestRequestPlan {
+        preflight: TestRequestResult,
+        body: Option<TestBodyHandler>,
+    }
+
+    fn constant_request_plan(result: TestRequestResult) -> TestRequestPlan {
+        if result.decision != Decision::Allow as i32 {
+            return TestRequestPlan {
+                preflight: result,
+                body: None,
+            };
+        }
+        let preflight = TestRequestResult {
+            decision: result.decision,
+            header_mutations: result.header_mutations.clone(),
+            ..Default::default()
+        };
+        TestRequestPlan {
+            preflight,
+            body: Some(Box::new(move |_body, _evaluation| result)),
+        }
+    }
+
+    fn open_test_request_stream<F>(
+        mut requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        plan: F,
+    ) -> HttpRequestResultStream
+    where
+        F: FnOnce(openshell_core::proto::HttpRequestPreflight) -> TestRequestPlan + Send + 'static,
+    {
+        use openshell_core::proto::{
+            HttpRequestBlock, HttpRequestBodyPassThrough, HttpRequestBodyResult,
+            HttpRequestBodyTransform, HttpRequestEventResult, HttpRequestPreflightInspect,
+            HttpRequestPreflightResult, HttpRequestTrailersResult, http_request_body_result,
+            http_request_body_transform, http_request_event, http_request_event_result,
+            http_request_preflight_result,
+        };
+
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        tokio::spawn(async move {
+            let Some(openshell_core::proto::HttpRequestEvent {
+                event: Some(http_request_event::Event::Preflight(preflight)),
+            }) = requests.recv().await
+            else {
+                return;
+            };
+            let mut evaluation = TestRequestEvaluation {
+                phase: SupervisorMiddlewarePhase::PreCredentials as i32,
+                context: preflight.context.clone(),
+                config: preflight.config.clone(),
+                target: preflight.target.clone(),
+                headers: preflight.headers.clone(),
+                body: Vec::new(),
+                middleware_name: preflight.middleware_name.clone(),
+            };
+            let TestRequestPlan {
+                preflight: initial,
+                body,
+            } = plan(preflight);
+            let action = match Decision::try_from(initial.decision) {
+                Ok(Decision::Deny) => Some(http_request_preflight_result::Action::BlockRequest(
+                    HttpRequestBlock {},
+                )),
+                Ok(Decision::Allow) => Some(http_request_preflight_result::Action::Inspect(
+                    HttpRequestPreflightInspect {
+                        body_mode: if body.is_some() {
+                            openshell_core::proto::HttpRequestBodyMode::WholeBodyBytes as i32
+                        } else {
+                            openshell_core::proto::HttpRequestBodyMode::HeadersOnly as i32
+                        },
+                        header_mutations: initial.header_mutations,
+                    },
+                )),
+                Ok(Decision::Unspecified) | Err(_) => None,
+            };
+            if sender
+                .send(Ok(HttpRequestEventResult {
+                    result: Some(http_request_event_result::Result::PreflightResult(
+                        HttpRequestPreflightResult {
+                            action,
+                            reason: initial.reason,
+                            reason_code: initial.reason_code,
+                            findings: initial.findings,
+                            metadata: initial.metadata,
+                        },
+                    )),
+                }))
+                .await
+                .is_err()
+            {
+                return;
+            }
+
+            let Some(body_handler) = body else {
+                while requests.recv().await.is_some() {}
+                return;
+            };
+            let Some(openshell_core::proto::HttpRequestEvent {
+                event: Some(http_request_event::Event::Body(body)),
+            }) = requests.recv().await
+            else {
+                return;
+            };
+            evaluation.body = match body.payload {
+                Some(openshell_core::proto::http_request_body_unit::Payload::Data(data)) => data,
+                None => Vec::new(),
+            };
+            let sequence = body.sequence;
+            let result = body_handler(evaluation.body.clone(), evaluation);
+            let action = if result.decision == Decision::Deny as i32 {
+                http_request_body_result::Action::BlockRequest(HttpRequestBlock {})
+            } else if result.has_body {
+                http_request_body_result::Action::Transform(HttpRequestBodyTransform {
+                    replacement: Some(http_request_body_transform::Replacement::Data(result.body)),
+                })
+            } else {
+                http_request_body_result::Action::PassThrough(HttpRequestBodyPassThrough {})
+            };
+            if sender
+                .send(Ok(HttpRequestEventResult {
+                    result: Some(http_request_event_result::Result::BodyResult(
+                        HttpRequestBodyResult {
+                            sequence,
+                            action: Some(action),
+                            reason: result.reason,
+                            reason_code: result.reason_code,
+                            findings: result.findings,
+                            metadata: result.metadata,
+                        },
+                    )),
+                }))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            while let Some(event) = requests.recv().await {
+                match event.event {
+                    Some(http_request_event::Event::Trailers(_)) => {
+                        if sender
+                            .send(Ok(HttpRequestEventResult {
+                                result: Some(http_request_event_result::Result::TrailersResult(
+                                    HttpRequestTrailersResult::default(),
+                                )),
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        });
+        Box::pin(ReceiverStream::new(receiver))
+    }
 
     fn proto_duration(value: &str) -> prost_types::Duration {
         let duration = match (value.strip_suffix("ms"), value.strip_suffix('s')) {
@@ -2161,251 +1935,6 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct RequestAddresses {
-        phase: SupervisorMiddlewarePhase,
-        context: usize,
-        request_id: usize,
-        config: usize,
-        target: usize,
-        host: usize,
-        headers: usize,
-        first_header_name: usize,
-        body: usize,
-        originating_process_present: bool,
-        middleware_name: String,
-    }
-
-    /// Records borrowed addresses so the test can detect an owned envelope
-    /// being reconstructed between otherwise no-op in-process stages.
-    struct BorrowedRecordingService {
-        manifest_name: String,
-        received: std::sync::Mutex<Vec<RequestAddresses>>,
-    }
-
-    #[tonic::async_trait]
-    impl InProcessMiddleware for BorrowedRecordingService {
-        async fn describe(&self) -> MiddlewareManifest {
-            MiddlewareManifest {
-                name: self.manifest_name.clone(),
-                service_version: "test".into(),
-                bindings: vec![MiddlewareBinding {
-                    operation: SupervisorMiddlewareOperation::HttpRequest as i32,
-                    phase: SupervisorMiddlewarePhase::PreCredentials as i32,
-                    max_payload_bytes: 4096,
-                    request_timeout: None,
-                }],
-                expected_audience: String::new(),
-            }
-        }
-
-        async fn validate_config(
-            &self,
-            _middleware_name: &str,
-            _config: &prost_types::Struct,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn evaluate_http_request(
-            &self,
-            request: HttpRequestView<'_>,
-        ) -> Result<openshell_core::proto::HttpRequestResult> {
-            let addresses = RequestAddresses {
-                phase: request.phase(),
-                context: std::ptr::from_ref(request.context()).addr(),
-                request_id: request.context().request_id.as_ptr().addr(),
-                config: std::ptr::from_ref(request.config()).addr(),
-                target: std::ptr::from_ref(request.target()).addr(),
-                host: request.target().host.as_ptr().addr(),
-                headers: request.headers().as_ptr().addr(),
-                first_header_name: request
-                    .headers()
-                    .first()
-                    .map_or(0, |header| header.name.as_ptr().addr()),
-                body: request.body().as_ptr().addr(),
-                originating_process_present: request.context().originating_process.is_some(),
-                middleware_name: request.middleware_name().to_string(),
-            };
-            self.received
-                .lock()
-                .expect("borrowed request recorder lock")
-                .push(addresses);
-            Ok(allow_result())
-        }
-    }
-
-    #[tokio::test]
-    async fn in_process_stages_share_one_borrowed_request_envelope() {
-        let service = Arc::new(BorrowedRecordingService {
-            manifest_name: "acme/redactor".into(),
-            received: std::sync::Mutex::new(Vec::new()),
-        });
-        let runner = ChainRunner::new(service.clone());
-        let entries = [
-            ChainEntry {
-                name: "first".into(),
-                implementation: "acme/redactor".into(),
-                order: 0,
-                config: prost_types::Struct::default(),
-                on_error: OnError::FailClosed,
-            },
-            ChainEntry {
-                name: "second".into(),
-                implementation: "acme/redactor".into(),
-                order: 10,
-                config: prost_types::Struct::default(),
-                on_error: OnError::FailClosed,
-            },
-        ];
-        let described = runner
-            .describe_chain(&entries)
-            .await
-            .expect("describe chain");
-        let expected_configs: Vec<_> = described
-            .iter()
-            .map(|entry| std::ptr::from_ref(&entry.entry.config).addr())
-            .collect();
-        let mut request = input("payload");
-        request.headers = vec![("x-test".into(), "value".into())];
-        let expected_body = request.body.as_ptr().addr();
-        let expected_request_id = request.request_id.as_ptr().addr();
-        let expected_host = request.host.as_ptr().addr();
-        let expected_header_name = request.headers[0].0.as_ptr().addr();
-
-        let outcome = runner
-            .evaluate_described(&described, request)
-            .await
-            .expect("evaluate borrowed chain");
-        let received = service.received.lock().expect("borrowed requests");
-
-        assert!(outcome.allowed);
-        assert_eq!(outcome.body.as_ptr().addr(), expected_body);
-        assert_eq!(received.len(), 2);
-        assert_eq!(received[0].phase, SupervisorMiddlewarePhase::PreCredentials);
-        assert!(!received[0].originating_process_present);
-        assert_eq!(received[0].request_id, expected_request_id);
-        assert_eq!(received[0].host, expected_host);
-        assert_eq!(received[0].first_header_name, expected_header_name);
-        assert_eq!(received[0].body, expected_body);
-        assert_eq!(received[0].config, expected_configs[0]);
-        assert_eq!(received[1].config, expected_configs[1]);
-        assert_eq!(received[0].context, received[1].context);
-        assert_eq!(received[0].target, received[1].target);
-        assert_eq!(received[0].headers, received[1].headers);
-        assert_eq!(received[0].body, received[1].body);
-        assert!(
-            received
-                .iter()
-                .all(|request| request.middleware_name == "acme/redactor")
-        );
-    }
-
-    const TEST_REPLACEMENT_BODY: &[u8] = b"stage-one-replacement";
-
-    /// Records both sides of a successful body replacement so the test can
-    /// distinguish ownership transfer from a content-preserving body copy.
-    #[derive(Debug, Default)]
-    struct ReplacementTransferRecord {
-        invocations: usize,
-        returned_body: Option<usize>,
-        second_body: Option<usize>,
-        second_body_bytes: Vec<u8>,
-    }
-
-    /// Replaces the first request body and observes the body borrowed by the
-    /// second stage without replacing it again.
-    struct ReplacementTransferService {
-        record: std::sync::Mutex<ReplacementTransferRecord>,
-    }
-
-    #[tonic::async_trait]
-    impl InProcessMiddleware for ReplacementTransferService {
-        async fn describe(&self) -> MiddlewareManifest {
-            MiddlewareManifest {
-                name: "test/replacement-transfer".into(),
-                service_version: "test".into(),
-                bindings: vec![MiddlewareBinding {
-                    operation: SupervisorMiddlewareOperation::HttpRequest as i32,
-                    phase: SupervisorMiddlewarePhase::PreCredentials as i32,
-                    max_payload_bytes: 4096,
-                    request_timeout: None,
-                }],
-                expected_audience: String::new(),
-            }
-        }
-
-        async fn validate_config(
-            &self,
-            _middleware_name: &str,
-            _config: &prost_types::Struct,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn evaluate_http_request(
-            &self,
-            request: HttpRequestView<'_>,
-        ) -> Result<openshell_core::proto::HttpRequestResult> {
-            let mut record = self.record.lock().expect("replacement transfer record");
-            let invocation = record.invocations;
-            record.invocations += 1;
-
-            if invocation == 0 {
-                let replacement = TEST_REPLACEMENT_BODY.to_vec();
-                record.returned_body = Some(replacement.as_ptr().addr());
-                let mut result = allow_result();
-                result.body = replacement;
-                result.has_body = true;
-                Ok(result)
-            } else {
-                record.second_body = Some(request.body().as_ptr().addr());
-                record.second_body_bytes = request.body().to_vec();
-                Ok(allow_result())
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn replacement_body_allocation_moves_through_next_stage_and_outcome() {
-        let service = Arc::new(ReplacementTransferService {
-            record: std::sync::Mutex::new(ReplacementTransferRecord::default()),
-        });
-        let runner = ChainRunner::new(service.clone());
-        let entries = [
-            ChainEntry {
-                name: "replace".into(),
-                implementation: "test/replacement-transfer".into(),
-                order: 0,
-                config: prost_types::Struct::default(),
-                on_error: OnError::FailClosed,
-            },
-            ChainEntry {
-                name: "observe".into(),
-                implementation: "test/replacement-transfer".into(),
-                order: 10,
-                config: prost_types::Struct::default(),
-                on_error: OnError::FailClosed,
-            },
-        ];
-
-        let outcome = runner
-            .evaluate(&entries, input("original-body"))
-            .await
-            .expect("evaluate replacement transfer chain");
-        let record = service.record.lock().expect("replacement transfer record");
-        let returned_body = record
-            .returned_body
-            .expect("first-stage replacement pointer");
-
-        assert!(outcome.allowed);
-        assert_eq!(record.invocations, 2);
-        assert_eq!(record.second_body_bytes, TEST_REPLACEMENT_BODY);
-        assert_eq!(record.second_body, Some(returned_body));
-        assert_eq!(outcome.body, TEST_REPLACEMENT_BODY);
-        assert_eq!(outcome.body.as_ptr().addr(), returned_body);
-    }
-
     /// An in-process service that yields forever so the runtime must enforce
     /// the binding timeout around borrowed validation and evaluation futures.
     struct PendingInProcessService;
@@ -2434,12 +1963,857 @@ mod tests {
             std::future::pending().await
         }
 
-        async fn evaluate_http_request(
+        async fn open_http_request_pre_credentials(
             &self,
-            _request: HttpRequestView<'_>,
-        ) -> Result<openshell_core::proto::HttpRequestResult> {
+            _requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
             std::future::pending().await
         }
+    }
+
+    struct OwnedStreamService {
+        invalid_finalization: bool,
+    }
+
+    #[derive(Default)]
+    struct StreamSequenceRecorder {
+        streams: std::sync::Mutex<Vec<Vec<(usize, bool)>>>,
+    }
+
+    struct StreamSequenceService {
+        recorder: Arc<StreamSequenceRecorder>,
+        findings_per_body: bool,
+    }
+
+    #[tonic::async_trait]
+    impl InProcessMiddleware for StreamSequenceService {
+        async fn describe(&self) -> MiddlewareManifest {
+            MiddlewareManifest {
+                name: "test/stream-sequence".into(),
+                service_version: "test".into(),
+                bindings: vec![MiddlewareBinding {
+                    operation: SupervisorMiddlewareOperation::HttpRequest as i32,
+                    phase: SupervisorMiddlewarePhase::PreCredentials as i32,
+                    max_payload_bytes: MAX_HTTP_REQUEST_STREAM_UNIT_BYTES as u64,
+                    request_timeout: None,
+                }],
+                expected_audience: String::new(),
+            }
+        }
+
+        async fn validate_config(
+            &self,
+            _middleware_name: &str,
+            _config: &prost_types::Struct,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn open_http_request_pre_credentials(
+            &self,
+            mut requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
+            use openshell_core::proto::{
+                HttpRequestBodyMode, HttpRequestBodyPassThrough, HttpRequestBodyResult,
+                HttpRequestEventResult, HttpRequestPreflightInspect, HttpRequestPreflightResult,
+                HttpRequestTrailersResult, http_request_body_result, http_request_body_unit,
+                http_request_event, http_request_event_result, http_request_preflight_result,
+            };
+
+            let stream_index = {
+                let mut streams = self.recorder.streams.lock().expect("stream recorder lock");
+                streams.push(Vec::new());
+                streams.len() - 1
+            };
+            let recorder = Arc::clone(&self.recorder);
+            let findings_per_body = self.findings_per_body;
+            let (sender, receiver) = tokio::sync::mpsc::channel(4);
+            tokio::spawn(async move {
+                while let Some(event) = requests.recv().await {
+                    let result = match event.event {
+                        Some(http_request_event::Event::Preflight(_)) => HttpRequestEventResult {
+                            result: Some(http_request_event_result::Result::PreflightResult(
+                                HttpRequestPreflightResult {
+                                    action: Some(http_request_preflight_result::Action::Inspect(
+                                        HttpRequestPreflightInspect {
+                                            body_mode: HttpRequestBodyMode::StreamBytes as i32,
+                                            header_mutations: Vec::new(),
+                                        },
+                                    )),
+                                    ..Default::default()
+                                },
+                            )),
+                        },
+                        Some(http_request_event::Event::Body(body)) => {
+                            let size = match body.payload {
+                                Some(http_request_body_unit::Payload::Data(ref data)) => data.len(),
+                                None => break,
+                            };
+                            recorder.streams.lock().expect("stream recorder lock")[stream_index]
+                                .push((size, body.end_of_stream));
+                            HttpRequestEventResult {
+                                result: Some(http_request_event_result::Result::BodyResult(
+                                    HttpRequestBodyResult {
+                                        sequence: body.sequence,
+                                        action: Some(
+                                            http_request_body_result::Action::PassThrough(
+                                                HttpRequestBodyPassThrough {},
+                                            ),
+                                        ),
+                                        findings: findings_per_body
+                                            .then(|| Finding {
+                                                r#type: "test.stream".into(),
+                                                label: "Stream finding".into(),
+                                                count: 1,
+                                                confidence: "high".into(),
+                                                severity: "informational".into(),
+                                            })
+                                            .into_iter()
+                                            .collect(),
+                                        ..Default::default()
+                                    },
+                                )),
+                            }
+                        }
+                        Some(http_request_event::Event::Trailers(_)) => HttpRequestEventResult {
+                            result: Some(http_request_event_result::Result::TrailersResult(
+                                HttpRequestTrailersResult::default(),
+                            )),
+                        },
+                        Some(http_request_event::Event::SessionEnd(_)) | None => break,
+                    };
+                    if sender.send(Ok(result)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            Ok(Box::pin(ReceiverStream::new(receiver)))
+        }
+    }
+
+    struct CancellationRecordingService {
+        terminal: std::sync::Mutex<
+            Option<tokio::sync::oneshot::Sender<openshell_core::proto::MiddlewareSessionEndReason>>,
+        >,
+    }
+
+    struct BodyDenialService {
+        manifest_name: String,
+        deny: bool,
+        session_ends: tokio::sync::mpsc::UnboundedSender<(
+            String,
+            openshell_core::proto::MiddlewareSessionEndReason,
+        )>,
+    }
+
+    #[tonic::async_trait]
+    impl InProcessMiddleware for BodyDenialService {
+        async fn describe(&self) -> MiddlewareManifest {
+            MiddlewareManifest {
+                name: self.manifest_name.clone(),
+                service_version: "test".into(),
+                bindings: vec![MiddlewareBinding {
+                    operation: SupervisorMiddlewareOperation::HttpRequest as i32,
+                    phase: SupervisorMiddlewarePhase::PreCredentials as i32,
+                    max_payload_bytes: MAX_HTTP_REQUEST_STREAM_UNIT_BYTES as u64,
+                    request_timeout: None,
+                }],
+                expected_audience: String::new(),
+            }
+        }
+
+        async fn validate_config(
+            &self,
+            _middleware_name: &str,
+            _config: &prost_types::Struct,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn open_http_request_pre_credentials(
+            &self,
+            mut requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
+            use openshell_core::proto::{
+                HttpRequestBlock, HttpRequestBodyMode, HttpRequestBodyPassThrough,
+                HttpRequestBodyResult, HttpRequestEventResult, HttpRequestPreflightInspect,
+                HttpRequestPreflightResult, http_request_body_result, http_request_event,
+                http_request_event_result, http_request_preflight_result,
+            };
+
+            let name = self.manifest_name.clone();
+            let deny = self.deny;
+            let session_ends = self.session_ends.clone();
+            let (sender, receiver) = tokio::sync::mpsc::channel(4);
+            tokio::spawn(async move {
+                while let Some(event) = requests.recv().await {
+                    let result = match event.event {
+                        Some(http_request_event::Event::Preflight(_)) => HttpRequestEventResult {
+                            result: Some(http_request_event_result::Result::PreflightResult(
+                                HttpRequestPreflightResult {
+                                    action: Some(http_request_preflight_result::Action::Inspect(
+                                        HttpRequestPreflightInspect {
+                                            body_mode: HttpRequestBodyMode::StreamBytes as i32,
+                                            header_mutations: Vec::new(),
+                                        },
+                                    )),
+                                    ..Default::default()
+                                },
+                            )),
+                        },
+                        Some(http_request_event::Event::Body(body)) => HttpRequestEventResult {
+                            result: Some(http_request_event_result::Result::BodyResult(
+                                HttpRequestBodyResult {
+                                    sequence: body.sequence,
+                                    action: Some(if deny {
+                                        http_request_body_result::Action::BlockRequest(
+                                            HttpRequestBlock {},
+                                        )
+                                    } else {
+                                        http_request_body_result::Action::PassThrough(
+                                            HttpRequestBodyPassThrough {},
+                                        )
+                                    }),
+                                    reason_code: if deny {
+                                        "body_denied".into()
+                                    } else {
+                                        String::new()
+                                    },
+                                    findings: deny
+                                        .then(|| Finding {
+                                            r#type: "test.request-body".into(),
+                                            label: "Request body denied".into(),
+                                            count: 1,
+                                            confidence: "high".into(),
+                                            severity: "medium".into(),
+                                        })
+                                        .into_iter()
+                                        .collect(),
+                                    metadata: deny
+                                        .then(|| ("rule".into(), "deny-body".into()))
+                                        .into_iter()
+                                        .collect(),
+                                    ..Default::default()
+                                },
+                            )),
+                        },
+                        Some(http_request_event::Event::SessionEnd(end)) => {
+                            if let Ok(reason) =
+                                openshell_core::proto::MiddlewareSessionEndReason::try_from(
+                                    end.reason,
+                                )
+                            {
+                                let _ = session_ends.send((name.clone(), reason));
+                            }
+                            break;
+                        }
+                        Some(http_request_event::Event::Trailers(_)) | None => break,
+                    };
+                    if sender.send(Ok(result)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            Ok(Box::pin(ReceiverStream::new(receiver)))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl InProcessMiddleware for CancellationRecordingService {
+        async fn describe(&self) -> MiddlewareManifest {
+            MiddlewareManifest {
+                name: "test/cancellation-recorder".into(),
+                service_version: "test".into(),
+                bindings: vec![MiddlewareBinding {
+                    operation: SupervisorMiddlewareOperation::HttpRequest as i32,
+                    phase: SupervisorMiddlewarePhase::PreCredentials as i32,
+                    max_payload_bytes: MAX_HTTP_REQUEST_STREAM_UNIT_BYTES as u64,
+                    request_timeout: None,
+                }],
+                expected_audience: String::new(),
+            }
+        }
+
+        async fn validate_config(
+            &self,
+            _middleware_name: &str,
+            _config: &prost_types::Struct,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn open_http_request_pre_credentials(
+            &self,
+            mut requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
+            use openshell_core::proto::{
+                HttpRequestBodyMode, HttpRequestEventResult, HttpRequestPreflightInspect,
+                HttpRequestPreflightResult, http_request_event, http_request_event_result,
+                http_request_preflight_result,
+            };
+
+            let terminal = self.terminal.lock().expect("terminal sender lock").take();
+            let (sender, receiver) = tokio::sync::mpsc::channel(4);
+            tokio::spawn(async move {
+                let Some(openshell_core::proto::HttpRequestEvent {
+                    event: Some(http_request_event::Event::Preflight(_)),
+                }) = requests.recv().await
+                else {
+                    return;
+                };
+                if sender
+                    .send(Ok(HttpRequestEventResult {
+                        result: Some(http_request_event_result::Result::PreflightResult(
+                            HttpRequestPreflightResult {
+                                action: Some(http_request_preflight_result::Action::Inspect(
+                                    HttpRequestPreflightInspect {
+                                        body_mode: HttpRequestBodyMode::StreamBytes as i32,
+                                        header_mutations: Vec::new(),
+                                    },
+                                )),
+                                ..Default::default()
+                            },
+                        )),
+                    }))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                while let Some(event) = requests.recv().await {
+                    if let Some(http_request_event::Event::SessionEnd(end)) = event.event {
+                        if let (Some(terminal), Ok(reason)) = (
+                            terminal,
+                            openshell_core::proto::MiddlewareSessionEndReason::try_from(end.reason),
+                        ) {
+                            let _ = terminal.send(reason);
+                        }
+                        break;
+                    }
+                }
+            });
+            Ok(Box::pin(ReceiverStream::new(receiver)))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl InProcessMiddleware for OwnedStreamService {
+        async fn describe(&self) -> MiddlewareManifest {
+            MiddlewareManifest {
+                name: "test/owned-stream".into(),
+                service_version: "test".into(),
+                bindings: vec![MiddlewareBinding {
+                    operation: SupervisorMiddlewareOperation::HttpRequest as i32,
+                    phase: SupervisorMiddlewarePhase::PreCredentials as i32,
+                    max_payload_bytes: MAX_HTTP_REQUEST_STREAM_UNIT_BYTES as u64,
+                    request_timeout: None,
+                }],
+                expected_audience: String::new(),
+            }
+        }
+
+        async fn validate_config(
+            &self,
+            _middleware_name: &str,
+            _config: &prost_types::Struct,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn open_http_request_pre_credentials(
+            &self,
+            mut requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
+            use openshell_core::proto::{
+                HttpRequestBodyFinalize, HttpRequestBodyMode, HttpRequestBodyOutput,
+                HttpRequestBodyResult, HttpRequestBodyTakeOwnership, HttpRequestEventResult,
+                HttpRequestPreflightInspect, HttpRequestPreflightResult, HttpRequestTrailersResult,
+                http_request_body_result, http_request_event, http_request_event_result,
+                http_request_preflight_result,
+            };
+
+            let invalid_finalization = self.invalid_finalization;
+            let (sender, receiver) = tokio::sync::mpsc::channel(4);
+            tokio::spawn(async move {
+                while let Some(event) = requests.recv().await {
+                    let result = match event.event {
+                        Some(http_request_event::Event::Preflight(_)) => HttpRequestEventResult {
+                            result: Some(http_request_event_result::Result::PreflightResult(
+                                HttpRequestPreflightResult {
+                                    action: Some(http_request_preflight_result::Action::Inspect(
+                                        HttpRequestPreflightInspect {
+                                            body_mode: HttpRequestBodyMode::OwnedStreamBytes as i32,
+                                            header_mutations: Vec::new(),
+                                        },
+                                    )),
+                                    ..Default::default()
+                                },
+                            )),
+                        },
+                        Some(http_request_event::Event::Body(body)) => {
+                            let sequence = body.sequence;
+                            let end_of_stream = body.end_of_stream;
+                            let result = HttpRequestEventResult {
+                                result: Some(http_request_event_result::Result::BodyResult(
+                                    HttpRequestBodyResult {
+                                        sequence,
+                                        action: Some(
+                                            http_request_body_result::Action::TakeOwnership(
+                                                HttpRequestBodyTakeOwnership {},
+                                            ),
+                                        ),
+                                        ..Default::default()
+                                    },
+                                )),
+                            };
+                            if sender.send(Ok(result)).await.is_err() {
+                                break;
+                            }
+                            if end_of_stream {
+                                if sender
+                                    .send(Ok(HttpRequestEventResult {
+                                        result: Some(
+                                            http_request_event_result::Result::BodyOutput(
+                                                HttpRequestBodyOutput {
+                                                    sequence: 1,
+                                                    data: b"signed".to_vec(),
+                                                },
+                                            ),
+                                        ),
+                                    }))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                if sender
+                                    .send(Ok(HttpRequestEventResult {
+                                        result: Some(
+                                            http_request_event_result::Result::BodyFinalize(
+                                                HttpRequestBodyFinalize {
+                                                    through_input_sequence: if invalid_finalization
+                                                    {
+                                                        sequence + 1
+                                                    } else {
+                                                        sequence
+                                                    },
+                                                    through_output_sequence: 1,
+                                                    reason_code: "owned_complete".into(),
+                                                    findings: vec![Finding {
+                                                        r#type: "test.owned".into(),
+                                                        label: "Owned transformation complete"
+                                                            .into(),
+                                                        count: 1,
+                                                        confidence: "high".into(),
+                                                        severity: "informational".into(),
+                                                    }],
+                                                    metadata: HashMap::from([(
+                                                        "mode".into(),
+                                                        "owned".into(),
+                                                    )]),
+                                                    ..Default::default()
+                                                },
+                                            ),
+                                        ),
+                                    }))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                        Some(http_request_event::Event::Trailers(_)) => HttpRequestEventResult {
+                            result: Some(http_request_event_result::Result::TrailersResult(
+                                HttpRequestTrailersResult::default(),
+                            )),
+                        },
+                        Some(http_request_event::Event::SessionEnd(_)) | None => break,
+                    };
+                    if sender.send(Ok(result)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            Ok(Box::pin(ReceiverStream::new(receiver)))
+        }
+    }
+
+    fn owned_entry(on_error: OnError) -> ChainEntry {
+        ChainEntry {
+            name: "owned".into(),
+            implementation: "test/owned-stream".into(),
+            order: 0,
+            config: prost_types::Struct::default(),
+            on_error,
+        }
+    }
+
+    #[tokio::test]
+    async fn owned_request_stream_replaces_a_body_larger_than_the_former_unary_limit() {
+        let runner = ChainRunner::new(Arc::new(OwnedStreamService {
+            invalid_finalization: false,
+        }));
+        let body = "x".repeat(4 * 1024 * 1024 + 17);
+        let mut preflight = runner
+            .preflight_http_request(
+                &[owned_entry(OnError::FailClosed)],
+                HttpRequestPreflightInput {
+                    context: RequestContext::default(),
+                    target: HttpRequestTarget::default(),
+                    declared_body_length: Some(body.len() as u64),
+                    headers: Vec::new(),
+                    connection_nominated_headers: Vec::new(),
+                },
+            )
+            .await
+            .expect("owned request preflight");
+        let mut session = preflight.session.take().expect("owned request session");
+        for chunk in body.as_bytes().chunks(session.stream_unit_limit()) {
+            assert!(session.push_body(chunk.to_vec()).await.unwrap().is_empty());
+        }
+        let finish = session
+            .finish(Vec::new())
+            .await
+            .expect("owned finalization");
+        assert_eq!(finish.body_units.concat(), b"signed");
+        assert!(finish.body_transformed);
+        assert_eq!(finish.findings[0].middleware, "owned");
+        assert_eq!(finish.findings[0].finding.r#type, "test.owned");
+        assert_eq!(finish.metadata["owned"]["mode"], "owned");
+    }
+
+    #[tokio::test]
+    async fn owned_request_stream_requires_fail_closed_and_valid_finalization() {
+        let fail_open_runner = ChainRunner::new(Arc::new(OwnedStreamService {
+            invalid_finalization: false,
+        }));
+        let fail_open = fail_open_runner
+            .evaluate(&[owned_entry(OnError::FailOpen)], input("original"))
+            .await
+            .expect("fail-open evaluation");
+        assert!(fail_open.allowed);
+        assert_eq!(fail_open.body, b"original");
+        assert!(fail_open.applied[0].failed);
+
+        let buffered_fail_closed = ChainRunner::new(Arc::new(OwnedStreamService {
+            invalid_finalization: false,
+        }))
+        .evaluate(&[owned_entry(OnError::FailClosed)], input("original"))
+        .await
+        .expect("buffered compatibility evaluation");
+        assert!(!buffered_fail_closed.allowed);
+        assert_eq!(
+            buffered_fail_closed.reason,
+            "middleware_failed: request_body_mode_not_permitted"
+        );
+
+        let invalid_runner = ChainRunner::new(Arc::new(OwnedStreamService {
+            invalid_finalization: true,
+        }));
+        let mut preflight = invalid_runner
+            .preflight_http_request(
+                &[owned_entry(OnError::FailClosed)],
+                HttpRequestPreflightInput {
+                    context: RequestContext::default(),
+                    target: HttpRequestTarget::default(),
+                    declared_body_length: Some(8),
+                    headers: Vec::new(),
+                    connection_nominated_headers: Vec::new(),
+                },
+            )
+            .await
+            .expect("invalid finalization preflight");
+        let mut session = preflight.session.take().expect("owned request session");
+        assert!(
+            session
+                .push_body(b"original".to_vec())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let invalid = session.finish(Vec::new()).await.unwrap_err();
+        assert_eq!(
+            invalid.reason,
+            "middleware_failed: invalid_owned_finalization"
+        );
+        assert!(invalid.denial.is_none());
+    }
+
+    #[tokio::test]
+    async fn request_stream_stages_receive_one_empty_final_unit_only() {
+        let recorder = Arc::new(StreamSequenceRecorder::default());
+        let runner = ChainRunner::new(Arc::new(StreamSequenceService {
+            recorder: Arc::clone(&recorder),
+            findings_per_body: false,
+        }));
+        let entries = [
+            ChainEntry {
+                name: "first".into(),
+                implementation: "test/stream-sequence".into(),
+                order: 1,
+                config: prost_types::Struct::default(),
+                on_error: OnError::FailClosed,
+            },
+            ChainEntry {
+                name: "second".into(),
+                implementation: "test/stream-sequence".into(),
+                order: 2,
+                config: prost_types::Struct::default(),
+                on_error: OnError::FailClosed,
+            },
+        ];
+        let preflight = runner
+            .preflight_http_request(
+                &entries,
+                HttpRequestPreflightInput {
+                    context: RequestContext::default(),
+                    target: HttpRequestTarget::default(),
+                    declared_body_length: Some(3),
+                    headers: Vec::new(),
+                    connection_nominated_headers: Vec::new(),
+                },
+            )
+            .await
+            .expect("request preflight");
+        let mut session = preflight.session.expect("streaming request session");
+        assert_eq!(
+            session.push_body(b"abc".to_vec()).await.unwrap(),
+            vec![b"abc".to_vec()]
+        );
+        let finish = session.finish(Vec::new()).await.expect("request finish");
+        assert!(finish.body_units.is_empty());
+
+        let streams = recorder.streams.lock().expect("stream recorder lock");
+        assert_eq!(
+            streams.as_slice(),
+            [vec![(3, false), (0, true)], vec![(3, false), (0, true)]]
+        );
+    }
+
+    #[tokio::test]
+    async fn request_stream_bounds_findings_across_body_results() {
+        let runner = ChainRunner::new(Arc::new(StreamSequenceService {
+            recorder: Arc::new(StreamSequenceRecorder::default()),
+            findings_per_body: true,
+        }));
+        let entry = ChainEntry {
+            name: "finding-stream".into(),
+            implementation: "test/stream-sequence".into(),
+            order: 0,
+            config: prost_types::Struct::default(),
+            on_error: OnError::FailClosed,
+        };
+        let preflight = runner
+            .preflight_http_request(
+                &[entry],
+                HttpRequestPreflightInput {
+                    context: RequestContext::default(),
+                    target: HttpRequestTarget::default(),
+                    declared_body_length: Some(33),
+                    headers: Vec::new(),
+                    connection_nominated_headers: Vec::new(),
+                },
+            )
+            .await
+            .expect("request preflight");
+        let mut session = preflight.session.expect("streaming request session");
+        for _ in 0..MAX_MIDDLEWARE_FINDINGS_PER_STAGE {
+            assert_eq!(
+                session.push_body(vec![b'x']).await.unwrap(),
+                vec![vec![b'x']]
+            );
+        }
+        let failure = session
+            .push_body(vec![b'x'])
+            .await
+            .expect_err("the aggregate finding limit must fail closed");
+
+        assert_eq!(
+            failure.reason,
+            "middleware_failed: request_findings_over_capacity"
+        );
+        assert_eq!(
+            failure.diagnostics.findings.len(),
+            MAX_MIDDLEWARE_FINDINGS_PER_STAGE
+        );
+    }
+
+    #[tokio::test]
+    async fn request_stream_bounds_retained_invocation_records() {
+        let runner = ChainRunner::new(Arc::new(StreamSequenceService {
+            recorder: Arc::new(StreamSequenceRecorder::default()),
+            findings_per_body: false,
+        }));
+        let entry = ChainEntry {
+            name: "long-stream".into(),
+            implementation: "test/stream-sequence".into(),
+            order: 0,
+            config: prost_types::Struct::default(),
+            on_error: OnError::FailClosed,
+        };
+        let preflight = runner
+            .preflight_http_request(
+                &[entry],
+                HttpRequestPreflightInput {
+                    context: RequestContext::default(),
+                    target: HttpRequestTarget::default(),
+                    declared_body_length: Some(1025),
+                    headers: Vec::new(),
+                    connection_nominated_headers: Vec::new(),
+                },
+            )
+            .await
+            .expect("request preflight");
+        let mut session = preflight.session.expect("streaming request session");
+        for _ in 0..1025 {
+            assert_eq!(
+                session.push_body(vec![b'x']).await.unwrap(),
+                vec![vec![b'x']]
+            );
+        }
+        let finish = session.finish(Vec::new()).await.expect("request finish");
+
+        assert_eq!(finish.invocations.len(), 1024);
+        assert!(!finish.invocations[0].failed);
+        assert!(finish.invocations[0].input_size > 1);
+    }
+
+    #[tokio::test]
+    async fn dropped_request_session_sends_best_effort_cancellation() {
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        let runner = ChainRunner::new(Arc::new(CancellationRecordingService {
+            terminal: std::sync::Mutex::new(Some(terminal_tx)),
+        }));
+        let entry = ChainEntry {
+            name: "recorder".into(),
+            implementation: "test/cancellation-recorder".into(),
+            order: 0,
+            config: prost_types::Struct::default(),
+            on_error: OnError::FailClosed,
+        };
+        let preflight = runner
+            .preflight_http_request(
+                &[entry],
+                HttpRequestPreflightInput {
+                    context: RequestContext::default(),
+                    target: HttpRequestTarget::default(),
+                    declared_body_length: Some(1),
+                    headers: Vec::new(),
+                    connection_nominated_headers: Vec::new(),
+                },
+            )
+            .await
+            .expect("request preflight");
+
+        drop(preflight.session.expect("streaming request session"));
+        let reason = tokio::time::timeout(Duration::from_secs(1), terminal_rx)
+            .await
+            .expect("cancellation delivery timeout")
+            .expect("cancellation sender dropped");
+        assert_eq!(
+            reason,
+            openshell_core::proto::MiddlewareSessionEndReason::Cancellation
+        );
+    }
+
+    #[tokio::test]
+    async fn body_denial_preserves_diagnostics_and_ends_every_open_stage() {
+        use openshell_core::proto::MiddlewareSessionEndReason;
+
+        let (session_ends_tx, mut session_ends_rx) = tokio::sync::mpsc::unbounded_channel();
+        let endpoints: Vec<Arc<dyn InProcessMiddleware>> = vec![
+            Arc::new(BodyDenialService {
+                manifest_name: "test/body-denier".into(),
+                deny: true,
+                session_ends: session_ends_tx.clone(),
+            }),
+            Arc::new(BodyDenialService {
+                manifest_name: "test/body-observer".into(),
+                deny: false,
+                session_ends: session_ends_tx,
+            }),
+        ];
+        let runner = ChainRunner::from_registry(
+            MiddlewareRegistry::connect_services(endpoints, Vec::new())
+                .await
+                .expect("connect body middleware services"),
+        );
+        let entries = [
+            ChainEntry {
+                name: "denier".into(),
+                implementation: "test/body-denier".into(),
+                order: 0,
+                config: prost_types::Struct::default(),
+                on_error: OnError::FailClosed,
+            },
+            ChainEntry {
+                name: "observer".into(),
+                implementation: "test/body-observer".into(),
+                order: 1,
+                config: prost_types::Struct::default(),
+                on_error: OnError::FailClosed,
+            },
+        ];
+        let preflight = runner
+            .preflight_http_request(
+                &entries,
+                HttpRequestPreflightInput {
+                    context: RequestContext::default(),
+                    target: HttpRequestTarget::default(),
+                    declared_body_length: Some(7),
+                    headers: Vec::new(),
+                    connection_nominated_headers: Vec::new(),
+                },
+            )
+            .await
+            .expect("request preflight");
+        let mut session = preflight.session.expect("streaming request session");
+        let failure = session
+            .push_body(b"blocked".to_vec())
+            .await
+            .expect_err("body denial must stop the request");
+
+        assert_eq!(failure.reason, "middleware_denied:denier:body_denied");
+        assert_eq!(
+            failure
+                .denial
+                .as_ref()
+                .map(|denial| denial.config_name.as_str()),
+            Some("denier")
+        );
+        assert_eq!(failure.diagnostics.invocations.len(), 1);
+        assert_eq!(
+            failure.diagnostics.invocations[0].outcome,
+            HttpRequestInvocationOutcome::BlockRequest
+        );
+        assert_eq!(failure.diagnostics.findings.len(), 1);
+        assert_eq!(failure.diagnostics.findings[0].middleware, "denier");
+        assert_eq!(
+            failure.diagnostics.findings[0].finding.r#type,
+            "test.request-body"
+        );
+        assert_eq!(failure.diagnostics.metadata["denier"]["rule"], "deny-body");
+
+        let mut ended = BTreeMap::new();
+        for _ in 0..2 {
+            let (name, reason) =
+                tokio::time::timeout(Duration::from_secs(1), session_ends_rx.recv())
+                    .await
+                    .expect("session end delivery timeout")
+                    .expect("session end sender dropped");
+            ended.insert(name, reason);
+        }
+        assert_eq!(
+            ended.get("test/body-denier"),
+            Some(&MiddlewareSessionEndReason::MiddlewareDenial)
+        );
+        assert_eq!(
+            ended.get("test/body-observer"),
+            Some(&MiddlewareSessionEndReason::MiddlewareDenial)
+        );
+        assert!(session_ends_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -2629,14 +3003,8 @@ mod tests {
 
     #[tokio::test]
     async fn injected_services_cannot_duplicate_middleware_names() {
-        let first: Arc<dyn InProcessMiddleware> = Arc::new(BorrowedRecordingService {
-            manifest_name: "openshell/test".into(),
-            received: std::sync::Mutex::new(Vec::new()),
-        });
-        let second: Arc<dyn InProcessMiddleware> = Arc::new(BorrowedRecordingService {
-            manifest_name: "openshell/test".into(),
-            received: std::sync::Mutex::new(Vec::new()),
-        });
+        let first: Arc<dyn InProcessMiddleware> = Arc::new(PendingInProcessService);
+        let second: Arc<dyn InProcessMiddleware> = Arc::new(PendingInProcessService);
 
         let error = MiddlewareRegistry::connect_services(vec![first, second], Vec::new())
             .await
@@ -2651,24 +3019,15 @@ mod tests {
     /// A mock middleware that returns a fixed, caller-supplied result for every
     /// evaluation. Used to exercise chain behavior the built-in cannot produce
     /// (explicit deny, metadata, findings, unsafe header mutations).
+    #[derive(Clone)]
     struct ScriptedService {
         manifest_name: String,
         max_body_bytes: u64,
-        result: openshell_core::proto::HttpRequestResult,
+        result: TestRequestResult,
     }
 
     #[tonic::async_trait]
-    impl SupervisorMiddleware for ScriptedService {
-        type EvaluateWebSocketSessionStream = WebSocketResponseStream;
-
-        async fn evaluate_web_socket_session(
-            &self,
-            _request: Request<tonic::Streaming<openshell_core::proto::WebSocketSessionEvent>>,
-        ) -> std::result::Result<tonic::Response<Self::EvaluateWebSocketSessionStream>, tonic::Status>
-        {
-            Err(tonic::Status::unimplemented("HTTP-only test middleware"))
-        }
-
+    impl SupervisorMiddlewareEndpoint for ScriptedService {
         async fn describe(
             &self,
             _request: Request<()>,
@@ -2696,14 +3055,69 @@ mod tests {
             }))
         }
 
-        async fn evaluate_http_request(
+        async fn open_http_request_pre_credentials(
             &self,
-            _request: Request<HttpRequestEvaluation>,
-        ) -> std::result::Result<
-            tonic::Response<openshell_core::proto::HttpRequestResult>,
-            tonic::Status,
-        > {
-            Ok(tonic::Response::new(self.result.clone()))
+            requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
+            let result = self.result.clone();
+            Ok(open_test_request_stream(requests, move |_| {
+                constant_request_plan(result)
+            }))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl SupervisorMiddleware for ScriptedService {
+        type EvaluateWebSocketSessionStream = WebSocketResponseStream;
+
+        async fn describe(
+            &self,
+            request: Request<()>,
+        ) -> std::result::Result<tonic::Response<MiddlewareManifest>, tonic::Status> {
+            SupervisorMiddlewareEndpoint::describe(self, request).await
+        }
+
+        async fn validate_config(
+            &self,
+            request: Request<ValidateConfigRequest>,
+        ) -> std::result::Result<tonic::Response<ValidateConfigResponse>, tonic::Status> {
+            SupervisorMiddlewareEndpoint::validate_config(self, request).await
+        }
+
+        async fn evaluate_web_socket_session(
+            &self,
+            _request: Request<tonic::Streaming<openshell_core::proto::WebSocketSessionEvent>>,
+        ) -> std::result::Result<tonic::Response<Self::EvaluateWebSocketSessionStream>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("HTTP-only test middleware"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl HttpRequestPreCredentials for ScriptedService {
+        type EvaluateStream = HttpRequestResultStream;
+
+        async fn evaluate(
+            &self,
+            request: Request<tonic::Streaming<openshell_core::proto::HttpRequestEvent>>,
+        ) -> std::result::Result<tonic::Response<Self::EvaluateStream>, tonic::Status> {
+            let (sender, receiver) = tokio::sync::mpsc::channel(4);
+            let mut requests = request.into_inner();
+            tokio::spawn(async move {
+                while let Some(request) = requests.next().await {
+                    let Ok(request) = request else {
+                        break;
+                    };
+                    if sender.send(request).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let result = self.result.clone();
+            Ok(tonic::Response::new(open_test_request_stream(
+                receiver,
+                move |_| constant_request_plan(result),
+            )))
         }
     }
 
@@ -2713,17 +3127,7 @@ mod tests {
     }
 
     #[tonic::async_trait]
-    impl SupervisorMiddleware for SlowService {
-        type EvaluateWebSocketSessionStream = WebSocketResponseStream;
-
-        async fn evaluate_web_socket_session(
-            &self,
-            _request: Request<tonic::Streaming<openshell_core::proto::WebSocketSessionEvent>>,
-        ) -> std::result::Result<tonic::Response<Self::EvaluateWebSocketSessionStream>, tonic::Status>
-        {
-            Err(tonic::Status::unimplemented("HTTP-only test middleware"))
-        }
-
+    impl SupervisorMiddlewareEndpoint for SlowService {
         async fn describe(
             &self,
             _request: Request<()>,
@@ -2752,15 +3156,14 @@ mod tests {
             }))
         }
 
-        async fn evaluate_http_request(
+        async fn open_http_request_pre_credentials(
             &self,
-            _request: Request<HttpRequestEvaluation>,
-        ) -> std::result::Result<
-            tonic::Response<openshell_core::proto::HttpRequestResult>,
-            tonic::Status,
-        > {
+            requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
             tokio::time::sleep(self.delay).await;
-            Ok(tonic::Response::new(allow_result()))
+            Ok(open_test_request_stream(requests, |_| {
+                constant_request_plan(allow_result())
+            }))
         }
     }
 
@@ -2772,17 +3175,7 @@ mod tests {
     }
 
     #[tonic::async_trait]
-    impl SupervisorMiddleware for TwoStageService {
-        type EvaluateWebSocketSessionStream = WebSocketResponseStream;
-
-        async fn evaluate_web_socket_session(
-            &self,
-            _request: Request<tonic::Streaming<openshell_core::proto::WebSocketSessionEvent>>,
-        ) -> std::result::Result<tonic::Response<Self::EvaluateWebSocketSessionStream>, tonic::Status>
-        {
-            Err(tonic::Status::unimplemented("HTTP-only test middleware"))
-        }
-
+    impl SupervisorMiddlewareEndpoint for TwoStageService {
         async fn describe(
             &self,
             _request: Request<()>,
@@ -2810,30 +3203,34 @@ mod tests {
             }))
         }
 
-        async fn evaluate_http_request(
+        async fn open_http_request_pre_credentials(
             &self,
-            request: Request<HttpRequestEvaluation>,
-        ) -> std::result::Result<
-            tonic::Response<openshell_core::proto::HttpRequestResult>,
-            tonic::Status,
-        > {
-            let evaluation = request.into_inner();
-            let mut result = allow_result();
-            if evaluation.config.as_ref().is_some_and(|config| {
-                config.fields.get("transform").is_some_and(|value| {
-                    matches!(
-                        value.kind.as_ref(),
-                        Some(prost_types::value::Kind::BoolValue(true))
-                    )
-                })
-            }) {
-                result.body = b"TRANSFORMED".to_vec();
-                result.has_body = true;
-            } else {
-                self.second_ran
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-            }
-            Ok(tonic::Response::new(result))
+            requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
+            let second_ran = Arc::clone(&self.second_ran);
+            Ok(open_test_request_stream(requests, move |preflight| {
+                let transform = preflight.config.as_ref().is_some_and(|config| {
+                    config.fields.get("transform").is_some_and(|value| {
+                        matches!(
+                            value.kind.as_ref(),
+                            Some(prost_types::value::Kind::BoolValue(true))
+                        )
+                    })
+                });
+                TestRequestPlan {
+                    preflight: allow_result(),
+                    body: Some(Box::new(move |_body, _evaluation| {
+                        let mut result = allow_result();
+                        if transform {
+                            result.body = b"TRANSFORMED".to_vec();
+                            result.has_body = true;
+                        } else {
+                            second_ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        result
+                    })),
+                }
+            }))
         }
     }
 
@@ -2843,7 +3240,7 @@ mod tests {
         // must stop there: the second stage never runs, so it never sees a
         // payload the policy would reject.
         let second_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let service: Arc<MiddlewareService> = Arc::new(TwoStageService {
+        let service: Arc<dyn SupervisorMiddlewareEndpoint> = Arc::new(TwoStageService {
             second_ran: Arc::clone(&second_ran),
         });
         let runner = ChainRunner::new_protobuf_for_tests(service);
@@ -2905,7 +3302,7 @@ mod tests {
         // A validator that accepts every body lets both stages run; the second
         // stage sees the first stage's output.
         let second_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let service: Arc<MiddlewareService> = Arc::new(TwoStageService {
+        let service: Arc<dyn SupervisorMiddlewareEndpoint> = Arc::new(TwoStageService {
             second_ran: Arc::clone(&second_ran),
         });
         let runner = ChainRunner::new_protobuf_for_tests(service);
@@ -2957,7 +3354,7 @@ mod tests {
     #[tokio::test]
     async fn per_stage_validator_error_becomes_structured_denial() {
         let second_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let service: Arc<MiddlewareService> = Arc::new(TwoStageService {
+        let service: Arc<dyn SupervisorMiddlewareEndpoint> = Arc::new(TwoStageService {
             second_ran: Arc::clone(&second_ran),
         });
         let runner = ChainRunner::new_protobuf_for_tests(service);
@@ -3013,7 +3410,7 @@ mod tests {
         assert!(!second_ran.load(std::sync::atomic::Ordering::SeqCst));
     }
 
-    fn scripted_service(result: openshell_core::proto::HttpRequestResult) -> ScriptedService {
+    fn scripted_service(result: TestRequestResult) -> ScriptedService {
         ScriptedService {
             manifest_name: BUILTIN_REGEX.into(),
             max_body_bytes: 256 * 1024,
@@ -3021,8 +3418,8 @@ mod tests {
         }
     }
 
-    fn allow_result() -> openshell_core::proto::HttpRequestResult {
-        openshell_core::proto::HttpRequestResult {
+    fn allow_result() -> TestRequestResult {
+        TestRequestResult {
             decision: Decision::Allow as i32,
             reason: String::new(),
             body: Vec::new(),
@@ -3037,22 +3434,12 @@ mod tests {
     /// A middleware that records every evaluation it receives and allows the
     /// request, for asserting what the supervisor actually sends to services.
     struct RecordingService {
-        validated: std::sync::Mutex<Vec<ValidateConfigRequest>>,
-        received: std::sync::Mutex<Vec<HttpRequestEvaluation>>,
+        validated: Arc<std::sync::Mutex<Vec<ValidateConfigRequest>>>,
+        received: Arc<std::sync::Mutex<Vec<TestRequestEvaluation>>>,
     }
 
     #[tonic::async_trait]
-    impl SupervisorMiddleware for RecordingService {
-        type EvaluateWebSocketSessionStream = WebSocketResponseStream;
-
-        async fn evaluate_web_socket_session(
-            &self,
-            _request: Request<tonic::Streaming<openshell_core::proto::WebSocketSessionEvent>>,
-        ) -> std::result::Result<tonic::Response<Self::EvaluateWebSocketSessionStream>, tonic::Status>
-        {
-            Err(tonic::Status::unimplemented("HTTP-only test middleware"))
-        }
-
+    impl SupervisorMiddlewareEndpoint for RecordingService {
         async fn describe(
             &self,
             _request: Request<()>,
@@ -3084,18 +3471,20 @@ mod tests {
             }))
         }
 
-        async fn evaluate_http_request(
+        async fn open_http_request_pre_credentials(
             &self,
-            request: Request<HttpRequestEvaluation>,
-        ) -> std::result::Result<
-            tonic::Response<openshell_core::proto::HttpRequestResult>,
-            tonic::Status,
-        > {
-            self.received
-                .lock()
-                .expect("recording lock")
-                .push(request.into_inner());
-            Ok(tonic::Response::new(allow_result()))
+            requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
+            let received = Arc::clone(&self.received);
+            Ok(open_test_request_stream(requests, move |_| {
+                TestRequestPlan {
+                    preflight: allow_result(),
+                    body: Some(Box::new(move |_body, evaluation| {
+                        received.lock().expect("recording lock").push(evaluation);
+                        allow_result()
+                    })),
+                }
+            }))
         }
     }
 
@@ -3103,11 +3492,11 @@ mod tests {
     /// state produced by all preceding stages.
     struct HeaderChainService {
         second_action: ExistingHeaderAction,
-        received: std::sync::Mutex<Vec<HttpRequestEvaluation>>,
+        received: Arc<std::sync::Mutex<Vec<TestRequestEvaluation>>>,
     }
 
     struct InProcessHeaderChainService {
-        received: std::sync::Mutex<Vec<Vec<HttpHeader>>>,
+        received: Arc<std::sync::Mutex<Vec<Vec<HttpHeader>>>>,
     }
 
     #[tonic::async_trait]
@@ -3134,40 +3523,36 @@ mod tests {
             Ok(())
         }
 
-        async fn evaluate_http_request(
+        async fn open_http_request_pre_credentials(
             &self,
-            request: HttpRequestView<'_>,
-        ) -> Result<openshell_core::proto::HttpRequestResult> {
-            let invocation = {
-                let mut received = self.received.lock().expect("in-process header chain lock");
-                let invocation = received.len();
-                received.push(request.headers().to_vec());
-                invocation
-            };
-            let mut result = allow_result();
-            if invocation == 0 {
-                result.header_mutations.push(write_header(
-                    "cache-control",
-                    "no-store",
-                    ExistingHeaderAction::Overwrite,
-                ));
-            }
-            Ok(result)
+            requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
+            let received = Arc::clone(&self.received);
+            Ok(open_test_request_stream(requests, move |preflight| {
+                let invocation = {
+                    let mut received = received.lock().expect("in-process header chain lock");
+                    let invocation = received.len();
+                    received.push(preflight.headers);
+                    invocation
+                };
+                let mut result = allow_result();
+                if invocation == 0 {
+                    result.header_mutations.push(write_header(
+                        "cache-control",
+                        "no-store",
+                        ExistingHeaderAction::Overwrite,
+                    ));
+                }
+                TestRequestPlan {
+                    preflight: result,
+                    body: None,
+                }
+            }))
         }
     }
 
     #[tonic::async_trait]
-    impl SupervisorMiddleware for HeaderChainService {
-        type EvaluateWebSocketSessionStream = WebSocketResponseStream;
-
-        async fn evaluate_web_socket_session(
-            &self,
-            _request: Request<tonic::Streaming<openshell_core::proto::WebSocketSessionEvent>>,
-        ) -> std::result::Result<tonic::Response<Self::EvaluateWebSocketSessionStream>, tonic::Status>
-        {
-            Err(tonic::Status::unimplemented("HTTP-only test middleware"))
-        }
-
+    impl SupervisorMiddlewareEndpoint for HeaderChainService {
         async fn describe(
             &self,
             _request: Request<()>,
@@ -3195,35 +3580,47 @@ mod tests {
             }))
         }
 
-        async fn evaluate_http_request(
+        async fn open_http_request_pre_credentials(
             &self,
-            request: Request<HttpRequestEvaluation>,
-        ) -> std::result::Result<
-            tonic::Response<openshell_core::proto::HttpRequestResult>,
-            tonic::Status,
-        > {
-            let evaluation = request.into_inner();
-            let invocation = {
-                let mut received = self.received.lock().expect("header chain lock");
-                let invocation = received.len();
-                received.push(evaluation);
-                invocation
-            };
-            let mut result = allow_result();
-            if invocation == 0 {
-                result.header_mutations.push(write_header(
-                    "cache-control",
-                    "first",
-                    ExistingHeaderAction::Overwrite,
-                ));
-            } else if invocation == 1 {
-                result.header_mutations.push(write_header(
-                    "cache-control",
-                    "second",
-                    self.second_action,
-                ));
-            }
-            Ok(tonic::Response::new(result))
+            requests: tokio::sync::mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<HttpRequestResultStream, tonic::Status> {
+            let received = Arc::clone(&self.received);
+            let second_action = self.second_action;
+            Ok(open_test_request_stream(requests, move |preflight| {
+                let evaluation = TestRequestEvaluation {
+                    phase: SupervisorMiddlewarePhase::PreCredentials as i32,
+                    context: preflight.context,
+                    config: preflight.config,
+                    target: preflight.target,
+                    headers: preflight.headers,
+                    body: Vec::new(),
+                    middleware_name: preflight.middleware_name,
+                };
+                let invocation = {
+                    let mut received = received.lock().expect("header chain lock");
+                    let invocation = received.len();
+                    received.push(evaluation);
+                    invocation
+                };
+                let mut result = allow_result();
+                if invocation == 0 {
+                    result.header_mutations.push(write_header(
+                        "cache-control",
+                        "first",
+                        ExistingHeaderAction::Overwrite,
+                    ));
+                } else if invocation == 1 {
+                    result.header_mutations.push(write_header(
+                        "cache-control",
+                        "second",
+                        second_action,
+                    ));
+                }
+                TestRequestPlan {
+                    preflight: result,
+                    body: None,
+                }
+            }))
         }
     }
 
@@ -3236,7 +3633,7 @@ mod tests {
         ] {
             let service = Arc::new(HeaderChainService {
                 second_action: action,
-                received: std::sync::Mutex::new(Vec::new()),
+                received: Arc::new(std::sync::Mutex::new(Vec::new())),
             });
             let runner = ChainRunner::new_protobuf_for_tests(service.clone());
             let entries = [
@@ -3282,7 +3679,7 @@ mod tests {
     #[tokio::test]
     async fn in_process_request_middleware_writes_end_to_end_header_without_namespace() {
         let service = Arc::new(InProcessHeaderChainService {
-            received: std::sync::Mutex::new(Vec::new()),
+            received: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
         let runner = ChainRunner::new(service.clone());
         let entries = [
@@ -3329,10 +3726,10 @@ mod tests {
         // inspection differential. The service must see each entry in wire
         // order.
         let service = Arc::new(RecordingService {
-            validated: std::sync::Mutex::new(Vec::new()),
-            received: std::sync::Mutex::new(Vec::new()),
+            validated: Arc::new(std::sync::Mutex::new(Vec::new())),
+            received: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
-        let recorder: Arc<MiddlewareService> = service.clone();
+        let recorder: Arc<dyn SupervisorMiddlewareEndpoint> = service.clone();
         let runner = ChainRunner::new_protobuf_for_tests(recorder);
         let validation_config = prost_types::Struct {
             fields: std::iter::once((
@@ -3386,7 +3783,8 @@ mod tests {
 
         let received = service.received.lock().expect("recorded evaluations");
         assert_eq!(received.len(), 1);
-        assert_eq!(outcome.body.as_ptr().addr(), original_body);
+        assert_eq!(outcome.body, b"payload");
+        assert_ne!(outcome.body.as_ptr().addr(), original_body);
         assert_ne!(received[0].body.as_ptr().addr(), original_body);
         assert_eq!(received[0].body, b"payload");
         assert_eq!(
@@ -3433,7 +3831,7 @@ mod tests {
     }
 
     async fn registry_with_external(
-        service: Arc<MiddlewareService>,
+        service: Arc<dyn SupervisorMiddlewareEndpoint>,
         registration: SupervisorMiddlewareService,
     ) -> MiddlewareRegistry {
         let builtin_service = services()
@@ -3474,7 +3872,7 @@ mod tests {
                 Arc::new(MiddlewareServiceState {
                     attachment_name: Some(registration_name.clone()),
                     service: MiddlewareDispatch::Grpc(remote::GrpcMiddlewareService::from_service(
-                        Arc::new(GeneratedMiddlewareEndpoint { service }),
+                        service,
                     )),
                     manifest: manifest_cell,
                     diagnostic_policy: MiddlewareDiagnosticPolicy::Normalize,
@@ -3656,7 +4054,7 @@ mod tests {
         assert!(!outcome.allowed);
         assert_eq!(
             outcome.reason,
-            "middleware_failed: request_body_over_capacity"
+            "middleware_failed: request_body_mode_not_permitted"
         );
         assert_eq!(outcome.applied.len(), 2);
         assert!(
@@ -3757,6 +4155,30 @@ mod tests {
 
         validate_external_manifest(&registration, &manifest, 4096, false)
             .expect("HTTP response pre-return binding is supported");
+    }
+
+    #[test]
+    fn external_manifest_rejects_post_credentials_binding() {
+        let registration = external_registration(4096);
+        let manifest = MiddlewareManifest {
+            name: "example/credential-visible".into(),
+            service_version: "test".into(),
+            bindings: vec![MiddlewareBinding {
+                operation: SupervisorMiddlewareOperation::HttpRequest as i32,
+                phase: SupervisorMiddlewarePhase::PostCredentials as i32,
+                max_payload_bytes: 4096,
+                request_timeout: None,
+            }],
+            expected_audience: String::new(),
+        };
+
+        let error = validate_external_manifest(&registration, &manifest, 4096, true)
+            .expect_err("external middleware must never observe resolved credentials");
+        assert!(
+            error
+                .to_string()
+                .contains("reserved for trusted in-process")
+        );
     }
 
     #[test]
@@ -4033,12 +4455,14 @@ mod tests {
             .expect("bind test middleware");
         let address = listener.local_addr().expect("test middleware address");
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let service = ScriptedService {
+            manifest_name: "test/middleware".into(),
+            max_body_bytes: 4096,
+            result: allow_result(),
+        };
         let server = tonic::transport::Server::builder()
-            .add_service(SupervisorMiddlewareServer::new(ScriptedService {
-                manifest_name: "test/middleware".into(),
-                max_body_bytes: 4096,
-                result: allow_result(),
-            }))
+            .add_service(SupervisorMiddlewareServer::new(service.clone()))
+            .add_service(HttpRequestPreCredentialsServer::new(service))
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                 let _ = shutdown_rx.await;
             });
@@ -4128,32 +4552,38 @@ mod tests {
                 severity: "medium".into(),
             })
             .collect();
+        let service = ScriptedService {
+            manifest_name: "test/middleware".into(),
+            max_body_bytes: MAX_MIDDLEWARE_PAYLOAD_BYTES as u64,
+            result: TestRequestResult {
+                reason: "r".repeat(MAX_MIDDLEWARE_REASON_BYTES - 128),
+                reason_code: "r".repeat(MAX_MIDDLEWARE_REASON_CODE_BYTES),
+                body: vec![b'x'; MAX_MIDDLEWARE_PAYLOAD_BYTES],
+                has_body: true,
+                header_mutations: vec![write_header(
+                    "x-openshell-middleware-envelope",
+                    &"h".repeat(headers::MAX_HEADER_MUTATION_BYTES - 128),
+                    ExistingHeaderAction::Append,
+                )],
+                findings: response_findings,
+                metadata: std::iter::once((
+                    "diagnostic".into(),
+                    "m".repeat(MAX_MIDDLEWARE_METADATA_BYTES - 128),
+                ))
+                .collect(),
+                ..allow_result()
+            },
+        };
         let server = tonic::transport::Server::builder()
             .add_service(
-                SupervisorMiddlewareServer::new(ScriptedService {
-                    manifest_name: "test/middleware".into(),
-                    max_body_bytes: MAX_MIDDLEWARE_PAYLOAD_BYTES as u64,
-                    result: openshell_core::proto::HttpRequestResult {
-                        reason: "r".repeat(MAX_MIDDLEWARE_REASON_BYTES - 128),
-                        reason_code: "r".repeat(MAX_MIDDLEWARE_REASON_CODE_BYTES),
-                        body: vec![b'x'; MAX_MIDDLEWARE_PAYLOAD_BYTES],
-                        has_body: true,
-                        header_mutations: vec![write_header(
-                            "x-openshell-middleware-envelope",
-                            &"h".repeat(headers::MAX_HEADER_MUTATION_BYTES - 128),
-                            ExistingHeaderAction::Append,
-                        )],
-                        findings: response_findings,
-                        metadata: std::iter::once((
-                            "diagnostic".into(),
-                            "m".repeat(MAX_MIDDLEWARE_METADATA_BYTES - 128),
-                        ))
-                        .collect(),
-                        ..allow_result()
-                    },
-                })
-                .max_decoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES)
-                .max_encoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES),
+                SupervisorMiddlewareServer::new(service.clone())
+                    .max_decoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES)
+                    .max_encoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES),
+            )
+            .add_service(
+                HttpRequestPreCredentialsServer::new(service)
+                    .max_decoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES)
+                    .max_encoding_message_size(MIDDLEWARE_GRPC_MESSAGE_BYTES),
             )
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                 let _ = shutdown_rx.await;
@@ -4226,7 +4656,7 @@ mod tests {
         let service = Arc::new(ScriptedService {
             manifest_name: "test/middleware".into(),
             max_body_bytes: 4096,
-            result: openshell_core::proto::HttpRequestResult {
+            result: TestRequestResult {
                 decision: Decision::Deny as i32,
                 reason: format!("denied body={secret}\nFINDING:FORGED"),
                 reason_code: "content_match".into(),
@@ -4277,13 +4707,12 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_reason_code_is_a_middleware_failure() {
-        let runner = ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(
-            openshell_core::proto::HttpRequestResult {
+        let runner =
+            ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(TestRequestResult {
                 decision: Decision::Deny as i32,
                 reason_code: "Secret value!".into(),
                 ..allow_result()
-            },
-        )));
+            })));
         let outcome = runner
             .evaluate(
                 &[entry("content-guard", OnError::FailClosed)],
@@ -4295,7 +4724,7 @@ mod tests {
         assert!(!outcome.allowed);
         assert_eq!(
             outcome.reason,
-            "middleware_failed: response_reason_code_invalid"
+            "middleware_failed: request_reason_code_invalid"
         );
         assert!(outcome.denial.is_none());
         assert!(outcome.applied[0].failed);
@@ -4308,7 +4737,7 @@ mod tests {
         let service = Arc::new(ScriptedService {
             manifest_name: "test/middleware".into(),
             max_body_bytes: 4096,
-            result: openshell_core::proto::HttpRequestResult {
+            result: TestRequestResult {
                 header_mutations: vec![write_header(
                     &format!("x-openshell-middleware-invalid\n{secret}"),
                     "value",
@@ -4347,7 +4776,7 @@ mod tests {
         let service = Arc::new(ScriptedService {
             manifest_name: "test/middleware".into(),
             max_body_bytes: 4096,
-            result: openshell_core::proto::HttpRequestResult {
+            result: TestRequestResult {
                 header_mutations: vec![write_header(
                     "x-api-key",
                     placeholder,
@@ -4409,7 +4838,7 @@ mod tests {
             let service = Arc::new(ScriptedService {
                 manifest_name: "test/middleware".into(),
                 max_body_bytes: 4096,
-                result: openshell_core::proto::HttpRequestResult {
+                result: TestRequestResult {
                     header_mutations: vec![mutation],
                     ..allow_result()
                 },
@@ -4446,7 +4875,7 @@ mod tests {
         let service = Arc::new(ScriptedService {
             manifest_name: "test/middleware".into(),
             max_body_bytes: 4096,
-            result: openshell_core::proto::HttpRequestResult {
+            result: TestRequestResult {
                 findings: vec![Finding::default(); MAX_MIDDLEWARE_FINDINGS_PER_STAGE + 1],
                 ..allow_result()
             },
@@ -4476,7 +4905,7 @@ mod tests {
             if !allowed {
                 assert_eq!(
                     outcome.reason,
-                    "middleware_failed: response_findings_over_capacity"
+                    "middleware_failed: request_findings_over_capacity"
                 );
             }
         }
@@ -4487,7 +4916,7 @@ mod tests {
         let runner = ChainRunner::new_protobuf_for_tests(Arc::new(ScriptedService {
             manifest_name: "test/middleware".into(),
             max_body_bytes: 4096,
-            result: openshell_core::proto::HttpRequestResult {
+            result: TestRequestResult {
                 findings: vec![
                     Finding {
                         r#type: "example.finding".into(),
@@ -4534,13 +4963,12 @@ mod tests {
 
     #[tokio::test]
     async fn deny_decision_short_circuits_chain() {
-        let runner = ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(
-            openshell_core::proto::HttpRequestResult {
+        let runner =
+            ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(TestRequestResult {
                 decision: Decision::Deny as i32,
                 reason: "blocked_by_policy".into(),
                 ..allow_result()
-            },
-        )));
+            })));
         let outcome = runner
             .evaluate(
                 &[
@@ -4569,8 +4997,8 @@ mod tests {
 
     #[tokio::test]
     async fn deny_decision_ignores_unsafe_mutations_under_fail_open() {
-        let runner = ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(
-            openshell_core::proto::HttpRequestResult {
+        let runner =
+            ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(TestRequestResult {
                 decision: Decision::Deny as i32,
                 reason: "blocked_by_policy".into(),
                 header_mutations: vec![write_header(
@@ -4579,8 +5007,7 @@ mod tests {
                     ExistingHeaderAction::Append,
                 )],
                 ..allow_result()
-            },
-        )));
+            })));
 
         let outcome = runner
             .evaluate(&[entry("guard", OnError::FailOpen)], input("hello"))
@@ -4600,7 +5027,7 @@ mod tests {
         let runner = ChainRunner::new_protobuf_for_tests(Arc::new(ScriptedService {
             manifest_name: BUILTIN_REGEX.into(),
             max_body_bytes: 4,
-            result: openshell_core::proto::HttpRequestResult {
+            result: TestRequestResult {
                 decision: Decision::Deny as i32,
                 reason: "blocked_by_policy".into(),
                 body: b"too large".to_vec(),
@@ -4625,8 +5052,8 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_and_findings_are_namespaced_per_config() {
-        let runner = ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(
-            openshell_core::proto::HttpRequestResult {
+        let runner =
+            ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(TestRequestResult {
                 findings: vec![Finding {
                     r#type: "pii.email".into(),
                     label: "email address".into(),
@@ -4637,8 +5064,7 @@ mod tests {
                 metadata: std::iter::once(("sensitivity".to_string(), "high".to_string()))
                     .collect(),
                 ..allow_result()
-            },
-        )));
+            })));
         let outcome = runner
             .evaluate(
                 &[
@@ -4663,7 +5089,7 @@ mod tests {
     }
 
     fn unsafe_header_service() -> ScriptedService {
-        scripted_service(openshell_core::proto::HttpRequestResult {
+        scripted_service(TestRequestResult {
             header_mutations: vec![
                 write_header(
                     "x-openshell-middleware-safe",
@@ -4721,7 +5147,7 @@ mod tests {
         let runner = ChainRunner::new_protobuf_for_tests(Arc::new(ScriptedService {
             manifest_name: BUILTIN_REGEX.into(),
             max_body_bytes: 4,
-            result: openshell_core::proto::HttpRequestResult {
+            result: TestRequestResult {
                 body: b"too large".to_vec(),
                 has_body: true,
                 ..allow_result()
@@ -4746,7 +5172,7 @@ mod tests {
         assert!(!closed_outcome.allowed);
         assert_eq!(
             closed_outcome.reason,
-            "middleware_failed: response_body_over_capacity"
+            "middleware_failed: body_replacement_over_capacity"
         );
         assert!(closed_outcome.applied[0].failed);
     }
@@ -4777,19 +5203,18 @@ mod tests {
         assert!(!closed_outcome.allowed);
         assert_eq!(
             closed_outcome.reason,
-            "middleware_failed: request_body_over_capacity"
+            "middleware_failed: request_body_mode_not_permitted"
         );
         assert!(closed_outcome.applied[0].failed);
     }
 
     #[tokio::test]
     async fn unspecified_decision_uses_fail_closed() {
-        let runner = ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(
-            openshell_core::proto::HttpRequestResult {
+        let runner =
+            ChainRunner::new_protobuf_for_tests(Arc::new(scripted_service(TestRequestResult {
                 decision: Decision::Unspecified as i32,
                 ..allow_result()
-            },
-        )));
+            })));
 
         let outcome = runner
             .evaluate(&[entry("redact", OnError::FailClosed)], input("hello"))
@@ -4799,7 +5224,7 @@ mod tests {
         assert!(!outcome.allowed);
         assert_eq!(
             outcome.reason,
-            "middleware_failed: invalid_response_decision"
+            "middleware_failed: missing_preflight_action"
         );
         assert!(outcome.applied[0].failed);
     }
@@ -4925,7 +5350,7 @@ mod tests {
                     }
                 }
             });
-            Box::pin(tokio_stream::wrappers::ReceiverStream::new(responses_rx))
+            Box::pin(ReceiverStream::new(responses_rx))
         }
     }
 
@@ -4984,18 +5409,6 @@ mod tests {
             }))
         }
 
-        async fn evaluate_http_request(
-            &self,
-            _request: Request<HttpRequestEvaluation>,
-        ) -> std::result::Result<
-            tonic::Response<openshell_core::proto::HttpRequestResult>,
-            tonic::Status,
-        > {
-            Err(tonic::Status::unimplemented(
-                "WebSocket-only test middleware",
-            ))
-        }
-
         async fn evaluate_web_socket_session(
             &self,
             request: Request<tonic::Streaming<openshell_core::proto::WebSocketSessionEvent>>,
@@ -5023,25 +5436,11 @@ mod tests {
             SupervisorMiddleware::validate_config(self, request).await
         }
 
-        async fn evaluate_http_request(
-            &self,
-            request: Request<HttpRequestEvaluation>,
-        ) -> std::result::Result<
-            tonic::Response<openshell_core::proto::HttpRequestResult>,
-            tonic::Status,
-        > {
-            SupervisorMiddleware::evaluate_http_request(self, request).await
-        }
-
         async fn open_websocket_session(
             &self,
             receiver: tokio::sync::mpsc::Receiver<openshell_core::proto::WebSocketSessionEvent>,
         ) -> std::result::Result<WebSocketResponseStream, tonic::Status> {
-            Ok(
-                self.websocket_stream(
-                    tokio_stream::wrappers::ReceiverStream::new(receiver).map(Ok),
-                ),
-            )
+            Ok(self.websocket_stream(ReceiverStream::new(receiver).map(Ok)))
         }
     }
 

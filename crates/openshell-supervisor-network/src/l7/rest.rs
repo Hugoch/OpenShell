@@ -23,7 +23,6 @@ use http_response::{
 use crate::l7::EndpointObserver;
 use crate::l7::provider::{BodyLength, L7Provider, L7Request, RelayOutcome};
 use crate::opa::PolicyGenerationGuard;
-use aws_sigv4::http_request::SignableBody;
 use base64::Engine as _;
 use miette::{IntoDiagnostic, Result, miette};
 use openshell_core::endpoint_status::EndpointResult;
@@ -39,14 +38,12 @@ use openshell_ocsf::ctx::ctx as ocsf_ctx;
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::io::SeekFrom;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tracing::debug;
 
 const MAX_HEADER_BYTES: usize = 16384; // 16 KiB for HTTP headers
 const MAX_REWRITE_BODY_BYTES: usize = 256 * 1024;
-/// Maximum body bytes for `SigV4` body-signing mode. Larger than the credential
-/// rewrite limit because Bedrock payloads can be several megabytes.
-const MAX_SIGV4_BODY_BYTES: usize = 10 * 1024 * 1024;
 #[cfg(test)]
 async fn max_middleware_body_bytes() -> usize {
     let chain = openshell_supervisor_middleware::ChainRunner::new(
@@ -748,9 +745,7 @@ where
             websocket_extensions: WebSocketExtensionMode::Preserve,
             request_body_credential_rewrite: false,
             deny_uninspected_credentials: false,
-            credential_signing: crate::l7::CredentialSigning::None,
-            signing_service: "",
-            signing_region: "",
+            post_credentials: None,
             host: "",
             port: 0,
         },
@@ -774,9 +769,7 @@ pub(crate) struct RelayRequestOptions<'a> {
     pub(crate) websocket_extensions: WebSocketExtensionMode,
     pub(crate) request_body_credential_rewrite: bool,
     pub(crate) deny_uninspected_credentials: bool,
-    pub(crate) credential_signing: crate::l7::CredentialSigning,
-    pub(crate) signing_service: &'a str,
-    pub(crate) signing_region: &'a str,
+    pub(crate) post_credentials: Option<crate::l7::post_credentials::PostCredentialsMiddleware<'a>>,
     pub(crate) host: &'a str,
     pub(crate) port: u16,
 }
@@ -797,7 +790,7 @@ pub(crate) struct CredentialUnavailableError {
 }
 
 impl CredentialUnavailableError {
-    fn new(reason: &'static str) -> Self {
+    pub(crate) fn new(reason: &'static str) -> Self {
         Self { reason }
     }
 }
@@ -849,7 +842,7 @@ where
     U: AsyncRead + AsyncWrite + Unpin,
 {
     relay_http_request_with_response_middleware_guarded_observed(
-        req, client, upstream, options, None, None,
+        req, client, upstream, options, None, None, None,
     )
     .await
 }
@@ -859,7 +852,8 @@ pub(crate) async fn relay_http_request_with_response_middleware_guarded_observed
     client: &mut C,
     upstream: &mut U,
     options: RelayRequestOptions<'_>,
-    response_middleware: Option<HttpResponseMiddlewareRelay<'_>>,
+    mut prepared_body: Option<&mut crate::l7::middleware::MiddlewareRequestBody>,
+    mut response_middleware: Option<HttpResponseMiddlewareRelay<'_>>,
     observer: Option<&EndpointObserver>,
 ) -> Result<RelayOutcome>
 where
@@ -884,12 +878,12 @@ where
         parse_websocket_upgrade_request(&req.raw_header[..header_end])?
     };
 
-    // When SigV4 signing is configured, strip AWS auth headers before credential
-    // rewriting so the fail-closed placeholder scan doesn't reject the SigV4
-    // Authorization header (which embeds placeholder strings).
+    // A restricted post-credentials built-in may remove caller authorization
+    // before placeholder rewriting, then regenerate it from trusted provider
+    // credentials below.
     let raw_for_rewrite;
-    let header_source = if options.credential_signing.is_sigv4() {
-        raw_for_rewrite = crate::sigv4::strip_aws_headers(&req.raw_header[..header_end])?;
+    let header_source = if let Some(middleware) = options.post_credentials {
+        raw_for_rewrite = middleware.strip_caller_authorization(&req.raw_header[..header_end])?;
         &raw_for_rewrite[..]
     } else {
         &req.raw_header[..header_end]
@@ -917,256 +911,161 @@ where
         guard.ensure_current()?;
     }
 
-    // Apply SigV4 signing if configured.
-    if options.credential_signing.is_sigv4() {
-        // Defense-in-depth: credential_signing and request_body_credential_rewrite
-        // are mutually exclusive (validated at policy load time).
+    if let Some(middleware) = options.post_credentials {
+        // Defense-in-depth: post-credential signing and request body credential
+        // rewriting are mutually exclusive (validated at policy load time).
         if options.request_body_credential_rewrite {
             return Err(miette!(
                 "credential_signing and request_body_credential_rewrite are \
                  mutually exclusive on the same endpoint"
             ));
         }
-        // SigV4 re-signing needs the body before forwarding. If the client
-        // sent `Expect: 100-continue`, acknowledge it so the client transmits
-        // the body. Scoped to SigV4 paths only — non-SigV4 traffic forwards
-        // the Expect header to upstream for normal handling.
-        if has_expect_continue(header_str) {
-            client
-                .write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
-                .await
-                .into_diagnostic()?;
-            client.flush().await.into_diagnostic()?;
+        let prepared_spool = prepared_body.as_deref_mut().and_then(|body| match body {
+            crate::l7::middleware::MiddlewareRequestBody::Spool(spool) => Some(spool),
+            crate::l7::middleware::MiddlewareRequestBody::Live(_) => None,
+        });
+        let output = middleware
+            .evaluate(
+                req,
+                header_str,
+                &rewrite_result.rewritten,
+                client,
+                prepared_spool,
+                options.resolver,
+                options.generation_guard,
+            )
+            .await?;
+        ensure_credential_generation_current(options)?;
+        if let Some(guard) = options.generation_guard {
+            guard.ensure_current()?;
         }
-        if let Some(resolver) = options.resolver {
-            let access_key = resolver
-                .resolve_current_env_key_checked("AWS_ACCESS_KEY_ID", "sigv4")
-                .map_err(miette::Report::new)?;
-            let secret_key = resolver
-                .resolve_current_env_key_checked("AWS_SECRET_ACCESS_KEY", "sigv4")
-                .map_err(miette::Report::new)?;
-            let session_token = resolver
-                .resolve_current_env_key_checked("AWS_SESSION_TOKEN", "sigv4")
-                .map_err(miette::Report::new)?;
-
-            match (access_key, secret_key) {
-                (Some(access_key), Some(secret_key)) => {
-                    // Use explicit signing_region from policy if set,
-                    // otherwise extract from hostname.
-                    let region = if options.signing_region.is_empty() {
-                        match crate::sigv4::extract_aws_region(options.host) {
-                            Some(r) => r,
-                            None => {
-                                return Err(miette!(
-                                    "SigV4 signing: cannot extract AWS region from \
-                                     hostname '{host}'; set signing_region in the \
-                                     policy endpoint",
-                                    host = options.host,
-                                ));
-                            }
-                        }
-                    } else {
-                        options.signing_region.to_string()
-                    };
-                    let service = &options.signing_service;
-                    if service.is_empty() {
-                        return Err(miette!(
-                            "SigV4 signing configured but signing_service not set in policy"
-                        ));
-                    }
-
-                    let payload_mode = match options.credential_signing {
-                        crate::l7::CredentialSigning::SigV4Body => SigV4PayloadMode::SignBody,
-                        crate::l7::CredentialSigning::SigV4NoBody => {
-                            SigV4PayloadMode::UnsignedPayload
-                        }
-                        crate::l7::CredentialSigning::SigV4 => detect_payload_mode(header_str)?,
-                        crate::l7::CredentialSigning::None => unreachable!(),
-                    };
-
-                    if payload_mode == SigV4PayloadMode::SignBody {
-                        // Buffer body and include its hash in the signature.
-                        // This requires Content-Length — chunked bodies cannot
-                        // be buffered for signing. detect_payload_mode() should
-                        // route chunked requests to the streaming path, but
-                        // guard here as defense-in-depth.
-                        let body_length = parse_body_length(header_str)?;
-                        match body_length {
-                            BodyLength::ContentLength(_) | BodyLength::None => {
-                                // ContentLength: buffer and sign the body.
-                                // None: no body (e.g. GET/HEAD/DELETE) — sign
-                                // with the empty-body hash. boto3 sends
-                                // x-amz-content-sha256 set to the SHA-256 of
-                                // "" on all requests, which routes here via
-                                // detect_payload_mode's catch-all.
-                            }
-                            BodyLength::Chunked => {
-                                return Err(miette!(
-                                    "SigV4 body signing requires Content-Length; \
-                                     chunked transfer encoding is not supported in this mode"
-                                ));
-                            }
-                        }
-                        // NOTE(defense-in-depth): Build the full request from
-                        // rewritten headers + body. `rewrite_result.rewritten`
-                        // has already had AWS auth headers stripped by
-                        // `strip_aws_headers`; `apply_sigv4_to_request` strips
-                        // them again internally via `parse_request_parts` —
-                        // the redundancy is intentional.
-                        let overflow = &req.raw_header[header_end..];
-                        let mut full_request = rewrite_result.rewritten.clone();
-                        full_request.extend_from_slice(overflow);
-                        if let BodyLength::ContentLength(body_len) = body_length {
-                            if body_len > MAX_SIGV4_BODY_BYTES as u64 {
-                                return Err(miette!(
-                                    "SigV4 body signing buffers at most {MAX_SIGV4_BODY_BYTES} bytes"
-                                ));
-                            }
-                            let already_have = overflow.len() as u64;
-                            if body_len > already_have {
-                                let remaining =
-                                    usize::try_from(body_len - already_have).unwrap_or(usize::MAX);
-                                let mut body_buf = vec![0u8; remaining];
-                                client.read_exact(&mut body_buf).await.into_diagnostic()?;
-                                full_request.extend_from_slice(&body_buf);
-                            }
-                        }
-
-                        // Re-check policy after body buffering — a slow upload
-                        // may have outlived a policy reload.
-                        if let Some(guard) = options.generation_guard {
-                            guard.ensure_current()?;
-                        }
-
-                        let signed = crate::sigv4::apply_sigv4_to_request(
-                            &full_request,
-                            options.host,
-                            &region,
-                            service,
-                            access_key,
-                            secret_key,
-                            session_token,
-                        )?;
-                        ensure_credential_generation_current(options)?;
-                        upstream.write_all(&signed).await.into_diagnostic()?;
-                    } else {
-                        // Sign headers only, stream body through.
-                        let signable_body = match payload_mode {
-                            SigV4PayloadMode::StreamingUnsignedTrailer => {
-                                SignableBody::StreamingUnsignedPayloadTrailer
-                            }
-                            _ => SignableBody::UnsignedPayload,
-                        };
-                        let signed_headers = crate::sigv4::apply_sigv4_headers_only_with_body(
-                            &rewrite_result.rewritten,
-                            options.host,
-                            &region,
-                            service,
-                            access_key,
-                            secret_key,
-                            session_token,
-                            signable_body,
-                        )?;
-                        ensure_credential_generation_current(options)?;
-                        upstream
-                            .write_all(&signed_headers)
-                            .await
-                            .into_diagnostic()?;
-
-                        let overflow = &req.raw_header[header_end..];
-                        if !overflow.is_empty() {
-                            if let Some(guard) = options.generation_guard {
-                                guard.ensure_current()?;
-                            }
-                            upstream.write_all(overflow).await.into_diagnostic()?;
-                        }
-                        let overflow_len = overflow.len() as u64;
-
-                        match req.body_length {
-                            BodyLength::ContentLength(len) => {
-                                let remaining = len.saturating_sub(overflow_len);
-                                if remaining > 0 {
-                                    relay_fixed(
-                                        client,
-                                        upstream,
-                                        remaining,
-                                        options.generation_guard,
-                                    )
-                                    .await?;
-                                }
-                            }
-                            BodyLength::Chunked => {
-                                relay_chunked(
-                                    client,
-                                    upstream,
-                                    &req.raw_header[header_end..],
-                                    options.generation_guard,
-                                )
-                                .await?;
-                            }
-                            BodyLength::None => {}
-                        }
-                    }
-
-                    // OCSF event after successful signing and upstream write.
-                    let event = openshell_ocsf::NetworkActivityBuilder::new(
-                        ocsf_ctx(),
-                    )
-                    .activity(openshell_ocsf::ActivityId::Traffic)
-                    .action(openshell_ocsf::ActionId::Allowed)
-                    .disposition(openshell_ocsf::DispositionId::Allowed)
-                    .severity(openshell_ocsf::SeverityId::Informational)
-                    .status(openshell_ocsf::StatusId::Success)
-                    .dst_endpoint(openshell_ocsf::Endpoint::from_domain(
-                        options.host,
-                        options.port,
-                    ))
-                    .message(format!(
-                        "SigV4 re-signed {host}:{port} service={service} region={region} mode={payload_mode}",
-                        host = options.host,
-                        port = options.port,
-                    ))
-                    .build();
-                    openshell_ocsf::ocsf_emit!(event);
-                }
-                _ => {
-                    return Err(miette::Report::new(CredentialUnavailableError::new(
-                        "SigV4 signing configured but AWS credentials not found in provider",
-                    )));
-                }
+        let payload_mode = match output {
+            crate::l7::post_credentials::PostCredentialsOutput::Complete {
+                request,
+                payload_mode,
+            } => {
+                upstream.write_all(&request).await.into_diagnostic()?;
+                payload_mode
             }
-        } else {
-            return Err(miette::Report::new(CredentialUnavailableError::new(
-                "SigV4 signing configured but no secret resolver available",
-            )));
-        }
+            crate::l7::post_credentials::PostCredentialsOutput::Head {
+                headers,
+                payload_mode,
+            } => {
+                if let Some(crate::l7::middleware::MiddlewareRequestBody::Live(body)) =
+                    prepared_body.as_deref_mut()
+                {
+                    let outcome = relay_live_request_and_response(
+                        req,
+                        client,
+                        upstream,
+                        &headers,
+                        body,
+                        options,
+                        false,
+                        RelayResponseOptions {
+                            websocket_extensions: options.websocket_extensions,
+                            websocket: websocket_response,
+                            client_requested_upgrade,
+                            observer,
+                        },
+                        response_middleware.take(),
+                    )
+                    .await?;
+                    middleware.emit_success(payload_mode);
+                    return Ok(outcome);
+                }
+                upstream.write_all(&headers).await.into_diagnostic()?;
+                relay_request_body(
+                    req,
+                    client,
+                    upstream,
+                    prepared_body.as_deref_mut(),
+                    options.generation_guard,
+                )
+                .await?;
+                payload_mode
+            }
+        };
+        middleware.emit_success(payload_mode);
     } else if options.request_body_credential_rewrite {
-        let body = collect_and_rewrite_request_body(
-            req,
-            client,
-            &rewrite_result.rewritten,
-            header_str,
-            &req.raw_header[header_end..],
-            options.resolver,
-            options.generation_guard,
-        )
-        .await?;
+        let body = match prepared_body.as_deref_mut() {
+            Some(crate::l7::middleware::MiddlewareRequestBody::Spool(body)) => {
+                collect_and_rewrite_spooled_request_body(
+                    body,
+                    &rewrite_result.rewritten,
+                    header_str,
+                    options.resolver,
+                    options.generation_guard,
+                )
+                .await?
+            }
+            Some(crate::l7::middleware::MiddlewareRequestBody::Live(_)) => {
+                return Err(miette!(
+                    "request body credential rewriting requires withheld middleware output"
+                ));
+            }
+            None => {
+                collect_and_rewrite_request_body(
+                    req,
+                    client,
+                    &rewrite_result.rewritten,
+                    header_str,
+                    &req.raw_header[header_end..],
+                    options.resolver,
+                    options.generation_guard,
+                )
+                .await?
+            }
+        };
         ensure_credential_generation_current(options)?;
         upstream.write_all(&body.headers).await.into_diagnostic()?;
         if !body.body.is_empty() {
             upstream.write_all(&body.body).await.into_diagnostic()?;
         }
     } else if options.deny_uninspected_credentials {
-        if let Err(error) = relay_request_body_with_marker_guard(
-            req,
-            client,
-            upstream,
-            &rewrite_result.rewritten,
-            &req.raw_header[header_end..],
-            options,
-        )
-        .await
+        if let Some(crate::l7::middleware::MiddlewareRequestBody::Live(body)) =
+            prepared_body.as_deref_mut()
         {
+            return relay_live_request_and_response(
+                req,
+                client,
+                upstream,
+                &rewrite_result.rewritten,
+                body,
+                options,
+                true,
+                RelayResponseOptions {
+                    websocket_extensions: options.websocket_extensions,
+                    websocket: websocket_response,
+                    client_requested_upgrade,
+                    observer,
+                },
+                response_middleware.take(),
+            )
+            .await;
+        }
+        let guarded = if let Some(body) = prepared_body.as_deref_mut() {
+            relay_middleware_body_with_marker_guard(
+                req,
+                client,
+                upstream,
+                &rewrite_result.rewritten,
+                body,
+                options,
+            )
+            .await
+        } else {
+            relay_request_body_with_marker_guard(
+                req,
+                client,
+                upstream,
+                &rewrite_result.rewritten,
+                &req.raw_header[header_end..],
+                options,
+            )
+            .await
+        };
+        if let Err(error) = guarded {
             if let Some(reason) = error.downcast_ref::<BodyCredentialError>() {
                 emit_uninspected_body_credential_denial(req, &options, *reason);
             }
@@ -1174,38 +1073,39 @@ where
         }
     } else {
         ensure_credential_generation_current(options)?;
+        if let Some(crate::l7::middleware::MiddlewareRequestBody::Live(body)) =
+            prepared_body.as_deref_mut()
+        {
+            return relay_live_request_and_response(
+                req,
+                client,
+                upstream,
+                &rewrite_result.rewritten,
+                body,
+                options,
+                false,
+                RelayResponseOptions {
+                    websocket_extensions: options.websocket_extensions,
+                    websocket: websocket_response,
+                    client_requested_upgrade,
+                    observer,
+                },
+                response_middleware.take(),
+            )
+            .await;
+        }
         upstream
             .write_all(&rewrite_result.rewritten)
             .await
             .into_diagnostic()?;
-
-        let overflow = &req.raw_header[header_end..];
-        if !overflow.is_empty() {
-            if let Some(guard) = options.generation_guard {
-                guard.ensure_current()?;
-            }
-            upstream.write_all(overflow).await.into_diagnostic()?;
-        }
-        let overflow_len = overflow.len() as u64;
-
-        match req.body_length {
-            BodyLength::ContentLength(len) => {
-                let remaining = len.saturating_sub(overflow_len);
-                if remaining > 0 {
-                    relay_fixed(client, upstream, remaining, options.generation_guard).await?;
-                }
-            }
-            BodyLength::Chunked => {
-                relay_chunked(
-                    client,
-                    upstream,
-                    &req.raw_header[header_end..],
-                    options.generation_guard,
-                )
-                .await?;
-            }
-            BodyLength::None => {}
-        }
+        relay_request_body(
+            req,
+            client,
+            upstream,
+            prepared_body,
+            options.generation_guard,
+        )
+        .await?;
     }
     upstream.flush().await.into_diagnostic()?;
 
@@ -1224,6 +1124,260 @@ where
     .await?;
 
     Ok(outcome)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relay_live_request_and_response<C, U>(
+    req: &L7Request,
+    client: &mut C,
+    upstream: &mut U,
+    headers: &[u8],
+    body: &mut crate::l7::middleware::RequestBodyStream,
+    options: RelayRequestOptions<'_>,
+    inspect_credential_markers: bool,
+    response_options: RelayResponseOptions<'_>,
+    response_middleware: Option<HttpResponseMiddlewareRelay<'_>>,
+) -> Result<RelayOutcome>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    ensure_body_generation_current(options)?;
+    upstream.write_all(headers).await.into_diagnostic()?;
+    upstream.flush().await.into_diagnostic()?;
+
+    let (mut client_reader, mut client_writer) = tokio::io::split(&mut *client);
+    let (mut upstream_reader, mut upstream_writer) = tokio::io::split(&mut *upstream);
+    let mut upload = Box::pin(relay_live_middleware_request_body(
+        body,
+        &mut client_reader,
+        &mut upstream_writer,
+        options,
+        inspect_credential_markers,
+    ));
+    let mut response = Box::pin(relay_response(
+        &req.action,
+        &mut upstream_reader,
+        &mut client_writer,
+        response_options,
+        response_middleware,
+    ));
+
+    tokio::select! {
+        upload_result = upload.as_mut() => {
+            drop(upload);
+            if let Err(error) = upload_result {
+                drop(response);
+                let _ = upstream_writer.shutdown().await;
+                return Err(error);
+            }
+            upstream_writer.flush().await.into_diagnostic()?;
+            response.await
+        }
+        response_result = response.as_mut() => {
+            drop(response);
+            drop(upload);
+            body.cancel_for_early_response().await;
+            let _ = upstream_writer.shutdown().await;
+            response_result?;
+            // The client may still have unread request bytes, so neither side
+            // can safely reuse this HTTP/1 connection after an early response.
+            Ok(RelayOutcome::Consumed)
+        }
+    }
+}
+
+async fn relay_request_body<C, U>(
+    req: &L7Request,
+    client: &mut C,
+    upstream: &mut U,
+    prepared_body: Option<&mut crate::l7::middleware::MiddlewareRequestBody>,
+    generation_guard: Option<&PolicyGenerationGuard>,
+) -> Result<()>
+where
+    C: AsyncRead + Unpin,
+    U: AsyncWrite + Unpin,
+{
+    if let Some(body) = prepared_body {
+        return match body {
+            crate::l7::middleware::MiddlewareRequestBody::Spool(body) => {
+                relay_spooled_request_body(req, upstream, body, generation_guard).await
+            }
+            crate::l7::middleware::MiddlewareRequestBody::Live(body) => {
+                relay_live_middleware_request_body(
+                    body,
+                    client,
+                    upstream,
+                    RelayRequestOptions {
+                        generation_guard,
+                        ..Default::default()
+                    },
+                    false,
+                )
+                .await
+            }
+        };
+    }
+
+    let header_end = req
+        .raw_header
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or(req.raw_header.len(), |position| position + 4);
+    let overflow = &req.raw_header[header_end..];
+    match req.body_length {
+        BodyLength::None => {
+            if !overflow.is_empty() {
+                return Err(miette!("bodyless request contains read-ahead bytes"));
+            }
+        }
+        BodyLength::ContentLength(length) => {
+            let overflow_len = overflow.len() as u64;
+            if overflow_len > length {
+                return Err(miette!(
+                    "request read-ahead exceeds its declared Content-Length"
+                ));
+            }
+            if !overflow.is_empty() {
+                if let Some(guard) = generation_guard {
+                    guard.ensure_current()?;
+                }
+                upstream.write_all(overflow).await.into_diagnostic()?;
+            }
+            let remaining = length - overflow_len;
+            if remaining > 0 {
+                relay_fixed(client, upstream, remaining, generation_guard).await?;
+            }
+        }
+        BodyLength::Chunked => {
+            relay_chunked(client, upstream, overflow, generation_guard).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn relay_spooled_request_body<U: AsyncWrite + Unpin>(
+    req: &L7Request,
+    upstream: &mut U,
+    body: &mut crate::l7::middleware::RequestBodySpool,
+    generation_guard: Option<&PolicyGenerationGuard>,
+) -> Result<()> {
+    body.file.seek(SeekFrom::Start(0)).await.into_diagnostic()?;
+    let mut remaining = body.len;
+    let mut buffer = [0u8; RELAY_BUF_SIZE];
+    match req.body_length {
+        BodyLength::None => {
+            if remaining != 0 || !body.trailers.is_empty() {
+                return Err(miette!("bodyless middleware request has spooled payload"));
+            }
+        }
+        BodyLength::ContentLength(expected) => {
+            if expected != remaining || !body.trailers.is_empty() {
+                return Err(miette!("middleware request spool framing mismatch"));
+            }
+            while remaining > 0 {
+                let limit = usize::try_from(remaining.min(buffer.len() as u64))
+                    .expect("relay buffer length fits usize");
+                let read = body
+                    .file
+                    .read(&mut buffer[..limit])
+                    .await
+                    .into_diagnostic()?;
+                if read == 0 {
+                    return Err(miette!("middleware request spool ended early"));
+                }
+                if let Some(guard) = generation_guard {
+                    guard.ensure_current()?;
+                }
+                upstream
+                    .write_all(&buffer[..read])
+                    .await
+                    .into_diagnostic()?;
+                remaining -= read as u64;
+            }
+        }
+        BodyLength::Chunked => {
+            while remaining > 0 {
+                let limit = usize::try_from(remaining.min(buffer.len() as u64))
+                    .expect("relay buffer length fits usize");
+                let read = body
+                    .file
+                    .read(&mut buffer[..limit])
+                    .await
+                    .into_diagnostic()?;
+                if read == 0 {
+                    return Err(miette!("middleware request spool ended early"));
+                }
+                if let Some(guard) = generation_guard {
+                    guard.ensure_current()?;
+                }
+                upstream
+                    .write_all(format!("{read:X}\r\n").as_bytes())
+                    .await
+                    .into_diagnostic()?;
+                upstream
+                    .write_all(&buffer[..read])
+                    .await
+                    .into_diagnostic()?;
+                upstream.write_all(b"\r\n").await.into_diagnostic()?;
+                remaining -= read as u64;
+            }
+            upstream.write_all(b"0\r\n").await.into_diagnostic()?;
+            for trailer in &body.trailers {
+                upstream
+                    .write_all(format!("{}: {}\r\n", trailer.name, trailer.value).as_bytes())
+                    .await
+                    .into_diagnostic()?;
+            }
+            upstream.write_all(b"\r\n").await.into_diagnostic()?;
+        }
+    }
+    Ok(())
+}
+
+async fn relay_live_middleware_request_body<C, U>(
+    body: &mut crate::l7::middleware::RequestBodyStream,
+    client: &mut C,
+    upstream: &mut U,
+    options: RelayRequestOptions<'_>,
+    inspect_credential_markers: bool,
+) -> Result<()>
+where
+    C: AsyncRead + Unpin,
+    U: AsyncWrite + Unpin,
+{
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+    let run = body.run_to(client, sender);
+    let write = async {
+        let mut scanner = inspect_credential_markers
+            .then(|| ReservedMarkerStreamGuard::new(options.body_classifier));
+        while let Some(unit) = receiver.recv().await {
+            let output = match scanner.as_mut() {
+                Some(scanner) => scanner.push(&unit)?,
+                None => unit,
+            };
+            write_guarded_chunk(upstream, &output, options).await?;
+        }
+        Ok::<_, miette::Report>(scanner)
+    };
+    let (finish, scanner) = tokio::join!(run, write);
+    let mut scanner = scanner?;
+    let finish = finish?;
+    if let Some(scanner) = scanner.take() {
+        write_guarded_chunk(upstream, &scanner.finish()?, options).await?;
+    }
+    write_body_bytes(upstream, b"0\r\n", options).await?;
+    for trailer in finish.trailers {
+        let encoded = format!("{}: {}", trailer.name, trailer.value);
+        if inspect_credential_markers
+            && contains_reserved_credential_marker_bytes(encoded.as_bytes())
+        {
+            return Err(BodyCredentialError::Trailer.into());
+        }
+        write_body_bytes(upstream, encoded.as_bytes(), options).await?;
+        write_body_bytes(upstream, b"\r\n", options).await?;
+    }
+    write_body_bytes(upstream, b"\r\n", options).await
 }
 
 use openshell_core::secrets::body::{
@@ -1384,6 +1538,93 @@ where
     Ok(())
 }
 
+async fn relay_middleware_body_with_marker_guard<C, U>(
+    req: &L7Request,
+    client: &mut C,
+    upstream: &mut U,
+    headers: &[u8],
+    body: &mut crate::l7::middleware::MiddlewareRequestBody,
+    options: RelayRequestOptions<'_>,
+) -> Result<()>
+where
+    C: AsyncRead + Unpin,
+    U: AsyncWrite + Unpin,
+{
+    ensure_body_generation_current(options)?;
+    upstream.write_all(headers).await.into_diagnostic()?;
+    match body {
+        crate::l7::middleware::MiddlewareRequestBody::Live(body) => {
+            relay_live_middleware_request_body(body, client, upstream, options, true).await
+        }
+        crate::l7::middleware::MiddlewareRequestBody::Spool(body) => {
+            relay_spooled_request_body_with_marker_guard(req, upstream, body, options).await
+        }
+    }
+}
+
+async fn relay_spooled_request_body_with_marker_guard<U: AsyncWrite + Unpin>(
+    req: &L7Request,
+    upstream: &mut U,
+    body: &mut crate::l7::middleware::RequestBodySpool,
+    options: RelayRequestOptions<'_>,
+) -> Result<()> {
+    body.file.seek(SeekFrom::Start(0)).await.into_diagnostic()?;
+    let mut remaining = body.len;
+    let mut buffer = [0u8; RELAY_BUF_SIZE];
+    let mut scanner = ReservedMarkerStreamGuard::new(options.body_classifier);
+
+    while remaining > 0 {
+        let limit = usize::try_from(remaining.min(buffer.len() as u64))
+            .expect("relay buffer length fits usize");
+        let read = body
+            .file
+            .read(&mut buffer[..limit])
+            .await
+            .into_diagnostic()?;
+        if read == 0 {
+            return Err(miette!("middleware request spool ended early"));
+        }
+        let safe = scanner.push(&buffer[..read])?;
+        match req.body_length {
+            BodyLength::None => {
+                return Err(miette!("bodyless middleware request has spooled payload"));
+            }
+            BodyLength::ContentLength(_) => write_body_bytes(upstream, &safe, options).await?,
+            BodyLength::Chunked => write_guarded_chunk(upstream, &safe, options).await?,
+        }
+        remaining -= read as u64;
+    }
+
+    let tail = scanner.finish()?;
+    match req.body_length {
+        BodyLength::None => {
+            if body.len != 0 || !body.trailers.is_empty() {
+                return Err(miette!("bodyless middleware request has spooled payload"));
+            }
+        }
+        BodyLength::ContentLength(expected) => {
+            if expected != body.len || !body.trailers.is_empty() {
+                return Err(miette!("middleware request spool framing mismatch"));
+            }
+            write_body_bytes(upstream, &tail, options).await?;
+        }
+        BodyLength::Chunked => {
+            write_guarded_chunk(upstream, &tail, options).await?;
+            write_body_bytes(upstream, b"0\r\n", options).await?;
+            for trailer in &body.trailers {
+                let encoded = format!("{}: {}", trailer.name, trailer.value);
+                if contains_reserved_credential_marker_bytes(encoded.as_bytes()) {
+                    return Err(BodyCredentialError::Trailer.into());
+                }
+                write_body_bytes(upstream, encoded.as_bytes(), options).await?;
+                write_body_bytes(upstream, b"\r\n", options).await?;
+            }
+            write_body_bytes(upstream, b"\r\n", options).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn relay_chunked_with_marker_guard<C, U>(
     client: &mut C,
     upstream: &mut U,
@@ -1531,6 +1772,277 @@ pub(crate) enum BufferResult {
     OverCapacity { recoverable: bool },
 }
 
+/// Incremental decoder for one normalized HTTP/1 request body.
+pub(crate) enum RequestBodyReader {
+    None,
+    Fixed {
+        buffered: Vec<u8>,
+        buffered_pos: usize,
+        remaining: u64,
+    },
+    Chunked(ChunkedRequestBodyReader),
+}
+
+pub(crate) struct ChunkedRequestBodyReader {
+    buffered: Vec<u8>,
+    read_state: ChunkedReadState,
+    chunk_remaining: usize,
+    finished: bool,
+    trailers: Vec<HttpHeader>,
+    trailer_bytes: usize,
+}
+
+/// Prepare headers and an incremental normalized body reader for request
+/// middleware. This consumes `Expect: 100-continue` locally because middleware
+/// must receive the body before `OpenShell` can contact the upstream.
+pub(crate) async fn prepare_request_body_stream<C: AsyncRead + AsyncWrite + Unpin>(
+    req: &L7Request,
+    client: &mut C,
+) -> Result<(Vec<u8>, RequestBodyReader)> {
+    let header_end = req
+        .raw_header
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or(req.raw_header.len(), |position| position + 4);
+    let mut headers = req.raw_header[..header_end].to_vec();
+    let already_read = req.raw_header[header_end..].to_vec();
+    let reader = match req.body_length {
+        BodyLength::None => {
+            if !already_read.is_empty() {
+                return Err(miette!(
+                    "HTTP request with no body framing has {} unread byte(s) after headers",
+                    already_read.len()
+                ));
+            }
+            handle_buffered_expect_continue(client, &mut headers, false).await?;
+            RequestBodyReader::None
+        }
+        BodyLength::ContentLength(length) => {
+            if already_read.len() as u64 > length {
+                return Err(miette!(
+                    "HTTP request read-ahead exceeds its declared Content-Length"
+                ));
+            }
+            let needs_client_read = already_read.len() as u64 != length;
+            handle_buffered_expect_continue(client, &mut headers, needs_client_read).await?;
+            RequestBodyReader::Fixed {
+                buffered: already_read,
+                buffered_pos: 0,
+                remaining: length,
+            }
+        }
+        BodyLength::Chunked => {
+            let needs_client_read = !chunked_body_is_fully_buffered(&already_read);
+            handle_buffered_expect_continue(client, &mut headers, needs_client_read).await?;
+            RequestBodyReader::Chunked(ChunkedRequestBodyReader {
+                buffered: already_read,
+                read_state: ChunkedReadState {
+                    buffered_pos: 0,
+                    wire_bytes: 0,
+                    max_wire_bytes: None,
+                },
+                chunk_remaining: 0,
+                finished: false,
+                trailers: Vec::new(),
+                trailer_bytes: 0,
+            })
+        }
+    };
+    Ok((headers, reader))
+}
+
+impl RequestBodyReader {
+    pub(crate) async fn next_unit<C: AsyncRead + Unpin>(
+        &mut self,
+        client: &mut C,
+        generation_guard: Option<&PolicyGenerationGuard>,
+        limit: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        if limit == 0 {
+            return Err(miette!("request middleware stream unit limit is zero"));
+        }
+        match self {
+            Self::None => Ok(None),
+            Self::Fixed {
+                buffered,
+                buffered_pos,
+                remaining,
+            } => {
+                if *remaining == 0 {
+                    return Ok(None);
+                }
+                let length = usize::try_from((*remaining).min(limit as u64))
+                    .expect("stream unit limit fits usize");
+                let mut unit = Vec::with_capacity(length);
+                let available = length.min(buffered.len().saturating_sub(*buffered_pos));
+                if available > 0 {
+                    let end = *buffered_pos + available;
+                    unit.extend_from_slice(&buffered[*buffered_pos..end]);
+                    *buffered_pos = end;
+                }
+                while unit.len() < length {
+                    let start = unit.len();
+                    unit.resize(length, 0);
+                    let read = client.read(&mut unit[start..]).await.into_diagnostic()?;
+                    if read == 0 {
+                        return Err(miette!(
+                            "connection closed with {} request body bytes remaining",
+                            remaining.saturating_sub(start as u64)
+                        ));
+                    }
+                    unit.truncate(start + read);
+                    if let Some(guard) = generation_guard {
+                        guard.ensure_current()?;
+                    }
+                }
+                *remaining -= unit.len() as u64;
+                Ok(Some(unit))
+            }
+            Self::Chunked(reader) => reader.next_unit(client, generation_guard, limit).await,
+        }
+    }
+
+    pub(crate) fn take_trailers(&mut self) -> Vec<HttpHeader> {
+        match self {
+            Self::Chunked(reader) => std::mem::take(&mut reader.trailers),
+            Self::None | Self::Fixed { .. } => Vec::new(),
+        }
+    }
+}
+
+impl ChunkedRequestBodyReader {
+    async fn next_unit<C: AsyncRead + Unpin>(
+        &mut self,
+        client: &mut C,
+        generation_guard: Option<&PolicyGenerationGuard>,
+        limit: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        if self.finished {
+            return Ok(None);
+        }
+        if self.chunk_remaining == 0 {
+            let size_line = read_chunked_line(
+                client,
+                &self.buffered,
+                &mut self.read_state,
+                generation_guard,
+            )
+            .await
+            .map_err(CollectChunkedError::into_report)?;
+            let size_line = std::str::from_utf8(&size_line)
+                .map_err(|_| miette!("invalid UTF-8 in chunk-size line"))?;
+            let size_token = size_line
+                .split(';')
+                .next()
+                .map(str::trim)
+                .unwrap_or_default();
+            self.chunk_remaining = usize::from_str_radix(size_token, 16)
+                .map_err(|_| miette!("invalid chunk size token: {size_token:?}"))?;
+            if self.chunk_remaining == 0 {
+                self.read_trailers(client, generation_guard).await?;
+                self.finished = true;
+                return Ok(None);
+            }
+        }
+
+        let length = self.chunk_remaining.min(limit);
+        let mut unit = Vec::with_capacity(length);
+        read_buffered_exact(
+            client,
+            &self.buffered,
+            &mut self.read_state,
+            length,
+            &mut unit,
+            generation_guard,
+        )
+        .await
+        .map_err(CollectChunkedError::into_report)?;
+        self.chunk_remaining -= length;
+        if self.chunk_remaining == 0 {
+            let mut terminator = Vec::with_capacity(2);
+            read_buffered_exact(
+                client,
+                &self.buffered,
+                &mut self.read_state,
+                2,
+                &mut terminator,
+                generation_guard,
+            )
+            .await
+            .map_err(CollectChunkedError::into_report)?;
+            if terminator.as_slice() != b"\r\n" {
+                return Err(miette!("chunk missing terminating CRLF"));
+            }
+        }
+        Ok(Some(unit))
+    }
+
+    async fn read_trailers<C: AsyncRead + Unpin>(
+        &mut self,
+        client: &mut C,
+        generation_guard: Option<&PolicyGenerationGuard>,
+    ) -> Result<()> {
+        loop {
+            let line = read_chunked_line(
+                client,
+                &self.buffered,
+                &mut self.read_state,
+                generation_guard,
+            )
+            .await
+            .map_err(CollectChunkedError::into_report)?;
+            if line.is_empty() {
+                return Ok(());
+            }
+            self.trailer_bytes = self.trailer_bytes.saturating_add(line.len());
+            if self.trailer_bytes > openshell_supervisor_middleware::MAX_MIDDLEWARE_HEADER_BYTES {
+                return Err(miette!("request trailers exceed platform limit"));
+            }
+            if self.trailers.len() >= openshell_supervisor_middleware::MAX_MIDDLEWARE_HEADERS {
+                return Err(miette!("request trailer count exceeds platform limit"));
+            }
+            self.trailers.push(parse_request_trailer(&line)?);
+        }
+    }
+}
+
+fn parse_request_trailer(line: &[u8]) -> Result<HttpHeader> {
+    let Some(separator) = line.iter().position(|byte| *byte == b':') else {
+        return Err(miette!("request trailer is missing ':'"));
+    };
+    let name = &line[..separator];
+    let value = &line[separator + 1..];
+    if name.is_empty() || !name.iter().copied().all(is_http_field_name_byte) {
+        return Err(miette!("request trailer has an invalid field name"));
+    }
+    if !value.iter().copied().all(is_http_field_value_byte) {
+        return Err(miette!("request trailer has an invalid field value"));
+    }
+    let name = std::str::from_utf8(name)
+        .expect("validated HTTP field names are ASCII")
+        .to_ascii_lowercase();
+    if matches!(
+        name.as_str(),
+        "authorization"
+            | "content-length"
+            | "cookie"
+            | "host"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+    ) || name.starts_with("x-amz-")
+        || name.starts_with("x-openshell-credential")
+    {
+        return Err(miette!("request trailer uses protected field '{name}'"));
+    }
+    let value = std::str::from_utf8(value)
+        .map_err(|_| miette!("request trailer value is not valid UTF-8"))?
+        .trim()
+        .to_string();
+    Ok(HttpHeader { name, value })
+}
+
 pub(crate) async fn buffer_request_body_for_middleware<C: AsyncRead + AsyncWrite + Unpin>(
     req: &L7Request,
     client: &mut C,
@@ -1666,7 +2178,17 @@ fn chunked_body_is_fully_buffered(bytes: &[u8]) -> bool {
         };
         pos = line_end + 2;
         if chunk_size == 0 {
-            return bytes.get(pos..pos.saturating_add(2)) == Some(b"\r\n");
+            loop {
+                let Some(trailer_end) =
+                    bytes[pos..].windows(2).position(|window| window == b"\r\n")
+                else {
+                    return false;
+                };
+                if trailer_end == 0 {
+                    return true;
+                }
+                pos = pos.saturating_add(trailer_end + 2);
+            }
         }
         let Some(chunk_end) = pos.checked_add(chunk_size) else {
             return false;
@@ -1717,6 +2239,93 @@ pub(crate) fn rebuild_request_with_buffered_body(
         query_params: req.query_params.clone(),
         raw_header: header_bytes,
         body_length: BodyLength::ContentLength(body.len() as u64),
+    })
+}
+
+/// Apply request-head mutations without consuming or changing body framing.
+pub(crate) fn rebuild_request_headers_only(
+    req: &L7Request,
+    header_mutations: &[HeaderMutation],
+) -> Result<L7Request> {
+    let header_end = req
+        .raw_header
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or(req.raw_header.len(), |position| position + 4);
+    let mut raw_header = apply_header_mutations(&req.raw_header[..header_end], header_mutations)?;
+    raw_header.extend_from_slice(&req.raw_header[header_end..]);
+    Ok(L7Request {
+        action: req.action.clone(),
+        target: req.target.clone(),
+        query_params: req.query_params.clone(),
+        raw_header,
+        body_length: req.body_length,
+    })
+}
+
+/// Reframe an incrementally transformed request as HTTP/1.1 chunked transfer.
+/// The middleware may change every unit's length, so the supervisor cannot
+/// preserve a caller-provided `Content-Length` before the stream completes.
+pub(crate) fn rebuild_request_for_incremental_stream(
+    req: &L7Request,
+    headers: &[u8],
+    header_mutations: &[HeaderMutation],
+) -> Result<L7Request> {
+    let mut header_bytes = strip_header(headers, "content-length")?;
+    header_bytes = strip_header(&header_bytes, "transfer-encoding")?;
+    header_bytes = append_header(&header_bytes, "Transfer-Encoding", "chunked");
+    header_bytes = apply_header_mutations(&header_bytes, header_mutations)?;
+    Ok(L7Request {
+        action: req.action.clone(),
+        target: req.target.clone(),
+        query_params: req.query_params.clone(),
+        raw_header: header_bytes,
+        body_length: BodyLength::Chunked,
+    })
+}
+
+/// Rebuild a request whose normalized middleware output lives in a separate
+/// spool. The raw request contains only the new head; relay writes the spool.
+pub(crate) fn rebuild_request_with_streamed_body(
+    req: &L7Request,
+    headers: &[u8],
+    body_length: u64,
+    trailers: &[HttpHeader],
+    header_mutations: &[HeaderMutation],
+) -> Result<L7Request> {
+    let (mut header_bytes, framing) =
+        if matches!(req.body_length, BodyLength::None) && body_length == 0 && trailers.is_empty() {
+            let mut headers = strip_header(headers, "content-length")?;
+            headers = strip_header(&headers, "transfer-encoding")?;
+            headers = strip_header(&headers, "trailer")?;
+            (headers, BodyLength::None)
+        } else if trailers.is_empty() {
+            let length = usize::try_from(body_length)
+                .map_err(|_| miette!("middleware request body length is not representable"))?;
+            let mut headers = set_content_length(headers, length)?;
+            headers = strip_header(&headers, "transfer-encoding")?;
+            headers = strip_header(&headers, "trailer")?;
+            (headers, BodyLength::ContentLength(body_length))
+        } else {
+            let mut headers = strip_header(headers, "content-length")?;
+            headers = strip_header(&headers, "transfer-encoding")?;
+            headers = append_header(&headers, "Transfer-Encoding", "chunked");
+            headers = strip_header(&headers, "trailer")?;
+            let names = trailers
+                .iter()
+                .map(|trailer| trailer.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            headers = append_header(&headers, "Trailer", &names);
+            (headers, BodyLength::Chunked)
+        };
+    header_bytes = apply_header_mutations(&header_bytes, header_mutations)?;
+    Ok(L7Request {
+        action: req.action.clone(),
+        target: req.target.clone(),
+        query_params: req.query_params.clone(),
+        raw_header: header_bytes,
+        body_length: framing,
     })
 }
 
@@ -1789,6 +2398,46 @@ async fn collect_and_rewrite_request_body<C: AsyncRead + Unpin>(
             Ok(PreparedRequestBody { headers, body })
         }
     }
+}
+
+async fn collect_and_rewrite_spooled_request_body(
+    spool: &mut crate::l7::middleware::RequestBodySpool,
+    rewritten_headers: &[u8],
+    original_header_str: &str,
+    resolver: Option<&SecretResolver>,
+    generation_guard: Option<&PolicyGenerationGuard>,
+) -> Result<PreparedRequestBody> {
+    if spool.len > MAX_REWRITE_BODY_BYTES as u64 {
+        return Err(miette!(
+            "request body credential rewrite buffers at most {MAX_REWRITE_BODY_BYTES} bytes"
+        ));
+    }
+    if !spool.trailers.is_empty() {
+        return Err(miette!(
+            "request body credential rewrite does not support transformed request trailers"
+        ));
+    }
+    if let Some(guard) = generation_guard {
+        guard.ensure_current()?;
+    }
+    spool
+        .file
+        .seek(SeekFrom::Start(0))
+        .await
+        .into_diagnostic()?;
+    let capacity = usize::try_from(spool.len)
+        .map_err(|_| miette!("middleware request body is too large for credential rewrite"))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    spool.file.read_to_end(&mut bytes).await.into_diagnostic()?;
+    if bytes.len() as u64 != spool.len {
+        return Err(miette!("middleware request spool ended early"));
+    }
+    let (mut headers, body) =
+        rewrite_buffered_body(rewritten_headers, original_header_str, bytes, resolver)?;
+    headers = set_content_length(&headers, body.len())?;
+    headers = strip_header(&headers, "transfer-encoding")?;
+    headers = strip_header(&headers, "trailer")?;
+    Ok(PreparedRequestBody { headers, body })
 }
 
 fn rewrite_buffered_body(
@@ -2957,65 +3606,6 @@ fn has_expect_continue(headers: &str) -> bool {
     })
 }
 
-/// Resolved payload signing mode for a `SigV4` request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SigV4PayloadMode {
-    /// Buffer body and include its SHA-256 hash in the signature.
-    SignBody,
-    /// Use literal `UNSIGNED-PAYLOAD` — no body buffering needed.
-    UnsignedPayload,
-    /// Use `STREAMING-UNSIGNED-PAYLOAD-TRAILER` for `aws-chunked` streams.
-    StreamingUnsignedTrailer,
-}
-
-impl fmt::Display for SigV4PayloadMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SignBody => write!(f, "sign_body"),
-            Self::UnsignedPayload => write!(f, "unsigned_payload"),
-            Self::StreamingUnsignedTrailer => write!(f, "streaming_unsigned_trailer"),
-        }
-    }
-}
-
-/// Auto-detect the payload signing mode from the client's original headers.
-///
-/// Mirrors the mode the client SDK chose by inspecting `x-amz-content-sha256`:
-/// - `STREAMING-UNSIGNED-PAYLOAD-TRAILER` → `StreamingUnsignedTrailer`
-/// - `UNSIGNED-PAYLOAD` → `UnsignedPayload`
-/// - Hex hash → `SignBody` (buffer + hash, requires `Content-Length`)
-/// - `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` → **rejected** (the proxy cannot
-///   reproduce per-chunk signatures; use `sigv4:no_body` instead)
-/// - Other `STREAMING-*` values → **rejected** (unsupported streaming mode)
-/// - Absent → `SignBody` if `Content-Length` present, else `UnsignedPayload`
-fn detect_payload_mode(headers: &str) -> Result<SigV4PayloadMode> {
-    for line in headers.lines().skip(1) {
-        let lower = line.to_ascii_lowercase();
-        if lower.starts_with("x-amz-content-sha256:") {
-            let val = lower.split_once(':').map_or("", |(_, v)| v.trim());
-            return match val {
-                "streaming-unsigned-payload-trailer" => {
-                    Ok(SigV4PayloadMode::StreamingUnsignedTrailer)
-                }
-                "unsigned-payload" => Ok(SigV4PayloadMode::UnsignedPayload),
-                v if v.starts_with("streaming-") => Err(miette!(
-                    "SigV4 auto-detect does not support chunk-signed streaming mode \
-                     '{v}'; use credential_signing: sigv4:no_body to stream \
-                     with UNSIGNED-PAYLOAD instead"
-                )),
-                _ => Ok(SigV4PayloadMode::SignBody),
-            };
-        }
-    }
-    Ok(
-        if matches!(parse_body_length(headers)?, BodyLength::ContentLength(_)) {
-            SigV4PayloadMode::SignBody
-        } else {
-            SigV4PayloadMode::UnsignedPayload
-        },
-    )
-}
-
 /// Parse Content-Length or Transfer-Encoding from HTTP headers.
 ///
 /// Per RFC 7230 Section 3.3.3, rejects requests containing both
@@ -3539,13 +4129,13 @@ mod tests {
     use openshell_core::endpoint_status::{EndpointStatusCommand, EndpointStatusReceiver};
     use openshell_core::proposals::AgentProposals;
     use openshell_core::proto::{
-        Decision, HttpRequestResult, HttpResponseBlockDelivery, HttpResponseBodyMode,
-        HttpResponseBodyResult, HttpResponseBodyTransform, HttpResponseEvent,
-        HttpResponseEventResult, HttpResponsePreflightInspect, HttpResponsePreflightResult,
-        HttpResponseTrailersResult, MiddlewareBinding, MiddlewareManifest,
-        SupervisorMiddlewareOperation, SupervisorMiddlewarePhase, http_response_body_result,
-        http_response_body_transform, http_response_body_unit, http_response_event,
-        http_response_event_result, http_response_preflight_result,
+        HttpResponseBlockDelivery, HttpResponseBodyMode, HttpResponseBodyResult,
+        HttpResponseBodyTransform, HttpResponseEvent, HttpResponseEventResult,
+        HttpResponsePreflightInspect, HttpResponsePreflightResult, HttpResponseTrailersResult,
+        MiddlewareBinding, MiddlewareManifest, SupervisorMiddlewareOperation,
+        SupervisorMiddlewarePhase, http_response_body_result, http_response_body_transform,
+        http_response_body_unit, http_response_event, http_response_event_result,
+        http_response_preflight_result,
     };
     use openshell_core::secrets::SecretResolver;
     use std::pin::Pin;
@@ -3559,6 +4149,119 @@ mod tests {
     const VALID_WS_KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
     const VALID_WS_ACCEPT: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
     const TEXT_OPCODE: u8 = 0x1;
+
+    fn request_with_body(raw_header: Vec<u8>, body_length: BodyLength) -> L7Request {
+        L7Request {
+            action: "POST".into(),
+            target: "/push".into(),
+            query_params: HashMap::new(),
+            raw_header,
+            body_length,
+        }
+    }
+
+    #[tokio::test]
+    async fn request_body_stream_reads_fixed_body_larger_than_former_unary_limit() {
+        let body_len = 4 * 1024 * 1024 + 17;
+        let headers = format!(
+            "POST /push HTTP/1.1\r\nHost: example.com\r\nContent-Length: {body_len}\r\n\r\n"
+        )
+        .into_bytes();
+        let request = request_with_body(headers, BodyLength::ContentLength(body_len as u64));
+        let (mut client, mut writer) = tokio::io::duplex(1024);
+        let write = tokio::spawn(async move {
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut remaining = body_len;
+            while remaining > 0 {
+                let length = remaining.min(chunk.len());
+                writer.write_all(&chunk[..length]).await.unwrap();
+                remaining -= length;
+            }
+        });
+
+        let (_headers, mut reader) = prepare_request_body_stream(&request, &mut client)
+            .await
+            .unwrap();
+        let mut received = 0usize;
+        while let Some(unit) = reader
+            .next_unit(&mut client, None, 64 * 1024)
+            .await
+            .unwrap()
+        {
+            assert!(unit.len() <= 64 * 1024);
+            assert!(unit.iter().all(|byte| *byte == b'x'));
+            received += unit.len();
+        }
+        write.await.unwrap();
+        assert_eq!(received, body_len);
+        assert!(reader.take_trailers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn request_body_stream_normalizes_chunks_and_preserves_safe_trailers() {
+        let headers = b"POST /push HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\nTrailer: X-Trace\r\n\r\n".to_vec();
+        let request = request_with_body(headers, BodyLength::Chunked);
+        let (mut client, mut writer) = tokio::io::duplex(128);
+        let write = tokio::spawn(async move {
+            writer
+                .write_all(b"4\r\nWiki\r\n5;sample=yes\r\npedia\r\n0\r\nX-Trace: complete\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let (prepared_headers, mut reader) = prepare_request_body_stream(&request, &mut client)
+            .await
+            .unwrap();
+        let mut normalized = Vec::new();
+        while let Some(unit) = reader.next_unit(&mut client, None, 3).await.unwrap() {
+            assert!(unit.len() <= 3);
+            normalized.extend_from_slice(&unit);
+        }
+        write.await.unwrap();
+        assert_eq!(normalized, b"Wikipedia");
+        let trailers = reader.take_trailers();
+        assert_eq!(
+            trailers,
+            [HttpHeader {
+                name: "x-trace".into(),
+                value: "complete".into(),
+            }]
+        );
+
+        let rebuilt = rebuild_request_with_streamed_body(
+            &request,
+            &prepared_headers,
+            normalized.len() as u64,
+            &trailers,
+            &[],
+        )
+        .unwrap();
+        assert!(matches!(rebuilt.body_length, BodyLength::Chunked));
+        let rebuilt_headers = String::from_utf8(rebuilt.raw_header.clone()).unwrap();
+        assert!(rebuilt_headers.contains("Transfer-Encoding: chunked\r\n"));
+        assert!(rebuilt_headers.contains("Trailer: x-trace\r\n"));
+        assert!(
+            !rebuilt_headers
+                .to_ascii_lowercase()
+                .contains("content-length:")
+        );
+
+        let mut file = tokio::fs::File::from_std(tempfile::tempfile().unwrap());
+        file.write_all(&normalized).await.unwrap();
+        let mut spool = crate::l7::middleware::RequestBodySpool {
+            file,
+            len: normalized.len() as u64,
+            trailers: trailers.clone(),
+        };
+        let mut upstream = Vec::new();
+        relay_spooled_request_body(&rebuilt, &mut upstream, &mut spool, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            upstream,
+            b"9\r\nWikipedia\r\n0\r\nx-trace: complete\r\n\r\n"
+        );
+    }
 
     #[derive(Clone, Copy)]
     enum ResponseRelayScript {
@@ -3620,14 +4323,53 @@ mod tests {
             Ok(())
         }
 
-        async fn evaluate_http_request(
+        async fn open_http_request_pre_credentials(
             &self,
-            _request: openshell_supervisor_middleware::HttpRequestView<'_>,
-        ) -> Result<HttpRequestResult> {
-            Ok(HttpRequestResult {
-                decision: Decision::Allow as i32,
-                ..Default::default()
-            })
+            mut requests: mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<
+            openshell_supervisor_middleware::HttpRequestResultStream,
+            tonic::Status,
+        > {
+            assert!(
+                self.request_only,
+                "response-only service received a request"
+            );
+            let (sender, receiver) = mpsc::channel(2);
+            tokio::spawn(async move {
+                use openshell_core::proto::{
+                    HttpRequestBodyMode, HttpRequestEventResult, HttpRequestPreflightInspect,
+                    HttpRequestPreflightResult, http_request_event, http_request_event_result,
+                    http_request_preflight_result,
+                };
+                while let Some(event) = requests.recv().await {
+                    match event.event {
+                        Some(http_request_event::Event::Preflight(_)) => {
+                            let result = HttpRequestEventResult {
+                                result: Some(http_request_event_result::Result::PreflightResult(
+                                    HttpRequestPreflightResult {
+                                        action: Some(
+                                            http_request_preflight_result::Action::Inspect(
+                                                HttpRequestPreflightInspect {
+                                                    body_mode: HttpRequestBodyMode::HeadersOnly
+                                                        as i32,
+                                                    header_mutations: Vec::new(),
+                                                },
+                                            ),
+                                        ),
+                                        ..Default::default()
+                                    },
+                                )),
+                            };
+                            if sender.send(Ok(result)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(http_request_event::Event::SessionEnd(_)) | None => break,
+                        Some(_) => panic!("headers-only request received an unexpected event"),
+                    }
+                }
+            });
+            Ok(Box::pin(ReceiverStream::new(receiver)))
         }
 
         async fn open_http_response_pre_return(
@@ -4977,6 +5719,46 @@ mod tests {
                 "chunked request trailers are not supported when buffering or transforming request bodies"
             ),
             "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn credential_rewrite_uses_spooled_middleware_output() {
+        let (child_env, resolver) = SecretResolver::from_provider_env(
+            [("API_TOKEN".to_string(), "provider-real-token".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let resolver = resolver.expect("resolver");
+        let body = format!(r#"{{"token":"{}"}}"#, child_env["API_TOKEN"]);
+        let headers = format!(
+            "POST /api HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut file = tokio::fs::File::from_std(tempfile::tempfile().unwrap());
+        file.write_all(body.as_bytes()).await.unwrap();
+        file.flush().await.unwrap();
+        let mut spool = crate::l7::middleware::RequestBodySpool {
+            file,
+            len: body.len() as u64,
+            trailers: Vec::new(),
+        };
+
+        let rewritten = collect_and_rewrite_spooled_request_body(
+            &mut spool,
+            headers.as_bytes(),
+            &headers,
+            Some(&resolver),
+            None,
+        )
+        .await
+        .expect("rewrite middleware output");
+
+        assert_eq!(rewritten.body, br#"{"token":"provider-real-token"}"#);
+        assert!(
+            String::from_utf8(rewritten.headers)
+                .unwrap()
+                .contains(&format!("Content-Length: {}\r\n", rewritten.body.len()))
         );
     }
 
@@ -9556,9 +10338,14 @@ mod tests {
                 &mut proxy_to_upstream,
                 RelayRequestOptions {
                     resolver: Some(&resolver),
-                    credential_signing: crate::l7::CredentialSigning::SigV4Body,
-                    signing_service: "s3",
-                    signing_region: "us-east-1",
+                    post_credentials:
+                        crate::l7::post_credentials::PostCredentialsMiddleware::from_endpoint(
+                            crate::l7::CredentialSigning::SigV4Body,
+                            "s3",
+                            "us-east-1",
+                            "s3.us-east-1.amazonaws.com",
+                            443,
+                        ),
                     host: "s3.us-east-1.amazonaws.com",
                     port: 443,
                     ..Default::default()
@@ -9721,70 +10508,6 @@ mod tests {
         assert!(
             result.is_err(),
             "Relay should fail when path placeholder cannot be resolved"
-        );
-    }
-
-    #[test]
-    fn detect_payload_mode_unsigned_payload() {
-        let headers = "PUT /bucket/key HTTP/1.1\r\nHost: s3.us-east-1.amazonaws.com\r\nX-Amz-Content-Sha256: UNSIGNED-PAYLOAD\r\n\r\n";
-        assert_eq!(
-            detect_payload_mode(headers).unwrap(),
-            SigV4PayloadMode::UnsignedPayload
-        );
-    }
-
-    #[test]
-    fn detect_payload_mode_streaming_unsigned_trailer() {
-        let headers = "PUT /bucket/key HTTP/1.1\r\nHost: s3.us-east-1.amazonaws.com\r\nX-Amz-Content-Sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER\r\n\r\n";
-        assert_eq!(
-            detect_payload_mode(headers).unwrap(),
-            SigV4PayloadMode::StreamingUnsignedTrailer
-        );
-    }
-
-    #[test]
-    fn detect_payload_mode_hex_hash_is_sign_body() {
-        let headers = "POST /model/invoke HTTP/1.1\r\nHost: bedrock.amazonaws.com\r\nX-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\r\nContent-Length: 10\r\n\r\n";
-        assert_eq!(
-            detect_payload_mode(headers).unwrap(),
-            SigV4PayloadMode::SignBody
-        );
-    }
-
-    #[test]
-    fn detect_payload_mode_rejects_chunk_signed_streaming() {
-        let headers = "PUT /bucket/key HTTP/1.1\r\nHost: s3.us-east-1.amazonaws.com\r\nX-Amz-Content-Sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD\r\n\r\n";
-        let result = detect_payload_mode(headers);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("sigv4:no_body"),
-            "error should suggest sigv4:no_body, got: {msg}"
-        );
-    }
-
-    #[test]
-    fn detect_payload_mode_rejects_unknown_streaming() {
-        let headers = "PUT /bucket/key HTTP/1.1\r\nHost: s3.us-east-1.amazonaws.com\r\nX-Amz-Content-Sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER\r\n\r\n";
-        let result = detect_payload_mode(headers);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn detect_payload_mode_absent_with_content_length() {
-        let headers = "POST /model/invoke HTTP/1.1\r\nHost: bedrock.amazonaws.com\r\nContent-Length: 42\r\n\r\n";
-        assert_eq!(
-            detect_payload_mode(headers).unwrap(),
-            SigV4PayloadMode::SignBody
-        );
-    }
-
-    #[test]
-    fn detect_payload_mode_absent_without_content_length() {
-        let headers = "GET /bucket HTTP/1.1\r\nHost: s3.amazonaws.com\r\n\r\n";
-        assert_eq!(
-            detect_payload_mode(headers).unwrap(),
-            SigV4PayloadMode::UnsignedPayload
         );
     }
 

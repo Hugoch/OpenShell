@@ -1548,6 +1548,7 @@ impl ForwardMiddlewarePipeline<'_> {
         C: TokioAsyncRead + TokioAsyncWrite + Unpin + Send,
     {
         let validate;
+        let accept_without_reevaluation = |_body: &[u8]| Ok(None);
         let transformed_body_policy = match &self.l7_reevaluation {
             Some(l7) => {
                 validate = crate::l7::relay::transformed_body_validator(
@@ -1558,7 +1559,12 @@ impl ForwardMiddlewarePipeline<'_> {
                 );
                 openshell_supervisor_middleware::TransformedBodyPolicy::Reevaluate(&validate)
             }
-            None => openshell_supervisor_middleware::TransformedBodyPolicy::NotPolicyRelevant,
+            // The forward-proxy request is already fully buffered before this
+            // pipeline runs. Keep it on the compatibility path until the
+            // forward relay can carry a storage-backed request body.
+            None => openshell_supervisor_middleware::TransformedBodyPolicy::Reevaluate(
+                &accept_without_reevaluation,
+            ),
         };
 
         self.exchange
@@ -4708,9 +4714,7 @@ struct ForwardRelayOptions<'a> {
     secret_resolver: Option<&'a SecretResolver>,
     request_body_credential_rewrite: bool,
     deny_uninspected_credentials: bool,
-    credential_signing: crate::l7::CredentialSigning,
-    signing_service: &'a str,
-    signing_region: &'a str,
+    post_credentials: Option<crate::l7::post_credentials::PostCredentialsMiddleware<'a>>,
     host: &'a str,
     port: u16,
     response_middleware: Option<ForwardResponseMiddleware<'a>>,
@@ -4768,12 +4772,11 @@ where
             websocket_extensions: options.websocket_extensions,
             request_body_credential_rewrite: options.request_body_credential_rewrite,
             deny_uninspected_credentials: options.deny_uninspected_credentials,
-            credential_signing: options.credential_signing,
-            signing_service: options.signing_service,
-            signing_region: options.signing_region,
+            post_credentials: options.post_credentials,
             host: options.host,
             port: options.port,
         },
+        None,
         response_middleware,
         options.endpoint_observer,
     )
@@ -5768,8 +5771,14 @@ async fn handle_forward_proxy(
             exchange: &middleware_exchange,
             l7_reevaluation,
         };
-        forward_request_bytes = match pipeline.apply(request, client).await? {
+        let middleware_result = pipeline.apply(request, client).await?;
+        forward_request_bytes = match middleware_result {
             crate::l7::middleware::MiddlewareApplyResult::Allowed(request) => request.raw_header,
+            crate::l7::middleware::MiddlewareApplyResult::Streamed { .. } => {
+                return Err(miette::miette!(
+                    "forward middleware unexpectedly returned a storage-backed request body"
+                ));
+            }
             crate::l7::middleware::MiddlewareApplyResult::Denied { denial, .. } => {
                 emit_activity_simple(activity_tx, true, "middleware");
                 let response = denial.as_ref().map_or_else(
@@ -6094,17 +6103,15 @@ async fn handle_forward_proxy(
         return Ok(());
     }
 
-    let credential_signing = forward_upgrade_config
-        .as_ref()
-        .map_or(crate::l7::CredentialSigning::None, |config| {
-            config.credential_signing
-        });
-    let signing_service = forward_upgrade_config
-        .as_ref()
-        .map_or("", |config| config.signing_service.as_str());
-    let signing_region = forward_upgrade_config
-        .as_ref()
-        .map_or("", |config| config.signing_region.as_str());
+    let post_credentials = forward_upgrade_config.as_ref().and_then(|config| {
+        crate::l7::post_credentials::PostCredentialsMiddleware::from_endpoint(
+            config.credential_signing,
+            &config.signing_service,
+            &config.signing_region,
+            &host_lc,
+            port,
+        )
+    });
     let outcome_result = relay_rewritten_forward_request(
         method,
         &upstream_target,
@@ -6119,9 +6126,7 @@ async fn handle_forward_proxy(
             body_classifier: endpoint_credentials.body_classifier.as_deref(),
             request_body_credential_rewrite,
             deny_uninspected_credentials,
-            credential_signing,
-            signing_service,
-            signing_region,
+            post_credentials,
             host: &host_lc,
             port,
             response_middleware: response_selection.as_ref().map(|exchange| {
@@ -6709,16 +6714,6 @@ process:
             ))
         }
 
-        async fn evaluate_http_request(
-            &self,
-            _request: tonic::Request<openshell_core::proto::HttpRequestEvaluation>,
-        ) -> std::result::Result<
-            tonic::Response<openshell_core::proto::HttpRequestResult>,
-            tonic::Status,
-        > {
-            Err(tonic::Status::unimplemented("WebSocket-only test service"))
-        }
-
         async fn open_websocket_session(
             &self,
             mut receiver: mpsc::Receiver<openshell_core::proto::WebSocketSessionEvent>,
@@ -6789,16 +6784,6 @@ process:
             _config: &prost_types::Struct,
         ) -> Result<()> {
             Ok(())
-        }
-
-        async fn evaluate_http_request(
-            &self,
-            _request: openshell_core::middleware::HttpRequestView<'_>,
-        ) -> Result<openshell_core::proto::HttpRequestResult> {
-            Ok(openshell_core::proto::HttpRequestResult {
-                decision: openshell_core::proto::Decision::Allow as i32,
-                ..Default::default()
-            })
         }
 
         async fn open_http_response_pre_return(
@@ -6897,16 +6882,48 @@ process:
             Ok(())
         }
 
-        async fn evaluate_http_request(
+        async fn open_http_request_pre_credentials(
             &self,
-            _request: openshell_core::middleware::HttpRequestView<'_>,
-        ) -> Result<openshell_core::proto::HttpRequestResult> {
-            self.entered.notify_one();
-            self.release.notified().await;
-            Ok(openshell_core::proto::HttpRequestResult {
-                decision: openshell_core::proto::Decision::Allow as i32,
-                ..Default::default()
-            })
+            mut requests: mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
+        ) -> std::result::Result<openshell_core::middleware::HttpRequestResultStream, tonic::Status>
+        {
+            let entered = Arc::clone(&self.entered);
+            let release = Arc::clone(&self.release);
+            let (sender, receiver) = mpsc::channel(2);
+            tokio::spawn(async move {
+                use openshell_core::proto::{
+                    HttpRequestBodyMode, HttpRequestEventResult, HttpRequestPreflightInspect,
+                    HttpRequestPreflightResult, http_request_event, http_request_event_result,
+                    http_request_preflight_result,
+                };
+                let Some(openshell_core::proto::HttpRequestEvent {
+                    event: Some(http_request_event::Event::Preflight(_)),
+                }) = requests.recv().await
+                else {
+                    return;
+                };
+                entered.notify_one();
+                release.notified().await;
+                let _ = sender
+                    .send(Ok(HttpRequestEventResult {
+                        result: Some(http_request_event_result::Result::PreflightResult(
+                            HttpRequestPreflightResult {
+                                action: Some(http_request_preflight_result::Action::Inspect(
+                                    HttpRequestPreflightInspect {
+                                        body_mode: HttpRequestBodyMode::HeadersOnly as i32,
+                                        header_mutations: Vec::new(),
+                                    },
+                                )),
+                                ..Default::default()
+                            },
+                        )),
+                    }))
+                    .await;
+                while requests.recv().await.is_some() {}
+            });
+            Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
+                receiver,
+            )))
         }
     }
 
@@ -8350,6 +8367,9 @@ network_policies:
             crate::l7::middleware::MiddlewareApplyResult::Denied { denial } => {
                 assert!(denial.is_none());
             }
+            crate::l7::middleware::MiddlewareApplyResult::Streamed { .. } => {
+                panic!("body-aware forward middleware must use the buffered policy path")
+            }
             crate::l7::middleware::MiddlewareApplyResult::Allowed(_) => {
                 panic!("policy-invalid transformed request must be denied")
             }
@@ -8447,6 +8467,9 @@ network_policies:
         let (outcome, ()) = tokio::join!(pipeline.apply(request, &mut client), revoke);
         let request = match outcome.expect("middleware pipeline") {
             crate::l7::middleware::MiddlewareApplyResult::Allowed(request) => request,
+            crate::l7::middleware::MiddlewareApplyResult::Streamed { .. } => {
+                panic!("forward middleware compatibility path must stay buffered")
+            }
             crate::l7::middleware::MiddlewareApplyResult::Denied { .. } => {
                 panic!("blocking middleware should allow after release")
             }
@@ -8615,9 +8638,7 @@ network_policies:
                 secret_resolver: None,
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                credential_signing: crate::l7::CredentialSigning::None,
-                signing_service: "",
-                signing_region: "",
+                post_credentials: None,
                 host: "api.example.test",
                 port: 80,
                 response_middleware: Some(ForwardResponseMiddleware {
@@ -8704,9 +8725,7 @@ network_policies:
                 secret_resolver: None,
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                credential_signing: crate::l7::CredentialSigning::None,
-                signing_service: "",
-                signing_region: "",
+                post_credentials: None,
                 host: "api.example.test",
                 port: 80,
                 response_middleware: Some(ForwardResponseMiddleware {
@@ -8826,9 +8845,7 @@ network_policies:
                 secret_resolver: resolver,
                 request_body_credential_rewrite,
                 deny_uninspected_credentials: body_classifier.is_some(),
-                credential_signing: crate::l7::CredentialSigning::None,
-                signing_service: "",
-                signing_region: "",
+                post_credentials: None,
                 host: "",
                 port: 0,
                 response_middleware: None,
@@ -9093,9 +9110,7 @@ network_policies:
                     secret_resolver: None,
                     request_body_credential_rewrite: false,
                     deny_uninspected_credentials: false,
-                    credential_signing: crate::l7::CredentialSigning::None,
-                    signing_service: "",
-                    signing_region: "",
+                    post_credentials: None,
                     host: "",
                     port: 0,
                     response_middleware: None,
@@ -11641,9 +11656,7 @@ network_policies:
                 secret_resolver: Some(&resolver),
                 request_body_credential_rewrite: true,
                 deny_uninspected_credentials: false,
-                credential_signing: crate::l7::CredentialSigning::None,
-                signing_service: "",
-                signing_region: "",
+                post_credentials: None,
                 host: "",
                 port: 0,
                 response_middleware: None,
@@ -11725,9 +11738,14 @@ network_policies:
                 secret_resolver: Some(&resolver),
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                credential_signing: crate::l7::CredentialSigning::SigV4NoBody,
-                signing_service: "execute-api",
-                signing_region: "us-west-2",
+                post_credentials:
+                    crate::l7::post_credentials::PostCredentialsMiddleware::from_endpoint(
+                        crate::l7::CredentialSigning::SigV4NoBody,
+                        "execute-api",
+                        "us-west-2",
+                        "api.example.com",
+                        80,
+                    ),
                 host: "api.example.com",
                 port: 80,
                 response_middleware: None,
@@ -11816,9 +11834,7 @@ network_policies:
                 secret_resolver: None,
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                credential_signing: crate::l7::CredentialSigning::None,
-                signing_service: "",
-                signing_region: "",
+                post_credentials: None,
                 host: "",
                 port: 0,
                 response_middleware: None,
@@ -11869,9 +11885,7 @@ network_policies:
                 secret_resolver: None,
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                credential_signing: crate::l7::CredentialSigning::None,
-                signing_service: "",
-                signing_region: "",
+                post_credentials: None,
                 host: "",
                 port: 0,
                 response_middleware: None,

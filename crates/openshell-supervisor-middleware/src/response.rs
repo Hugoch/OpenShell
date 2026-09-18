@@ -1196,12 +1196,12 @@ async fn handle_opened_preflight_failure(
 mod tests {
     use std::sync::Arc;
 
-    use openshell_core::middleware::{HttpRequestView, InProcessMiddleware};
+    use openshell_core::middleware::InProcessMiddleware;
     use openshell_core::proto::{
-        Decision, ExistingHeaderAction, HeaderMutation, HttpRequestResult, HttpResponseBodyResult,
-        HttpResponseBodyTransform, HttpResponsePreflightInspect, HttpResponsePreflightResult,
-        HttpResponsePreflightSkip, HttpResponseTrailersResult, MiddlewareBinding,
-        MiddlewareManifest, WriteHeader, header_mutation, http_response_preflight_result,
+        ExistingHeaderAction, HeaderMutation, HttpResponseBodyResult, HttpResponseBodyTransform,
+        HttpResponsePreflightInspect, HttpResponsePreflightResult, HttpResponsePreflightSkip,
+        HttpResponseTrailersResult, MiddlewareBinding, MiddlewareManifest, WriteHeader,
+        header_mutation, http_response_preflight_result,
     };
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_stream::wrappers::TcpListenerStream;
@@ -1265,16 +1265,6 @@ mod tests {
                     reason: String::new(),
                 },
             ))
-        }
-
-        async fn evaluate_http_request(
-            &self,
-            _request: tonic::Request<openshell_core::proto::HttpRequestEvaluation>,
-        ) -> Result<tonic::Response<HttpRequestResult>, tonic::Status> {
-            Ok(tonic::Response::new(HttpRequestResult {
-                decision: Decision::Allow as i32,
-                ..Default::default()
-            }))
         }
 
         async fn evaluate_web_socket_session(
@@ -1386,16 +1376,6 @@ mod tests {
             _config: &prost_types::Struct,
         ) -> miette::Result<()> {
             Ok(())
-        }
-
-        async fn evaluate_http_request(
-            &self,
-            _request: HttpRequestView<'_>,
-        ) -> miette::Result<HttpRequestResult> {
-            Ok(HttpRequestResult {
-                decision: Decision::Allow as i32,
-                ..Default::default()
-            })
         }
 
         async fn open_http_response_pre_return(
@@ -1598,13 +1578,6 @@ mod tests {
             _config: &prost_types::Struct,
         ) -> miette::Result<()> {
             Ok(())
-        }
-
-        async fn evaluate_http_request(
-            &self,
-            _request: HttpRequestView<'_>,
-        ) -> miette::Result<HttpRequestResult> {
-            unreachable!()
         }
 
         async fn open_http_response_pre_return(
@@ -1929,13 +1902,6 @@ mod tests {
 
         async fn validate_config(&self, _: &str, _: &prost_types::Struct) -> miette::Result<()> {
             Ok(())
-        }
-
-        async fn evaluate_http_request(
-            &self,
-            _: HttpRequestView<'_>,
-        ) -> miette::Result<HttpRequestResult> {
-            unreachable!()
         }
 
         async fn open_http_response_pre_return(

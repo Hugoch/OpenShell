@@ -5,17 +5,29 @@
 
 use crate::l7::relay::L7EvalContext;
 use crate::opa::PolicyGenerationGuard;
-use miette::{Result, miette};
+use miette::{IntoDiagnostic, Result, miette};
 use openshell_ocsf::{
     ActionId, ActivityId, DetectionFindingBuilder, DispositionId, Endpoint, FindingInfo,
     HttpActivityBuilder, HttpRequest, NetworkActivityBuilder, SeverityId, StatusId, Url as OcsfUrl,
     ocsf_emit,
 };
+use std::io::SeekFrom;
 use std::path::PathBuf;
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
+
+/// Maximum wall-clock time spent receiving, evaluating, and spooling one
+/// request body before the supervisor cancels the middleware session.
+// Keep `from_secs` while the workspace MSRV predates `Duration::from_mins`.
+#[allow(clippy::duration_suboptimal_units)]
+pub const DEFAULT_HTTP_REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub enum MiddlewareApplyResult {
     Allowed(crate::l7::provider::L7Request),
+    Streamed {
+        request: crate::l7::provider::L7Request,
+        body: MiddlewareRequestBody,
+    },
     Denied {
         denial: Option<openshell_supervisor_middleware::MiddlewareDenial>,
     },
@@ -24,6 +36,43 @@ pub enum MiddlewareApplyResult {
     /// This is platform load shedding, not a selected middleware-stage failure,
     /// so callers must not apply a stage's `on_error` policy.
     AdmissionExhausted,
+}
+
+/// Storage-backed body produced by request middleware. The file is rewound and
+/// contains normalized bytes without HTTP transfer framing.
+pub struct RequestBodySpool {
+    pub(crate) file: tokio::fs::File,
+    pub(crate) len: u64,
+    pub(crate) trailers: Vec<openshell_core::proto::HttpHeader>,
+}
+
+/// Body delivery selected after all request-middleware preflights complete.
+pub enum MiddlewareRequestBody {
+    /// A whole-body or ownership barrier completed before upstream contact.
+    Spool(RequestBodySpool),
+    /// Every active body stage selected unit-local streaming, so approved
+    /// units can be released under network backpressure.
+    Live(Box<RequestBodyStream>),
+}
+
+/// Whether otherwise incremental request middleware must retain the complete
+/// representation for a later body-dependent policy or credential stage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RequestBodyDelivery {
+    #[default]
+    Incremental,
+    Withhold,
+}
+
+pub struct RequestBodyStream {
+    pub(crate) reader: crate::l7::rest::RequestBodyReader,
+    session: Option<openshell_supervisor_middleware::HttpRequestSession>,
+    preflight: openshell_supervisor_middleware::HttpRequestPreflightOutcome,
+    request: crate::l7::provider::L7Request,
+    context: L7EvalContext,
+    generation_guard: PolicyGenerationGuard,
+    deadline: tokio::time::Instant,
+    terminal_emitted: bool,
 }
 
 /// One destination-selected middleware chain shared by an HTTP request and
@@ -63,7 +112,30 @@ impl HttpMiddlewareExchange {
     where
         C: AsyncRead + AsyncWrite + Unpin + Send,
     {
-        apply_middleware_chain_for_scheme_with_request_id(
+        self.apply_request_with_delivery(
+            request,
+            client,
+            ctx,
+            scheme,
+            transformed_body_policy,
+            RequestBodyDelivery::Incremental,
+        )
+        .await
+    }
+
+    pub async fn apply_request_with_delivery<C>(
+        &self,
+        request: crate::l7::provider::L7Request,
+        client: &mut C,
+        ctx: &L7EvalContext,
+        scheme: &str,
+        transformed_body_policy: openshell_supervisor_middleware::TransformedBodyPolicy<'_>,
+        delivery: RequestBodyDelivery,
+    ) -> Result<MiddlewareApplyResult>
+    where
+        C: AsyncRead + AsyncWrite + Unpin + Send,
+    {
+        apply_middleware_chain_for_scheme_with_request_id_and_delivery(
             request,
             client,
             ctx,
@@ -73,6 +145,7 @@ impl HttpMiddlewareExchange {
             &self.generation_guard,
             transformed_body_policy,
             &self.request_id,
+            delivery,
         )
         .await
     }
@@ -517,7 +590,35 @@ pub async fn apply_middleware_chain_with_request_id<C: AsyncRead + AsyncWrite + 
     transformed_body_policy: openshell_supervisor_middleware::TransformedBodyPolicy<'_>,
     request_id: &str,
 ) -> Result<MiddlewareApplyResult> {
-    apply_middleware_chain_for_scheme_with_request_id(
+    apply_middleware_chain_with_request_id_and_delivery(
+        req,
+        client,
+        ctx,
+        chain,
+        runner,
+        generation_guard,
+        transformed_body_policy,
+        request_id,
+        RequestBodyDelivery::Incremental,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_middleware_chain_with_request_id_and_delivery<
+    C: AsyncRead + AsyncWrite + Unpin + Send,
+>(
+    req: crate::l7::provider::L7Request,
+    client: &mut C,
+    ctx: &L7EvalContext,
+    chain: Vec<openshell_supervisor_middleware::ChainEntry>,
+    runner: &openshell_supervisor_middleware::ChainRunner,
+    generation_guard: &PolicyGenerationGuard,
+    transformed_body_policy: openshell_supervisor_middleware::TransformedBodyPolicy<'_>,
+    request_id: &str,
+    delivery: RequestBodyDelivery,
+) -> Result<MiddlewareApplyResult> {
+    apply_middleware_chain_for_scheme_with_request_id_and_delivery(
         req,
         client,
         ctx,
@@ -527,11 +628,13 @@ pub async fn apply_middleware_chain_with_request_id<C: AsyncRead + AsyncWrite + 
         generation_guard,
         transformed_body_policy,
         request_id,
+        delivery,
     )
     .await
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub async fn apply_middleware_chain_for_scheme_with_request_id<
     C: AsyncRead + AsyncWrite + Unpin + Send,
 >(
@@ -545,15 +648,89 @@ pub async fn apply_middleware_chain_for_scheme_with_request_id<
     transformed_body_policy: openshell_supervisor_middleware::TransformedBodyPolicy<'_>,
     request_id: &str,
 ) -> Result<MiddlewareApplyResult> {
+    apply_middleware_chain_for_scheme_with_request_id_and_delivery(
+        req,
+        client,
+        ctx,
+        scheme,
+        chain,
+        runner,
+        generation_guard,
+        transformed_body_policy,
+        request_id,
+        RequestBodyDelivery::Incremental,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_middleware_chain_for_scheme_with_request_id_and_delivery<
+    C: AsyncRead + AsyncWrite + Unpin + Send,
+>(
+    req: crate::l7::provider::L7Request,
+    client: &mut C,
+    ctx: &L7EvalContext,
+    scheme: &str,
+    chain: Vec<openshell_supervisor_middleware::ChainEntry>,
+    runner: &openshell_supervisor_middleware::ChainRunner,
+    generation_guard: &PolicyGenerationGuard,
+    transformed_body_policy: openshell_supervisor_middleware::TransformedBodyPolicy<'_>,
+    request_id: &str,
+    delivery: RequestBodyDelivery,
+) -> Result<MiddlewareApplyResult> {
     if chain.is_empty() {
         return Ok(MiddlewareApplyResult::Allowed(req));
     }
     let chain = runner.describe_chain(&chain).await?;
+    if matches!(
+        transformed_body_policy,
+        openshell_supervisor_middleware::TransformedBodyPolicy::Reevaluate(_)
+    ) {
+        return apply_buffered_middleware_chain(
+            req,
+            client,
+            ctx,
+            scheme,
+            chain,
+            runner,
+            generation_guard,
+            transformed_body_policy,
+            request_id,
+        )
+        .await;
+    }
+
+    apply_streaming_middleware_chain(
+        req,
+        client,
+        ctx,
+        scheme,
+        chain,
+        runner,
+        generation_guard,
+        request_id,
+        delivery,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn apply_buffered_middleware_chain<C: AsyncRead + AsyncWrite + Unpin + Send>(
+    req: crate::l7::provider::L7Request,
+    client: &mut C,
+    ctx: &L7EvalContext,
+    scheme: &str,
+    chain: Vec<openshell_supervisor_middleware::DescribedChainEntry>,
+    runner: &openshell_supervisor_middleware::ChainRunner,
+    generation_guard: &PolicyGenerationGuard,
+    transformed_body_policy: openshell_supervisor_middleware::TransformedBodyPolicy<'_>,
+    request_id: &str,
+) -> Result<MiddlewareApplyResult> {
     let admission = if chain.is_empty() {
         None
     } else {
-        let outcome = runner.reserve_middleware_work().await?;
-        match outcome {
+        let work_admission = runner.reserve_middleware_work().await?;
+        match work_admission {
             openshell_supervisor_middleware::MiddlewareWorkAdmissionOutcome::Admitted(
                 admission,
             ) => Some(admission),
@@ -564,10 +741,6 @@ pub async fn apply_middleware_chain_for_scheme_with_request_id<
         }
     };
     let Some(max_body_bytes) = middleware_chain_body_limit(&chain) else {
-        // No entry resolved to a registered binding, so nothing inspects the
-        // body. Apply each entry's `on_error` policy without buffering (an
-        // unresolved binding is handled before the body is read) and forward
-        // the original request unchanged if the chain allows.
         let input = middleware_request_input_with_id(
             openshell_ocsf::ctx::ctx(),
             scheme,
@@ -596,18 +769,15 @@ pub async fn apply_middleware_chain_for_scheme_with_request_id<
             }
         });
     };
-    // Admission was reserved above, before reading any request body. Keeping
-    // the guard through evaluation bounds aggregate buffered input across HTTP
-    // requests and WebSocket messages.
     let admission = admission.expect("resolved middleware chain reserved work admission");
-    let buffered = match crate::l7::rest::buffer_request_body_for_middleware(
+    let buffer_result = crate::l7::rest::buffer_request_body_for_middleware(
         &req,
         client,
         Some(generation_guard),
         max_body_bytes,
     )
-    .await?
-    {
+    .await?;
+    let buffered = match buffer_result {
         crate::l7::rest::BufferResult::Buffered(buffered) => buffered,
         crate::l7::rest::BufferResult::OverCapacity { recoverable } => {
             return Ok(resolve_unbuffered_body(ctx, req, &chain, recoverable));
@@ -626,9 +796,6 @@ pub async fn apply_middleware_chain_for_scheme_with_request_id<
         buffered.body,
         request_id,
     );
-    // The explicitly selected transformation policy either re-checks every
-    // replacement or documents that this protocol's policy is body-independent.
-    // An ALLOW outcome therefore means the final body is policy-compliant.
     let outcome = runner
         .evaluate_described_with_policy_admitted(
             &chain,
@@ -650,6 +817,607 @@ pub async fn apply_middleware_chain_for_scheme_with_request_id<
         &outcome.header_mutations,
     )?;
     Ok(MiddlewareApplyResult::Allowed(rebuilt))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn apply_streaming_middleware_chain<C: AsyncRead + AsyncWrite + Unpin + Send>(
+    req: crate::l7::provider::L7Request,
+    client: &mut C,
+    ctx: &L7EvalContext,
+    scheme: &str,
+    chain: Vec<openshell_supervisor_middleware::DescribedChainEntry>,
+    runner: &openshell_supervisor_middleware::ChainRunner,
+    generation_guard: &PolicyGenerationGuard,
+    request_id: &str,
+    delivery: RequestBodyDelivery,
+) -> Result<MiddlewareApplyResult> {
+    let header_end = req
+        .raw_header
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or(req.raw_header.len(), |position| position + 4);
+    let original_headers = &req.raw_header[..header_end];
+    let headers = safe_middleware_headers(original_headers)?;
+    let query = raw_query_from_request_headers(original_headers)?;
+    let sandbox = openshell_ocsf::ctx::ctx();
+    let input = openshell_supervisor_middleware::HttpRequestPreflightInput {
+        context: openshell_core::proto::RequestContext {
+            request_id: request_id.to_string(),
+            sandbox_id: sandbox.sandbox_id.clone(),
+            sandbox_name: sandbox.sandbox_name.clone(),
+            workspace: ctx.workspace.clone(),
+            originating_process: None,
+        },
+        target: openshell_core::proto::HttpRequestTarget {
+            scheme: scheme.to_string(),
+            host: ctx.host.clone(),
+            port: u32::from(ctx.port),
+            method: req.action.clone(),
+            path: req.target.clone(),
+            query,
+        },
+        declared_body_length: match req.body_length {
+            crate::l7::provider::BodyLength::ContentLength(length) => Some(length),
+            crate::l7::provider::BodyLength::None => Some(0),
+            crate::l7::provider::BodyLength::Chunked => None,
+        },
+        headers: headers
+            .visible
+            .into_iter()
+            .map(|(name, value)| openshell_core::proto::HttpHeader { name, value })
+            .collect(),
+        connection_nominated_headers: headers.connection_nominated,
+    };
+    let mut preflight = runner
+        .preflight_described_http_request(chain, input)
+        .await?;
+    if preflight.session_capacity_exhausted {
+        emit_middleware_admission_exhausted(ctx);
+        return Ok(MiddlewareApplyResult::AdmissionExhausted);
+    }
+    if !preflight.allowed {
+        emit_streaming_middleware_events(
+            ctx,
+            &req,
+            false,
+            &preflight.reason,
+            preflight.denial.as_ref(),
+            &preflight.findings,
+            &preflight.metadata,
+            &preflight.invocations,
+            false,
+        );
+        return Ok(MiddlewareApplyResult::Denied {
+            denial: preflight.denial,
+        });
+    }
+
+    let Some(mut session) = preflight.session.take() else {
+        let rebuilt =
+            crate::l7::rest::rebuild_request_headers_only(&req, &preflight.header_mutations)?;
+        emit_streaming_middleware_events(
+            ctx,
+            &req,
+            true,
+            "",
+            None,
+            &preflight.findings,
+            &preflight.metadata,
+            &preflight.invocations,
+            !preflight.header_mutations.is_empty(),
+        );
+        return Ok(MiddlewareApplyResult::Allowed(rebuilt));
+    };
+
+    let (prepared_headers, mut body_reader) =
+        crate::l7::rest::prepare_request_body_stream(&req, client).await?;
+
+    if delivery == RequestBodyDelivery::Incremental
+        && !session.requires_withholding()
+        && !matches!(req.body_length, crate::l7::provider::BodyLength::None)
+    {
+        let rebuilt = crate::l7::rest::rebuild_request_for_incremental_stream(
+            &req,
+            &prepared_headers,
+            &preflight.header_mutations,
+        )?;
+        let request = crate::l7::provider::L7Request {
+            action: req.action.clone(),
+            target: req.target.clone(),
+            query_params: req.query_params.clone(),
+            raw_header: req.raw_header.clone(),
+            body_length: req.body_length,
+        };
+        return Ok(MiddlewareApplyResult::Streamed {
+            request: rebuilt,
+            body: MiddlewareRequestBody::Live(Box::new(RequestBodyStream {
+                reader: body_reader,
+                session: Some(session),
+                preflight,
+                request,
+                context: ctx.clone(),
+                generation_guard: generation_guard.clone(),
+                deadline: tokio::time::Instant::now() + DEFAULT_HTTP_REQUEST_BODY_TIMEOUT,
+                terminal_emitted: false,
+            })),
+        });
+    }
+
+    let std_file = tempfile::tempfile().into_diagnostic()?;
+    let mut file = tokio::fs::File::from_std(std_file);
+    let mut output_len = 0u64;
+    let mut body_invocations = Vec::new();
+    let mut body_findings = Vec::new();
+    let mut body_metadata = std::collections::BTreeMap::new();
+    let body_deadline = tokio::time::Instant::now() + DEFAULT_HTTP_REQUEST_BODY_TIMEOUT;
+
+    loop {
+        let next_unit = if let Ok(result) = tokio::time::timeout_at(
+            body_deadline,
+            body_reader.next_unit(client, Some(generation_guard), session.stream_unit_limit()),
+        )
+        .await
+        {
+            result?
+        } else {
+            let diagnostics = session.take_diagnostics();
+            session
+                .end(openshell_core::proto::MiddlewareSessionEndReason::Cancellation)
+                .await;
+            emit_request_body_timeout(ctx, &req, &preflight, diagnostics);
+            return Ok(MiddlewareApplyResult::Denied { denial: None });
+        };
+        let Some(unit) = next_unit else {
+            break;
+        };
+        let pushed = tokio::time::timeout_at(body_deadline, session.push_body(unit)).await;
+        match pushed {
+            Err(_) => {
+                let diagnostics = session.take_diagnostics();
+                session
+                    .end(openshell_core::proto::MiddlewareSessionEndReason::Cancellation)
+                    .await;
+                emit_request_body_timeout(ctx, &req, &preflight, diagnostics);
+                return Ok(MiddlewareApplyResult::Denied { denial: None });
+            }
+            Ok(Ok(units)) => {
+                write_spooled_units(&mut file, &mut output_len, units).await?;
+            }
+            Ok(Err(error)) => {
+                body_invocations.extend(error.diagnostics.invocations);
+                body_findings.extend(error.diagnostics.findings);
+                body_metadata.extend(error.diagnostics.metadata);
+                let mut invocations = preflight.invocations;
+                invocations.extend(body_invocations);
+                let mut findings = preflight.findings;
+                findings.extend(body_findings);
+                let mut metadata = preflight.metadata;
+                metadata.extend(body_metadata);
+                emit_streaming_middleware_events(
+                    ctx,
+                    &req,
+                    false,
+                    &error.reason,
+                    error.denial.as_ref(),
+                    &findings,
+                    &metadata,
+                    &invocations,
+                    false,
+                );
+                return Ok(MiddlewareApplyResult::Denied {
+                    denial: error.denial,
+                });
+            }
+        }
+    }
+    let trailers = body_reader.take_trailers();
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::channel(4);
+    let finish_future = session.finish_to(trailers, output_tx);
+    let writer_future = async {
+        while let Some(unit) = output_rx.recv().await {
+            write_spooled_units(&mut file, &mut output_len, vec![unit]).await?;
+        }
+        Ok::<(), miette::Report>(())
+    };
+    let completed = tokio::time::timeout_at(body_deadline, async {
+        let (finish, writer) = tokio::join!(finish_future, writer_future);
+        writer?;
+        Ok::<_, miette::Report>(finish)
+    })
+    .await;
+    let finish = if let Ok(completed) = completed {
+        completed?
+    } else {
+        emit_request_body_timeout(
+            ctx,
+            &req,
+            &preflight,
+            openshell_supervisor_middleware::HttpRequestDiagnostics::default(),
+        );
+        return Ok(MiddlewareApplyResult::Denied { denial: None });
+    };
+    let finish = match finish {
+        Ok(finish) => finish,
+        Err(error) => {
+            let mut invocations = preflight.invocations;
+            invocations.extend(error.diagnostics.invocations);
+            let mut findings = preflight.findings;
+            findings.extend(error.diagnostics.findings);
+            let mut metadata = preflight.metadata;
+            metadata.extend(error.diagnostics.metadata);
+            emit_streaming_middleware_events(
+                ctx,
+                &req,
+                false,
+                &error.reason,
+                error.denial.as_ref(),
+                &findings,
+                &metadata,
+                &invocations,
+                false,
+            );
+            return Ok(MiddlewareApplyResult::Denied {
+                denial: error.denial,
+            });
+        }
+    };
+    generation_guard.ensure_current()?;
+    file.flush().await.into_diagnostic()?;
+    file.seek(SeekFrom::Start(0)).await.into_diagnostic()?;
+
+    let rebuilt = crate::l7::rest::rebuild_request_with_streamed_body(
+        &req,
+        &prepared_headers,
+        output_len,
+        &finish.trailers,
+        &preflight.header_mutations,
+    )?;
+    let mut invocations = preflight.invocations;
+    invocations.extend(finish.invocations);
+    let mut findings = preflight.findings;
+    findings.extend(finish.findings);
+    let mut metadata = preflight.metadata;
+    metadata.extend(finish.metadata);
+    emit_streaming_middleware_events(
+        ctx,
+        &req,
+        true,
+        "",
+        None,
+        &findings,
+        &metadata,
+        &invocations,
+        finish.body_transformed || !preflight.header_mutations.is_empty(),
+    );
+    Ok(MiddlewareApplyResult::Streamed {
+        request: rebuilt,
+        body: MiddlewareRequestBody::Spool(RequestBodySpool {
+            file,
+            len: output_len,
+            trailers: finish.trailers,
+        }),
+    })
+}
+
+impl RequestBodyStream {
+    /// Run an incremental request session into a bounded output channel.
+    ///
+    /// The HTTP relay drains the channel directly into the upstream socket,
+    /// so channel and socket backpressure bound supervisor memory without a
+    /// whole-request storage cap.
+    pub(crate) async fn run_to<C>(
+        &mut self,
+        client: &mut C,
+        output: tokio::sync::mpsc::Sender<Vec<u8>>,
+    ) -> Result<openshell_supervisor_middleware::HttpRequestFinish>
+    where
+        C: AsyncRead + Unpin,
+    {
+        loop {
+            let unit_limit = self.session.as_ref().map_or(
+                1,
+                openshell_supervisor_middleware::HttpRequestSession::stream_unit_limit,
+            );
+            let next = tokio::time::timeout_at(
+                self.deadline,
+                self.reader
+                    .next_unit(client, Some(&self.generation_guard), unit_limit),
+            )
+            .await;
+            let unit = match next {
+                Err(_) => {
+                    self.cancel_with_diagnostics(
+                        "middleware_failed: request_body_timeout",
+                        openshell_supervisor_middleware::HttpRequestDiagnostics::default(),
+                    )
+                    .await;
+                    return Err(miette!("request middleware body deadline exceeded"));
+                }
+                Ok(Err(error)) => {
+                    self.cancel_with_diagnostics(
+                        "middleware_failed: request_body_read_failed",
+                        openshell_supervisor_middleware::HttpRequestDiagnostics::default(),
+                    )
+                    .await;
+                    return Err(error);
+                }
+                Ok(Ok(None)) => break,
+                Ok(Ok(Some(unit))) => unit,
+            };
+
+            let pushed = {
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or_else(|| miette!("request middleware session is unavailable"))?;
+                tokio::time::timeout_at(self.deadline, session.push_body(unit)).await
+            };
+            let units = match pushed {
+                Err(_) => {
+                    let diagnostics = self
+                        .session
+                        .as_mut()
+                        .map(openshell_supervisor_middleware::HttpRequestSession::take_diagnostics)
+                        .unwrap_or_default();
+                    self.cancel_with_diagnostics(
+                        "middleware_failed: request_body_timeout",
+                        diagnostics,
+                    )
+                    .await;
+                    return Err(miette!("request middleware body deadline exceeded"));
+                }
+                Ok(Err(error)) => {
+                    let reason = error.reason.clone();
+                    let denial = error.denial.clone();
+                    self.emit_failure(&reason, denial.as_ref(), *error.diagnostics);
+                    self.session.take();
+                    return Err(miette!("{reason}"));
+                }
+                Ok(Ok(units)) => units,
+            };
+            for unit in units {
+                match tokio::time::timeout_at(self.deadline, output.send(unit)).await {
+                    Err(_) => {
+                        let diagnostics = self
+                            .session
+                            .as_mut()
+                            .map(
+                                openshell_supervisor_middleware::HttpRequestSession::take_diagnostics,
+                            )
+                            .unwrap_or_default();
+                        self.cancel_with_diagnostics(
+                            "middleware_failed: request_body_timeout",
+                            diagnostics,
+                        )
+                        .await;
+                        return Err(miette!("request middleware body deadline exceeded"));
+                    }
+                    Ok(Err(_)) => {
+                        self.cancel_with_diagnostics(
+                            "middleware_failed: request_output_closed",
+                            openshell_supervisor_middleware::HttpRequestDiagnostics::default(),
+                        )
+                        .await;
+                        return Err(miette!("request middleware output consumer closed"));
+                    }
+                    Ok(Ok(())) => {}
+                }
+            }
+        }
+
+        let trailers = self.reader.take_trailers();
+        let session = self
+            .session
+            .take()
+            .ok_or_else(|| miette!("request middleware session is unavailable"))?;
+        let finish =
+            tokio::time::timeout_at(self.deadline, session.finish_to(trailers, output)).await;
+        match finish {
+            Err(_) => {
+                self.emit_failure(
+                    "middleware_failed: request_body_timeout",
+                    None,
+                    openshell_supervisor_middleware::HttpRequestDiagnostics::default(),
+                );
+                Err(miette!("request middleware body deadline exceeded"))
+            }
+            Ok(Err(error)) => {
+                let reason = error.reason.clone();
+                let denial = error.denial.clone();
+                self.emit_failure(&reason, denial.as_ref(), *error.diagnostics);
+                Err(miette!("{reason}"))
+            }
+            Ok(Ok(finish)) => {
+                self.emit_success(&finish);
+                Ok(finish)
+            }
+        }
+    }
+
+    /// Terminate a live session after an upstream response wins the race with
+    /// request upload. Unread client bytes make the downstream connection
+    /// non-reusable, and no request replay is attempted.
+    pub(crate) async fn cancel_for_early_response(&mut self) {
+        let diagnostics = self
+            .session
+            .as_mut()
+            .map(openshell_supervisor_middleware::HttpRequestSession::take_diagnostics)
+            .unwrap_or_default();
+        self.cancel_with_diagnostics("middleware_cancelled: upstream_response", diagnostics)
+            .await;
+    }
+
+    async fn cancel_with_diagnostics(
+        &mut self,
+        reason: &str,
+        diagnostics: openshell_supervisor_middleware::HttpRequestDiagnostics,
+    ) {
+        if let Some(session) = self.session.take() {
+            session
+                .end(openshell_core::proto::MiddlewareSessionEndReason::Cancellation)
+                .await;
+        }
+        self.emit_failure(reason, None, diagnostics);
+    }
+
+    fn emit_success(&mut self, finish: &openshell_supervisor_middleware::HttpRequestFinish) {
+        if self.terminal_emitted {
+            return;
+        }
+        let mut invocations = self.preflight.invocations.clone();
+        invocations.extend(finish.invocations.clone());
+        let mut findings = self.preflight.findings.clone();
+        findings.extend(finish.findings.clone());
+        let mut metadata = self.preflight.metadata.clone();
+        metadata.extend(finish.metadata.clone());
+        emit_streaming_middleware_events(
+            &self.context,
+            &self.request,
+            true,
+            "",
+            None,
+            &findings,
+            &metadata,
+            &invocations,
+            finish.body_transformed || !self.preflight.header_mutations.is_empty(),
+        );
+        self.terminal_emitted = true;
+    }
+
+    fn emit_failure(
+        &mut self,
+        reason: &str,
+        denial: Option<&openshell_supervisor_middleware::MiddlewareDenial>,
+        diagnostics: openshell_supervisor_middleware::HttpRequestDiagnostics,
+    ) {
+        if self.terminal_emitted {
+            return;
+        }
+        let mut invocations = self.preflight.invocations.clone();
+        invocations.extend(diagnostics.invocations);
+        let mut findings = self.preflight.findings.clone();
+        findings.extend(diagnostics.findings);
+        let mut metadata = self.preflight.metadata.clone();
+        metadata.extend(diagnostics.metadata);
+        emit_streaming_middleware_events(
+            &self.context,
+            &self.request,
+            false,
+            reason,
+            denial,
+            &findings,
+            &metadata,
+            &invocations,
+            false,
+        );
+        self.terminal_emitted = true;
+    }
+}
+
+fn emit_request_body_timeout(
+    ctx: &L7EvalContext,
+    req: &crate::l7::provider::L7Request,
+    preflight: &openshell_supervisor_middleware::HttpRequestPreflightOutcome,
+    diagnostics: openshell_supervisor_middleware::HttpRequestDiagnostics,
+) {
+    let mut invocations = preflight.invocations.clone();
+    invocations.extend(diagnostics.invocations);
+    let mut findings = preflight.findings.clone();
+    findings.extend(diagnostics.findings);
+    let mut metadata = preflight.metadata.clone();
+    metadata.extend(diagnostics.metadata);
+    emit_streaming_middleware_events(
+        ctx,
+        req,
+        false,
+        "middleware_failed: request_body_timeout",
+        None,
+        &findings,
+        &metadata,
+        &invocations,
+        false,
+    );
+}
+
+async fn write_spooled_units(
+    file: &mut tokio::fs::File,
+    output_len: &mut u64,
+    units: Vec<Vec<u8>>,
+) -> Result<()> {
+    for unit in units {
+        *output_len = output_len
+            .checked_add(unit.len() as u64)
+            .ok_or_else(|| miette!("middleware request output length overflow"))?;
+        if *output_len > openshell_supervisor_middleware::MAX_HTTP_REQUEST_DEFERRED_BYTES as u64 {
+            return Err(miette!(
+                "middleware request output exceeds platform storage limit"
+            ));
+        }
+        file.write_all(&unit).await.into_diagnostic()?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_streaming_middleware_events(
+    ctx: &L7EvalContext,
+    req: &crate::l7::provider::L7Request,
+    allowed: bool,
+    reason: &str,
+    denial: Option<&openshell_supervisor_middleware::MiddlewareDenial>,
+    findings: &[openshell_supervisor_middleware::NamespacedFinding],
+    metadata: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    invocations: &[openshell_supervisor_middleware::HttpRequestInvocation],
+    transformed: bool,
+) {
+    let mut applied = Vec::<openshell_supervisor_middleware::MiddlewareInvocation>::new();
+    for invocation in invocations {
+        if let Some(existing) = applied
+            .iter_mut()
+            .find(|existing| existing.name == invocation.config_name)
+        {
+            existing.failed |= invocation.failed;
+            existing.transformed |= matches!(
+                invocation.outcome,
+                openshell_supervisor_middleware::HttpRequestInvocationOutcome::Transform
+                    | openshell_supervisor_middleware::HttpRequestInvocationOutcome::OwnedStream
+            );
+            if matches!(
+                invocation.outcome,
+                openshell_supervisor_middleware::HttpRequestInvocationOutcome::BlockRequest
+                    | openshell_supervisor_middleware::HttpRequestInvocationOutcome::FailClosed
+            ) {
+                existing.decision = openshell_core::proto::Decision::Deny;
+            }
+            continue;
+        }
+        applied.push(openshell_supervisor_middleware::MiddlewareInvocation {
+            name: invocation.config_name.clone(),
+            implementation: invocation.implementation.clone(),
+            decision: if matches!(
+                invocation.outcome,
+                openshell_supervisor_middleware::HttpRequestInvocationOutcome::BlockRequest
+                    | openshell_supervisor_middleware::HttpRequestInvocationOutcome::FailClosed
+            ) {
+                openshell_core::proto::Decision::Deny
+            } else {
+                openshell_core::proto::Decision::Allow
+            },
+            transformed,
+            failed: invocation.failed,
+        });
+    }
+    let outcome = openshell_supervisor_middleware::ChainOutcome {
+        allowed,
+        reason: reason.to_string(),
+        body: Vec::new(),
+        header_mutations: Vec::new(),
+        findings: findings.to_vec(),
+        metadata: metadata.clone(),
+        applied,
+        denial: denial.cloned(),
+    };
+    emit_middleware_events(ctx, req, &outcome);
 }
 
 pub async fn send_middleware_rejection_response<C: AsyncRead + AsyncWrite + Unpin + Send>(
