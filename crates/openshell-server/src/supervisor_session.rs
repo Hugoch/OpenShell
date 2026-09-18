@@ -102,6 +102,8 @@ struct LiveSession {
     /// Installation evidence belongs to this connection and is never restored
     /// from persistence or inherited by a replacement supervisor session.
     provider_readiness: Option<ProviderReadinessEvidence>,
+    /// True only after the admitted workload and relay plane are usable.
+    runtime_ready: bool,
     #[allow(dead_code)]
     connected_at: Instant,
 }
@@ -392,6 +394,27 @@ impl SupervisorSessionRegistry {
         tx: mpsc::Sender<GatewayMessage>,
         shutdown: oneshot::Sender<()>,
     ) -> bool {
+        self.register_with_runtime_state(sandbox_id, session_id, tx, shutdown, true)
+    }
+
+    fn register_initializing(
+        &self,
+        sandbox_id: String,
+        session_id: String,
+        tx: mpsc::Sender<GatewayMessage>,
+        shutdown: oneshot::Sender<()>,
+    ) -> bool {
+        self.register_with_runtime_state(sandbox_id, session_id, tx, shutdown, false)
+    }
+
+    fn register_with_runtime_state(
+        &self,
+        sandbox_id: String,
+        session_id: String,
+        tx: mpsc::Sender<GatewayMessage>,
+        shutdown: oneshot::Sender<()>,
+        runtime_ready: bool,
+    ) -> bool {
         let mut sessions = self.sessions.lock().unwrap();
         let previous = sessions.remove(&sandbox_id);
         sessions.insert(
@@ -406,6 +429,7 @@ impl SupervisorSessionRegistry {
                 endpoint_status_initialized: false,
                 endpoint_report_cursor: None,
                 provider_readiness: None,
+                runtime_ready,
                 connected_at: Instant::now(),
             },
         );
@@ -491,6 +515,26 @@ impl SupervisorSessionRegistry {
 
     pub fn has_session(&self, sandbox_id: &str) -> bool {
         self.sessions.lock().unwrap().contains_key(sandbox_id)
+    }
+
+    pub fn is_runtime_ready(&self, sandbox_id: &str) -> bool {
+        self.sessions
+            .lock()
+            .unwrap()
+            .get(sandbox_id)
+            .is_some_and(|session| session.runtime_ready)
+    }
+
+    fn mark_runtime_ready(&self, sandbox_id: &str, session_id: &str) -> bool {
+        let mut sessions = self.sessions.lock().unwrap();
+        let Some(session) = sessions.get_mut(sandbox_id) else {
+            return false;
+        };
+        if session.session_id != session_id {
+            return false;
+        }
+        session.runtime_ready = true;
+        true
     }
 
     pub fn terminal_delivery_finalized(&self, sandbox_id: &str) -> bool {
@@ -1418,12 +1462,21 @@ async fn accept_supervisor_session(
         };
         accepted_payload.bootstrap = None;
     }
-    let superseded = state.supervisor_sessions.register(
-        sandbox_id.clone(),
-        session_id.clone(),
-        session_tx.clone(),
-        shutdown_tx,
-    );
+    let superseded = if stream_applies_config {
+        state.supervisor_sessions.register_initializing(
+            sandbox_id.clone(),
+            session_id.clone(),
+            session_tx.clone(),
+            shutdown_tx,
+        )
+    } else {
+        state.supervisor_sessions.register(
+            sandbox_id.clone(),
+            session_id.clone(),
+            session_tx.clone(),
+            shutdown_tx,
+        )
+    };
     if superseded {
         info!(
             sandbox_id = %sandbox_id,
@@ -1467,7 +1520,7 @@ async fn accept_supervisor_session(
     }
 
     if !stream_applies_config
-        && !mark_supervisor_initialized(&state, &sandbox_id, &session_id, &instance_id).await
+        && !mark_supervisor_initialized(&state, &sandbox_id, &session_id, &instance_id, false).await
     {
         state
             .supervisor_sessions
@@ -2231,6 +2284,22 @@ async fn handle_supervisor_message(
                 }
             }
         }
+        Some(supervisor_message::Payload::RuntimeReady(_)) => {
+            if !stream_applies_config {
+                debug!(
+                    sandbox_id,
+                    session_id, "ignored runtime-ready from compatibility supervisor"
+                );
+                return;
+            }
+            if !mark_supervisor_initialized(state, sandbox_id, session_id, instance_id, true).await
+            {
+                warn!(
+                    sandbox_id,
+                    session_id, "failed to persist supervisor runtime readiness"
+                );
+            }
+        }
         _ => {
             warn!(
                 sandbox_id = %sandbox_id,
@@ -2312,6 +2381,7 @@ async fn mark_supervisor_initialized(
     sandbox_id: &str,
     session_id: &str,
     instance_id: &str,
+    require_activated_configuration: bool,
 ) -> bool {
     if !state
         .supervisor_sessions
@@ -2319,11 +2389,18 @@ async fn mark_supervisor_initialized(
     {
         return false;
     }
-    if let Err(err) = state
-        .compute
-        .supervisor_session_connected(sandbox_id, instance_id)
-        .await
-    {
+    let persisted = if require_activated_configuration {
+        state
+            .compute
+            .supervisor_runtime_ready(sandbox_id, instance_id)
+            .await
+    } else {
+        state
+            .compute
+            .supervisor_session_connected(sandbox_id, instance_id)
+            .await
+    };
+    if let Err(err) = persisted {
         warn!(
             sandbox_id,
             session_id,
@@ -2331,9 +2408,14 @@ async fn mark_supervisor_initialized(
             "supervisor session: failed to mark sandbox initialized"
         );
         false
-    } else {
+    } else if state
+        .supervisor_sessions
+        .mark_runtime_ready(sandbox_id, session_id)
+    {
         state.telemetry.sandbox_session_connected(sandbox_id);
         true
+    } else {
+        false
     }
 }
 
@@ -2592,8 +2674,15 @@ mod tests {
                 },
             )),
         };
-        let decoded = SupervisorMessage::decode(result.encode_to_vec().as_slice()).unwrap();
-        assert_eq!(decoded, result);
+        let runtime_ready = SupervisorMessage {
+            payload: Some(supervisor_message::Payload::RuntimeReady(
+                openshell_core::proto::SupervisorRuntimeReady {},
+            )),
+        };
+        for original in [result, runtime_ready] {
+            let decoded = SupervisorMessage::decode(original.encode_to_vec().as_slice()).unwrap();
+            assert_eq!(decoded, original);
+        }
     }
 
     #[test]

@@ -434,6 +434,7 @@ pub fn spawn_with_readiness(
         session_id_updates: runtime.session_id_updates,
         config_apply_tx: runtime.config_apply_tx,
         ready_tx,
+        runtime_ready: Arc::new(AtomicBool::new(true)),
     };
     (tokio::spawn(run_session_loop(config, None)), ready_rx)
 }
@@ -477,8 +478,15 @@ pub fn spawn_prepared(
     terminating: Arc<AtomicBool>,
     config_apply_tx: mpsc::Sender<ConfigApplyRequest>,
     session_id_updates: Option<watch::Sender<Option<String>>>,
-) -> (tokio::task::JoinHandle<()>, watch::Receiver<bool>) {
+) -> (
+    tokio::task::JoinHandle<()>,
+    watch::Receiver<bool>,
+    mpsc::Sender<SupervisorMessage>,
+    Arc<AtomicBool>,
+) {
     let (ready_tx, ready_rx) = watch::channel(false);
+    let outbound = prepared.tx.clone();
+    let runtime_ready = Arc::new(AtomicBool::new(false));
     let config = SessionConfig {
         endpoint: prepared.endpoint.clone(),
         sandbox_id: prepared.sandbox_id.clone(),
@@ -490,11 +498,10 @@ pub fn spawn_prepared(
         config_apply_tx: Some(config_apply_tx),
         session_id_updates,
         ready_tx,
+        runtime_ready: runtime_ready.clone(),
     };
-    (
-        tokio::spawn(run_session_loop(config, Some((prepared, bootstrap_result)))),
-        ready_rx,
-    )
+    let task = tokio::spawn(run_session_loop(config, Some((prepared, bootstrap_result))));
+    (task, ready_rx, outbound, runtime_ready)
 }
 
 struct SessionConfig {
@@ -509,6 +516,7 @@ struct SessionConfig {
     /// Publishes the currently accepted session to sibling control-plane reporters.
     session_id_updates: Option<watch::Sender<Option<String>>>,
     ready_tx: watch::Sender<bool>,
+    runtime_ready: Arc<AtomicBool>,
 }
 
 async fn run_session_loop(
@@ -765,6 +773,7 @@ async fn run_prepared_session(
                     config_apply_tx: config.config_apply_tx.as_ref(),
                     config_sequences: &config_sequences,
                     ready_tx: &config.ready_tx,
+                    runtime_ready: &config.runtime_ready,
                 };
                 handle_gateway_message(
                     &msg,
@@ -937,6 +946,7 @@ struct GatewayMessageContext<'a> {
     config_apply_tx: Option<&'a mpsc::Sender<ConfigApplyRequest>>,
     config_sequences: &'a Arc<Mutex<ConfigSequenceWatermarks>>,
     ready_tx: &'a watch::Sender<bool>,
+    runtime_ready: &'a Arc<AtomicBool>,
 }
 
 fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<'_>) {
@@ -948,6 +958,18 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
             let accepted = admission.state
                 == i32::from(openshell_core::proto::ConfigurationAdmissionState::Accepted);
             context.ready_tx.send_replace(accepted);
+            if accepted && context.runtime_ready.load(Ordering::Acquire) {
+                let tx = context.tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(SupervisorMessage {
+                            payload: Some(supervisor_message::Payload::RuntimeReady(
+                                openshell_core::proto::SupervisorRuntimeReady {},
+                            )),
+                        })
+                        .await;
+                });
+            }
         }
         Some(gateway_message::Payload::ConfigUpdate(update)) => {
             let update = update.clone();

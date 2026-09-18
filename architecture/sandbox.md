@@ -664,12 +664,16 @@ sequenceDiagram
     GW->>SUP: ConfigurationAdmission(durable state)
     alt Configuration accepted
         SUP->>SUP: Launch workload
+        SUP->>GW: SupervisorRuntimeReady
+        GW->>DB: Promote sandbox to Ready
     else Configuration rejected
         GW->>SUP: ConfigUpdate(repaired snapshot)
         SUP->>GW: ConfigUpdateResult(component outcome, admission)
         GW->>DB: Persist accepted repair
         GW->>SUP: ConfigurationAdmission(accepted)
         SUP->>SUP: Launch workload on the same supervisor
+        SUP->>GW: SupervisorRuntimeReady
+        GW->>DB: Promote sandbox to Ready
     end
 ```
 
@@ -699,8 +703,9 @@ The gateway validates generation identity, persists admission, and returns that
 durable state on the stream. The supervisor holds the workload boundary until
 it receives an accepted acknowledgement. Rejection leaves the stream and
 supervisor alive so a later complete replacement can repair the generation and
-release the same workload. Compatibility protocol revisions continue using
-polling.
+release the same workload. After launch, the supervisor separately reports
+runtime readiness once its relay plane is usable; admission alone never promotes
+the sandbox to `Ready`. Compatibility protocol revisions continue using polling.
 
 The gateway serializes construction per sandbox and component, and coalesces
 repeated mutations into the latest full snapshot. An enqueue result means only
