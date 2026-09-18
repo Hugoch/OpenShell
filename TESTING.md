@@ -267,8 +267,30 @@ The currently implemented conformance pairs are:
 Nix and tmachine caches may reuse immutable setup and installation layers, while
 each test runs on a fresh writable overlay.
 
-The repository still provides legacy aggregate commands for checks that have
-not migrated to Nix outputs:
+Integration coverage that has not migrated to tmachine remains available through
+these legacy paths:
+
+| Current legacy path | Command |
+|---|---|
+| Portable CLI conformance | `mise run e2e:cli-conformance` |
+| Docker | `mise run e2e:docker` |
+| Podman | `mise run e2e:podman` |
+| Kubernetes | `mise run e2e:kubernetes` |
+| VM | `mise run e2e:vm` |
+| Python SDK E2E | `mise run e2e:python` |
+| MCP conformance | `mise run e2e:mcp` |
+| Docker GPU | `mise run e2e:docker:gpu` |
+| External Docker driver | `mise run e2e:docker:external-driver` |
+| External Podman driver | `mise run e2e:podman:external-driver` |
+| External Kubernetes driver | `mise run e2e:kubernetes:external-driver` |
+| External VM driver | `mise run e2e:vm:external-driver` |
+
+These commands are migration bridges. `tasks/test.toml` defines them, and
+`mise tasks` lists specialized variants. Remove an entry when equivalent
+tmachine coverage replaces it.
+
+The repository also provides legacy aggregate commands for checks that have not
+migrated to Nix outputs:
 
 ```shell
 mise run pre-commit
@@ -276,9 +298,8 @@ mise run test
 mise run ci
 ```
 
-Use `mise tasks` to discover focused legacy tasks. These commands describe the
-current transition state; they are not the desired long-term integration-test
-interface.
+These commands describe the current transition state; they are not the desired
+long-term integration-test interface.
 
 ### Desired interface
 
