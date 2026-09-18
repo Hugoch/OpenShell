@@ -7,6 +7,7 @@ mod auth_rpc;
 pub mod mutation_replay;
 pub mod policy;
 pub mod provider;
+pub mod provider_readiness;
 mod sandbox;
 pub use sandbox::mint_persisted_authentication;
 mod service;
@@ -37,7 +38,8 @@ use openshell_core::proto::{
     GetProviderRefreshStatusResponse, GetProviderRequest, GetSandboxConfigRequest,
     GetSandboxConfigResponse, GetSandboxLogsRequest, GetSandboxLogsResponse,
     GetSandboxPolicyStatusRequest, GetSandboxPolicyStatusResponse,
-    GetSandboxProviderEnvironmentRequest, GetSandboxProviderEnvironmentResponse, GetSandboxRequest,
+    GetSandboxProviderEnvironmentRequest, GetSandboxProviderEnvironmentResponse,
+    GetSandboxProviderStatusRequest, GetSandboxProviderStatusResponse, GetSandboxRequest,
     GetSandboxTemplateRequest, GetServiceRequest, GetWorkspaceRequest, GetWorkspaceResponse,
     GpuResourceCapabilities, HealthRequest, HealthResponse, ImportProviderProfilesRequest,
     ImportProviderProfilesResponse, IssueSandboxTokenRequest, IssueSandboxTokenResponse,
@@ -52,12 +54,13 @@ use openshell_core::proto::{
     RefreshSandboxTokenResponse, RejectDraftChunkRequest, RejectDraftChunkResponse, RelayFrame,
     RemoveWorkspaceMemberRequest, RemoveWorkspaceMemberResponse, ReportEndpointStatusRequest,
     ReportEndpointStatusResponse, ReportMainProcessExitRequest, ReportMainProcessExitResponse,
-    ReportPolicyStatusRequest, ReportPolicyStatusResponse, ResourceCapabilities,
-    RevokeSshSessionRequest, RevokeSshSessionResponse, RotateProviderCredentialRequest,
-    RotateProviderCredentialResponse, SandboxResponse, SandboxTemplateResponse,
-    ServiceEndpointResponse, ServiceStatus, StartSandboxRequest, StopSandboxRequest,
-    SubmitPolicyAnalysisRequest, SubmitPolicyAnalysisResponse, SupervisorMessage, TcpForwardFrame,
-    UndoDraftChunkRequest, UndoDraftChunkResponse, UpdateConfigRequest, UpdateConfigResponse,
+    ReportPolicyStatusRequest, ReportPolicyStatusResponse, ReportProviderReadinessRequest,
+    ReportProviderReadinessResponse, ResourceCapabilities, RevokeSshSessionRequest,
+    RevokeSshSessionResponse, RotateProviderCredentialRequest, RotateProviderCredentialResponse,
+    SandboxResponse, SandboxTemplateResponse, ServiceEndpointResponse, ServiceStatus,
+    StartSandboxRequest, StopSandboxRequest, SubmitPolicyAnalysisRequest,
+    SubmitPolicyAnalysisResponse, SupervisorMessage, TcpForwardFrame, UndoDraftChunkRequest,
+    UndoDraftChunkResponse, UpdateConfigRequest, UpdateConfigResponse,
     UpdateProviderProfilesRequest, UpdateProviderProfilesResponse, UpdateProviderRequest,
     WatchSandboxRequest, open_shell_server::OpenShell,
 };
@@ -170,10 +173,20 @@ const MAX_LABEL_SELECTOR_PAIRS: usize = 64;
 struct StoredSettings {
     revision: u64,
     settings: BTreeMap<String, StoredSettingValue>,
+    /// Per-key commit clocks, including deletion tombstones. Persisted in the
+    /// same CAS payload as values so polling and restart cannot refresh them.
+    #[serde(default)]
+    change_clocks: BTreeMap<String, SettingChangeClock>,
     /// Database `resource_version` for CAS. Not persisted in the JSON payload;
     /// loaded from `ObjectRecord` and used for optimistic concurrency control.
     #[serde(skip)]
     resource_version: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SettingChangeClock {
+    id: String,
+    committed_at_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -347,6 +360,20 @@ impl OpenShell for OpenShellService {
         request: Request<DetachSandboxProviderRequest>,
     ) -> Result<Response<DetachSandboxProviderResponse>, Status> {
         mutation_replay::run(&self.state, request).await
+    }
+
+    async fn get_sandbox_provider_status(
+        &self,
+        request: Request<GetSandboxProviderStatusRequest>,
+    ) -> Result<Response<GetSandboxProviderStatusResponse>, Status> {
+        provider_readiness::handle_get_sandbox_provider_status(&self.state, request).await
+    }
+
+    async fn report_provider_readiness(
+        &self,
+        request: Request<ReportProviderReadinessRequest>,
+    ) -> Result<Response<ReportProviderReadinessResponse>, Status> {
+        provider_readiness::handle_report_provider_readiness(&self.state, request).await
     }
 
     async fn delete_sandbox(
@@ -614,6 +641,13 @@ impl OpenShell for OpenShellService {
         request: Request<ReportEndpointStatusRequest>,
     ) -> Result<Response<ReportEndpointStatusResponse>, Status> {
         policy::handle_report_endpoint_status(&self.state, request).await
+    }
+
+    async fn report_sandbox_configuration(
+        &self,
+        request: Request<openshell_core::proto::ReportSandboxConfigurationRequest>,
+    ) -> Result<Response<openshell_core::proto::ReportSandboxConfigurationResponse>, Status> {
+        policy::handle_report_sandbox_configuration(&self.state, request).await
     }
 
     // --- Sandbox logs ---
@@ -892,6 +926,7 @@ pub mod test_support {
                     sandbox_id: sandbox_id.into(),
                     instance_id: "instance".into(),
                     protocol_revision,
+                    supports_provider_readiness: false,
                 })),
             })
             .await
@@ -930,25 +965,78 @@ pub mod test_support {
         req
     }
 
+    /// Store the example profiles from `providers/` as platform-scoped
+    /// user-managed profiles.
+    ///
+    /// `OpenShell` compiles no provider profile into a binary, so a gateway's
+    /// catalog holds exactly what an operator imported. Tests that expect
+    /// `github`, `openai` and the rest to resolve therefore have to import them
+    /// first, which is what this does.
+    pub async fn seed_example_provider_profiles(store: &Store) {
+        for profile in openshell_providers::example_profiles::load_all() {
+            store
+                .put_message(&crate::provider_profile_sources::stored_provider_profile(
+                    profile.to_proto(),
+                ))
+                .await
+                .expect("store example provider profile");
+        }
+    }
+
+    /// The provider-profile source set every test state uses: user-managed
+    /// profiles only, matching the gateway default.
+    fn test_provider_profile_sources() -> crate::provider_profile_sources::ProviderProfileSources {
+        crate::provider_profile_sources::ProviderProfileSources::from_config(
+            &[openshell_core::GatewayProviderProfileSourceConfig::User],
+            None,
+        )
+        .expect("user-only provider profile source configuration should be valid")
+    }
+
+    fn with_test_provider_profile_sources(mut state: Arc<ServerState>) -> Arc<ServerState> {
+        Arc::get_mut(&mut state)
+            .expect("test server state should be uniquely owned")
+            .provider_profile_sources = test_provider_profile_sources();
+        state
+    }
+
     /// Build an in-memory `ServerState` for unit tests.
     pub async fn test_server_state() -> Arc<ServerState> {
         test_server_state_with_driver("test").await
     }
 
+    /// Build a test state for a gateway with nothing imported.
+    ///
+    /// Its profile catalog is empty, which is the state a freshly installed
+    /// gateway starts in.
+    pub async fn test_server_state_without_provider_profiles() -> Arc<ServerState> {
+        test_server_state_for_driver("test", false).await
+    }
+
     /// Build an in-memory `ServerState` with a selected built-in driver name.
     pub async fn test_server_state_with_driver(driver_name: &str) -> Arc<ServerState> {
+        test_server_state_for_driver(driver_name, true).await
+    }
+
+    async fn test_server_state_for_driver(
+        driver_name: &str,
+        seed_profiles: bool,
+    ) -> Arc<ServerState> {
         let store = Arc::new(
             Store::connect("sqlite::memory:?cache=shared")
                 .await
                 .unwrap(),
         );
         crate::ensure_default_workspace(&store).await.unwrap();
+        if seed_profiles {
+            seed_example_provider_profiles(&store).await;
+        }
         let compute = if driver_name == "test" {
             new_test_runtime(store.clone()).await
         } else {
             new_test_runtime_for_driver(store.clone(), driver_name).await
         };
-        Arc::new(ServerState::new(
+        with_test_provider_profile_sources(Arc::new(ServerState::new(
             Config::new(None)
                 .with_database_url("sqlite::memory:?cache=shared")
                 .with_credential_drivers(["test-static"]),
@@ -959,7 +1047,7 @@ pub mod test_support {
             TracingLogBus::new(),
             Arc::new(SupervisorSessionRegistry::new()),
             None,
-        ))
+        )))
     }
 
     /// Build a test state whose compute driver fails the requested number of
@@ -973,9 +1061,10 @@ pub mod test_support {
                 .unwrap(),
         );
         crate::ensure_default_workspace(&store).await.unwrap();
+        seed_example_provider_profiles(&store).await;
         let driver = Arc::new(NoopTestDriver::failing_workspace_deletes(failures));
         let compute = new_test_runtime_with_driver(store.clone(), "test", driver);
-        Arc::new(ServerState::new(
+        with_test_provider_profile_sources(Arc::new(ServerState::new(
             Config::new(None)
                 .with_database_url("sqlite::memory:?cache=shared")
                 .with_credential_drivers(["test-static"]),
@@ -986,7 +1075,7 @@ pub mod test_support {
             TracingLogBus::new(),
             Arc::new(SupervisorSessionRegistry::new()),
             None,
-        ))
+        )))
     }
 }
 

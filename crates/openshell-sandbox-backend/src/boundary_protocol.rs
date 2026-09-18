@@ -520,6 +520,8 @@ impl fmt::Debug for RequestEnvelope {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
+    /// Read image policy without attaching or launching a workload.
+    DiscoverPolicy,
     Attach {
         supervisor_instance_id: SupervisorInstanceId,
         policy: Box<SandboxPolicyWire>,
@@ -536,7 +538,8 @@ pub enum Request {
         provider_env: std::collections::HashMap<String, String>,
     },
     UpdateProviderEnvironment {
-        expected_revision: u64,
+        /// Ordered publication within this authenticated boundary session.
+        generation: u64,
         revision: u64,
         provider_env: std::collections::HashMap<String, String>,
     },
@@ -602,6 +605,7 @@ impl Request {
 impl fmt::Debug for Request {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DiscoverPolicy => formatter.write_str("DiscoverPolicy"),
             Self::Attach {
                 supervisor_instance_id: _,
                 policy: _,
@@ -634,12 +638,12 @@ impl fmt::Debug for Request {
                 )
                 .finish(),
             Self::UpdateProviderEnvironment {
-                expected_revision,
+                generation,
                 revision,
                 provider_env,
             } => formatter
                 .debug_struct("UpdateProviderEnvironment")
-                .field("expected_revision", expected_revision)
+                .field("generation", generation)
                 .field("revision", revision)
                 .field(
                     "provider_env_keys",
@@ -700,6 +704,10 @@ pub struct ResponseEnvelope {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Response {
+    ImagePolicy {
+        yaml: Option<String>,
+        invalid: bool,
+    },
     Attached {
         snapshot: SessionSnapshotWire,
     },
@@ -710,9 +718,13 @@ pub enum Response {
     Started {
         process_id: String,
         provider_env_revision: u64,
+        provider_env_generation: u64,
     },
     ProviderEnvironmentUpdated {
         revision: u64,
+        generation: u64,
+        /// True only for this installed request or its exact idempotent replay.
+        applied: bool,
     },
     ProcessAttached {
         terminal: bool,
@@ -1298,7 +1310,7 @@ mod tests {
         second.insert("A".to_string(), "1".to_string());
         second.insert("B".to_string(), "2".to_string());
         let build = |provider_env| Request::UpdateProviderEnvironment {
-            expected_revision: 1,
+            generation: 1,
             revision: 2,
             provider_env,
         };

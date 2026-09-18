@@ -396,6 +396,7 @@ async fn run_single_session(
             sandbox_id: config.sandbox_id.clone(),
             instance_id: config.instance_id.clone(),
             protocol_revision: SUPERVISOR_PROTOCOL_REVISION,
+            supports_provider_readiness: true,
         })),
     })
     .await

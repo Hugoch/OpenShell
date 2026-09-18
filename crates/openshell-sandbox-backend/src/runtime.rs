@@ -25,8 +25,8 @@ use openshell_isolation_interface::contract::{
     BoundaryInput, BoundaryLoopbackConnector, BoundaryOutput, BoundaryProcess, BoundarySignal,
     BoundaryTerminal, ConfirmedBoundary, ExecSession, ExecSpec, IsolationBackend, LoopbackTarget,
     MediationTiming, NetworkMediationSource, PendingDnsQuery, PendingTcpOpen, ProcessAttachment,
-    ReadyBoundary, RunningBoundary, SandboxContext, TcpOpenDecision, TcpOpenDenial,
-    VerifiedBackendDescriptor,
+    ProviderEnvironmentInstallation, ReadyBoundary, RunningBoundary, SandboxContext,
+    TcpOpenDecision, TcpOpenDenial, VerifiedBackendDescriptor,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -69,6 +69,20 @@ pub struct OpenShellRuntimeBackend {
 }
 
 impl OpenShellRuntimeBackend {
+    /// Read the workload image policy over the authenticated boundary before admission.
+    pub async fn discover_policy(
+        descriptor: SandboxRuntimeDescriptor,
+        bearer: openshell_core::jwt::SessionBearerTokenSlot,
+    ) -> Result<(Option<String>, bool), BackendError> {
+        let client = BoundaryClient::new(descriptor, bearer);
+        match client.call_idempotent(Request::DiscoverPolicy).await? {
+            Response::ImagePolicy { yaml, invalid } => Ok((yaml, invalid)),
+            _ => Err(BackendError::Descriptor(
+                "expected image policy discovery response".to_string(),
+            )),
+        }
+    }
+
     pub fn new(
         ca_file_paths: Arc<std::sync::Mutex<Option<(PathBuf, PathBuf)>>>,
         provider_credentials: openshell_core::provider_credentials::ProviderCredentialState,
@@ -373,7 +387,8 @@ impl ReadyBoundary for RemoteReady {
             .await?;
         let Response::Started {
             process_id,
-            provider_env_revision,
+            provider_env_generation,
+            ..
         } = response
         else {
             return Err(unexpected_response("started", &response));
@@ -387,7 +402,7 @@ impl ReadyBoundary for RemoteReady {
             exec: Arc::new(RemoteExec {
                 client: self.client.clone(),
                 provider_credentials: self.provider_credentials,
-                boundary_revision: tokio::sync::Mutex::new(provider_env_revision),
+                publication_generation: tokio::sync::Mutex::new(provider_env_generation),
             }),
             loopback_connector: Arc::new(RemoteLoopbackConnector {
                 client: self.client,
@@ -552,30 +567,39 @@ async fn pump_process_responses(
 struct RemoteExec {
     client: Arc<BoundaryClient>,
     provider_credentials: openshell_core::provider_credentials::ProviderCredentialState,
-    boundary_revision: tokio::sync::Mutex<u64>,
+    // Shared by proactive synchronization and exec. Reserve generations before
+    // dispatch so a timed-out request cannot overwrite a newer publication.
+    publication_generation: tokio::sync::Mutex<u64>,
 }
 
-#[async_trait]
-impl BoundaryExec for RemoteExec {
-    async fn exec(&self, spec: ExecSpec) -> Result<ExecSession, BackendError> {
-        let mut boundary_revision = self.boundary_revision.lock().await;
+impl RemoteExec {
+    async fn synchronize(
+        &self,
+        generation: &mut u64,
+    ) -> Result<ProviderEnvironmentInstallation, BackendError> {
         for _ in 0..3 {
-            let (revision, provider_env) = self
+            let snapshot = self
                 .provider_credentials
-                .child_env_snapshot_with_gcp_resolved()
+                .child_environment_snapshot()
                 .map_err(|error| {
                     BackendError::Process(format!("snapshot provider environment: {error}"))
                 })?;
+            *generation = generation.checked_add(1).ok_or_else(|| {
+                BackendError::Process("provider environment publication exhausted".to_string())
+            })?;
+            let requested_generation = *generation;
             let response = self
                 .client
                 .call_idempotent(Request::UpdateProviderEnvironment {
-                    expected_revision: *boundary_revision,
-                    revision,
-                    provider_env,
+                    generation: requested_generation,
+                    revision: snapshot.revision,
+                    provider_env: snapshot.environment,
                 })
                 .await?;
             let Response::ProviderEnvironmentUpdated {
                 revision: effective_revision,
+                generation: effective_generation,
+                applied,
             } = response
             else {
                 return Err(unexpected_response(
@@ -583,14 +607,39 @@ impl BoundaryExec for RemoteExec {
                     &response,
                 ));
             };
-            *boundary_revision = effective_revision;
-            if effective_revision == revision {
-                return open_exec_session(self.client.clone(), spec).await;
+            *generation = (*generation).max(effective_generation);
+            if applied
+                && effective_generation == requested_generation
+                && effective_revision == snapshot.revision
+            {
+                // The acknowledgment is for the exact request, including its
+                // map, even when a repaired map reuses a provider fingerprint.
+                return Ok(ProviderEnvironmentInstallation {
+                    installation_id: snapshot.installation_id,
+                    revision: snapshot.revision,
+                    session_id: self.client.runtime_descriptor.session_id,
+                });
             }
         }
         Err(BackendError::Process(
             "boundary provider environment changed concurrently during reconciliation".to_string(),
         ))
+    }
+}
+
+#[async_trait]
+impl BoundaryExec for RemoteExec {
+    async fn exec(&self, spec: ExecSpec) -> Result<ExecSession, BackendError> {
+        let mut generation = self.publication_generation.lock().await;
+        self.synchronize(&mut generation).await?;
+        open_exec_session(self.client.clone(), spec).await
+    }
+
+    async fn synchronize_provider_environment(
+        &self,
+    ) -> Result<ProviderEnvironmentInstallation, BackendError> {
+        let mut generation = self.publication_generation.lock().await;
+        self.synchronize(&mut generation).await
     }
 }
 
@@ -757,7 +806,10 @@ struct RemoteNetworkMediation {
 #[async_trait]
 impl NetworkMediationSource for RemoteNetworkMediation {
     async fn accept_tcp(&self) -> Result<PendingTcpOpen, BackendError> {
-        let (stream, response) = self.client.open_exchange(Request::AcceptNetwork).await?;
+        // An idle accept has no deadline. Recover transport loss before exposing
+        // a source error, which permanently stops the proxy. The boundary drops
+        // the interrupted pending open; a retry never replays its decision.
+        let (stream, response) = self.client.call_wait_stream(Request::AcceptNetwork).await?;
         let Response::NetworkConnected {
             identity,
             destination,
@@ -1036,7 +1088,7 @@ impl BoundaryClient {
     async fn call_idempotent(&self, request: Request) -> Result<Response, BackendError> {
         let remember_attach = matches!(request, Request::Attach { .. });
         let remember_confirm = matches!(request, Request::Confirm);
-        let timeout = if remember_attach {
+        let timeout = if remember_attach || matches!(request, Request::DiscoverPolicy) {
             ATTACH_REQUEST_TIMEOUT
         } else {
             REQUEST_TIMEOUT
@@ -1044,6 +1096,7 @@ impl BoundaryClient {
         let envelope = Self::prepare_request(request)?;
         tokio::time::timeout(timeout, async {
             loop {
+                let generation = self.connection_generation().await;
                 match self.exchange_envelope(&envelope).await {
                     Ok(response) => {
                         if remember_attach {
@@ -1065,7 +1118,7 @@ impl BoundaryClient {
                     Err(BackendError::Unavailable(message))
                         if is_transport_unavailable(&message) =>
                     {
-                        self.recover_after_unavailable().await?;
+                        self.recover_after_unavailable(generation).await?;
                         tokio::time::sleep(Duration::from_millis(25)).await;
                     }
                     Err(error) => return Err(error),
@@ -1081,10 +1134,21 @@ impl BoundaryClient {
     }
 
     async fn call_wait(&self, request: Request) -> Result<Response, BackendError> {
+        let (_, response) = self.call_wait_stream(request).await?;
+        Ok(response)
+    }
+
+    /// Wait without an idle timeout, retaining the stream for TCP mediation.
+    /// Only transport failures enter recovery; boundary rejections stay terminal.
+    async fn call_wait_stream(
+        &self,
+        request: Request,
+    ) -> Result<(BoundaryDuplexStream, Response), BackendError> {
         let envelope = Self::prepare_request(request)?;
         let mut recovery_deadline = None;
         loop {
-            match self.exchange_envelope(&envelope).await {
+            let generation = self.connection_generation().await;
+            match self.open_exchange_envelope(&envelope).await {
                 Ok(response) => return Ok(response),
                 Err(BackendError::Unavailable(message)) if is_transport_unavailable(&message) => {
                     let deadline =
@@ -1092,7 +1156,7 @@ impl BoundaryClient {
                     if tokio::time::Instant::now() >= deadline {
                         return Err(BackendError::Unavailable(message));
                     }
-                    self.recover_after_unavailable().await?;
+                    self.recover_after_unavailable(generation).await?;
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
                 Err(error) => return Err(error),
@@ -1107,12 +1171,13 @@ impl BoundaryClient {
         let envelope = Self::prepare_request(request)?;
         tokio::time::timeout(REQUEST_TIMEOUT, async {
             loop {
+                let generation = self.connection_generation().await;
                 match self.open_exchange_envelope(&envelope).await {
                     Ok(response) => return Ok(response),
                     Err(BackendError::Unavailable(message))
                         if is_transport_unavailable(&message) =>
                     {
-                        self.recover_after_unavailable().await?;
+                        self.recover_after_unavailable(generation).await?;
                         tokio::time::sleep(Duration::from_millis(25)).await;
                     }
                     Err(error) => return Err(error),
@@ -1130,12 +1195,13 @@ impl BoundaryClient {
         let envelope = Self::prepare_request(request)?;
         tokio::time::timeout(REQUEST_TIMEOUT, async {
             loop {
+                let generation = self.connection_generation().await;
                 match self.open_exchange_envelope(&envelope).await {
                     Ok(response) => return Ok(response),
                     Err(BackendError::Unavailable(message))
                         if is_transport_unavailable(&message) =>
                     {
-                        self.recover_after_unavailable().await?;
+                        self.recover_after_unavailable(generation).await?;
                         tokio::time::sleep(Duration::from_millis(25)).await;
                     }
                     Err(error) => return Err(error),
@@ -1159,6 +1225,7 @@ impl BoundaryClient {
             .map_err(|error| BackendError::Process(format!("encode control request: {error}")))
     }
 
+    #[cfg(test)]
     async fn open_exchange(
         &self,
         request: Request,
@@ -1318,15 +1385,21 @@ impl BoundaryClient {
         Ok(())
     }
 
-    /// Replace a failed physical transport and replay the authenticated
-    /// lifecycle needed to make the new HTTP/2 connection authoritative.
-    async fn recover_after_unavailable(&self) -> Result<(), BackendError> {
-        let observed_generation = self
-            .grpc_channel
+    async fn connection_generation(&self) -> Option<u64> {
+        self.grpc_channel
             .lock()
             .await
             .as_ref()
-            .map(|cached| cached.generation);
+            .map(|cached| cached.generation)
+    }
+
+    /// Replace a failed physical transport and replay its authenticated lifecycle.
+    /// Capture the generation before the attempt: a late failure from an old
+    /// connection must not retire one another caller has already recovered.
+    async fn recover_after_unavailable(
+        &self,
+        observed_generation: Option<u64>,
+    ) -> Result<(), BackendError> {
         let _reconnect = self.reconnect.lock().await;
         if self
             .grpc_channel
@@ -1446,12 +1519,13 @@ impl BoundaryClient {
         // waiting. Never multiply that deadline with message-matching retries.
         let session = tokio::time::timeout(REQUEST_TIMEOUT, async {
             loop {
+                let generation = self.connection_generation().await;
                 match self.open_mediation_session().await {
                     Ok(session) => return Ok(session),
                     Err(BackendError::Unavailable(message))
                         if is_transport_unavailable(&message) =>
                     {
-                        self.recover_after_unavailable().await?;
+                        self.recover_after_unavailable(generation).await?;
                         tokio::time::sleep(Duration::from_millis(25)).await;
                     }
                     Err(error) => return Err(error),
@@ -1715,6 +1789,10 @@ where
             }
             Err(error) => {
                 tracing::debug!(%error, "boundary gRPC response stream ended");
+                // The request pump still owns the other duplex half. Explicitly
+                // close this direction so a waiting exchange observes EOF and
+                // can recover instead of waiting for both halves to drop.
+                let _ = writer.shutdown().await;
                 return;
             }
         }
@@ -1829,6 +1907,7 @@ fn is_transport_unavailable(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     mod credential_renewal;
+    mod network_recovery;
 
     use std::path::PathBuf;
     use std::pin::Pin;
@@ -1872,6 +1951,7 @@ mod tests {
         requests: Arc<std::sync::atomic::AtomicUsize>,
         mediation_failures: Arc<std::sync::atomic::AtomicUsize>,
         mediation_ready: bool,
+        provider_environment_generation: u64,
     }
 
     type TestGrpcStream = Pin<
@@ -1900,6 +1980,7 @@ mod tests {
             let wait_for_half_close = self.wait_for_half_close;
             let requests = self.requests.clone();
             let mediation_ready = self.mediation_ready;
+            let provider_environment_generation = self.provider_environment_generation;
             let (outbound, outbound_rx) = tokio::sync::mpsc::channel(1);
             tokio::spawn(async move {
                 let mut frame = Vec::new();
@@ -1932,6 +2013,10 @@ mod tests {
                     match encode_frame(&ResponseEnvelope {
                         request_id: envelope.request_id,
                         response: match envelope.request {
+                            Request::DiscoverPolicy => Response::ImagePolicy {
+                                yaml: None,
+                                invalid: false,
+                            },
                             Request::Attach { .. } => Response::Attached {
                                 snapshot: crate::boundary_protocol::SessionSnapshotWire {
                                     generation: "test-generation".to_string(),
@@ -1961,9 +2046,15 @@ mod tests {
                             }
                             Request::Terminate { .. } => Response::Terminated,
                             Request::TerminateBoundary => Response::BoundaryTerminated,
-                            Request::UpdateProviderEnvironment { revision, .. } => {
-                                Response::ProviderEnvironmentUpdated { revision }
-                            }
+                            Request::UpdateProviderEnvironment {
+                                revision,
+                                generation,
+                                ..
+                            } => Response::ProviderEnvironmentUpdated {
+                                revision,
+                                generation: generation.max(provider_environment_generation),
+                                applied: generation > provider_environment_generation,
+                            },
                             Request::Resize { .. } => Response::Resized,
                             Request::LoopbackConnect { .. } => Response::PortConnected,
                             Request::StartAgent {
@@ -1972,6 +2063,7 @@ mod tests {
                             } => Response::Started {
                                 process_id: "test-generation:main:0".to_string(),
                                 provider_env_revision,
+                                provider_env_generation: provider_environment_generation,
                             },
                             Request::AcceptNetwork => Response::Error {
                                 kind: crate::boundary_protocol::BoundaryErrorKind::Unavailable,
@@ -2036,6 +2128,7 @@ mod tests {
             requests: requests.clone(),
             mediation_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mediation_ready: false,
+            provider_environment_generation: 0,
         };
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -2099,6 +2192,7 @@ mod tests {
                     requests: server_requests.clone(),
                     mediation_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                     mediation_ready: false,
+                    provider_environment_generation: 0,
                 };
                 tokio::spawn(async move {
                     tonic::transport::Server::builder()
@@ -2129,11 +2223,29 @@ mod tests {
             Response::Confirmed { .. }
         ));
 
-        client.recover_after_unavailable().await.unwrap();
+        let failed_generation = client.connection_generation().await;
+        client
+            .recover_after_unavailable(failed_generation)
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(1), server)
             .await
             .expect("replacement connection accepted")
             .unwrap();
+        assert_eq!(accepted.load(Ordering::Acquire), 2);
+        assert_eq!(requests.load(Ordering::Acquire), 4);
+
+        // Another accept can report the same transport loss after recovery.
+        // It must reuse the replacement without a third connection or replay.
+        let recovered_generation = client.connection_generation().await;
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            client.recover_after_unavailable(failed_generation),
+        )
+        .await
+        .expect("stale failure must reuse the recovered connection")
+        .unwrap();
+        assert_eq!(client.connection_generation().await, recovered_generation);
         assert_eq!(accepted.load(Ordering::Acquire), 2);
         assert_eq!(requests.load(Ordering::Acquire), 4);
     }
@@ -2173,6 +2285,7 @@ mod tests {
                     requests: server_requests.clone(),
                     mediation_failures: server_failures.clone(),
                     mediation_ready: true,
+                    provider_environment_generation: 0,
                 };
                 tokio::spawn(async move {
                     tonic::transport::Server::builder()
@@ -2226,6 +2339,7 @@ mod tests {
             requests,
             mediation_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mediation_ready: false,
+            provider_environment_generation: 0,
         };
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -2398,6 +2512,7 @@ mod tests {
             requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mediation_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mediation_ready: false,
+            provider_environment_generation: 0,
         };
         tonic::transport::Server::builder()
             .add_service(IsolationBoundaryServer::new(service))
@@ -2717,6 +2832,7 @@ mod tests {
             requests: handled.clone(),
             mediation_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             mediation_ready: false,
+            provider_environment_generation: 0,
         };
         let server = tokio::spawn(async move {
             loop {
@@ -2773,6 +2889,110 @@ mod tests {
         assert_eq!(handled.load(Ordering::Acquire), REQUESTS);
         assert_eq!(accepted.load(Ordering::Acquire), 1);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn reconstructed_backend_resumes_the_running_boundary_publication_generation() {
+        let certificate = test_certificate();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let service = TestGrpcBoundary {
+            wait_for_half_close: false,
+            expected_token: "a".repeat(32),
+            requests: requests.clone(),
+            mediation_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            mediation_ready: false,
+            provider_environment_generation: 50,
+        };
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let stream = tokio_rustls::TlsAcceptor::from(certificate.server_config)
+                .accept(stream)
+                .await
+                .unwrap();
+            tonic::transport::Server::builder()
+                .add_service(IsolationBoundaryServer::new(service))
+                .serve_with_incoming(tokio_stream::iter([Ok::<_, std::io::Error>(TestTlsIo(
+                    Box::new(stream),
+                ))]))
+                .await
+                .unwrap();
+        });
+        let credentials =
+            openshell_core::provider_credentials::ProviderCredentialState::from_child_env_snapshot(
+                6,
+                HashMap::new(),
+            );
+        let context = sandbox();
+        let ready = Box::new(RemoteReady {
+            client: Arc::new(BoundaryClient::new(
+                tls_runtime_descriptor(address, certificate.client_tls),
+                test_bearer(&"a".repeat(32)),
+            )),
+            agent: context.agent,
+            policy: context.policy,
+            sandbox_id: context.sandbox_id,
+            ca_file_paths: Arc::new(std::sync::Mutex::new(None)),
+            provider_credentials: credentials.clone(),
+        });
+        let running = ready.start_agent().await.unwrap();
+        assert_eq!(requests.load(Ordering::Acquire), 1);
+        let installed = running
+            .exec()
+            .synchronize_provider_environment()
+            .await
+            .unwrap();
+        assert_eq!(
+            requests.load(Ordering::Acquire),
+            2,
+            "the first update must advance the returned generation, without rejected catch-up calls"
+        );
+        assert_eq!(
+            installed.installation_id,
+            credentials.snapshot().installation_id
+        );
+        assert_eq!(installed.session_id, test_session_id());
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn provider_environment_acknowledges_the_exact_local_snapshot_and_checked_generation() {
+        let certificate = test_certificate();
+        let (address, server) = spawn_tls_boundary(certificate.server_config, "a".repeat(32)).await;
+        let credentials =
+            openshell_core::provider_credentials::ProviderCredentialState::from_child_env_snapshot(
+                6,
+                HashMap::new(),
+            );
+        let client = Arc::new(BoundaryClient::new(
+            tls_runtime_descriptor(address, certificate.client_tls),
+            test_bearer(&"a".repeat(32)),
+        ));
+        let exec = RemoteExec {
+            client,
+            provider_credentials: credentials.clone(),
+            publication_generation: tokio::sync::Mutex::new(0),
+        };
+        let empty = exec.synchronize_provider_environment().await.unwrap();
+        credentials
+            .install_child_env_snapshot(6, HashMap::from([("TOKEN".into(), "restored".into())]));
+        let repaired = exec.synchronize_provider_environment().await.unwrap();
+        assert_eq!(empty.revision, repaired.revision);
+        assert_ne!(empty.installation_id, repaired.installation_id);
+        assert_eq!(
+            repaired.installation_id,
+            credentials.snapshot().installation_id
+        );
+        assert_eq!(*exec.publication_generation.lock().await, 2);
+        *exec.publication_generation.lock().await = u64::MAX;
+        assert!(
+            exec.synchronize_provider_environment().await.is_err(),
+            "publication exhaustion must fail before sending another request"
+        );
+        server.abort();
+        let _ = server.await;
     }
 
     #[tokio::test]

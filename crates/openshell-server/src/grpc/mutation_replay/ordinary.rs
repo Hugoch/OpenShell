@@ -20,8 +20,8 @@ use openshell_core::proto::{
     DeleteSandboxRequest, DeleteSandboxResponse, DeleteServiceRequest, DeleteServiceResponse,
     DetachSandboxProviderRequest, DetachSandboxProviderResponse, EditDraftChunkRequest,
     EditDraftChunkResponse, ExposeServiceRequest, ImportProviderProfilesRequest,
-    ImportProviderProfilesResponse, Provider, ProviderProfile, ProviderProfileDiagnostic,
-    ProviderResponse, RejectDraftChunkRequest, RejectDraftChunkResponse,
+    ImportProviderProfilesResponse, Provider, ProviderMutationReceipt, ProviderProfile,
+    ProviderProfileDiagnostic, ProviderResponse, RejectDraftChunkRequest, RejectDraftChunkResponse,
     RotateProviderCredentialRequest, RotateProviderCredentialResponse, Sandbox, SandboxResponse,
     ServiceEndpointResponse, StartSandboxRequest, StopSandboxRequest, UndoDraftChunkRequest,
     UndoDraftChunkResponse, UpdateConfigRequest, UpdateConfigResponse,
@@ -37,7 +37,6 @@ use super::{
     Mutation, Scope, Success, global_scope, named_scope, replay_unavailable, restore_resource,
     storage_error, uncertain,
 };
-use crate::ServerState;
 use crate::auth::principal::Principal;
 use crate::auth::workspace_authz::{
     MinWorkspaceRole, authorize_workspace, authorize_workspace_selector,
@@ -48,6 +47,7 @@ use crate::storage_proto::{
     StoredProviderCredentialRefreshStateV2 as StoredProviderCredentialRefreshState,
     StoredProviderProfile,
 };
+use crate::{ServerState, config_update_operation};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(in crate::grpc) struct Reference {
@@ -159,7 +159,16 @@ pub(in crate::grpc) enum Outcome {
         id: String,
         outcome: i32,
     },
-    Provider(Reference),
+    Attachment {
+        id: String,
+        changed: bool,
+        receipt: ProviderReceiptReference,
+    },
+    Provider {
+        reference: Reference,
+        mutation_id: String,
+        target_receipts: Vec<ProviderReceiptReference>,
+    },
     Service {
         reference: Reference,
         sandbox_id: String,
@@ -187,6 +196,32 @@ pub(in crate::grpc) enum Outcome {
         cleared: u32,
     },
     Refresh(Refresh),
+}
+
+/// Replay retains immutable operation identities, never a fresh target snapshot
+/// or a serialized provider response that could carry credential material.
+#[derive(Serialize, Deserialize)]
+pub(in crate::grpc) struct ProviderReceiptReference {
+    id: String,
+    workspace: String,
+}
+
+impl ProviderReceiptReference {
+    fn new(receipt: &ProviderMutationReceipt) -> Self {
+        Self {
+            id: receipt.receipt_id.clone(),
+            workspace: receipt.workspace.clone(),
+        }
+    }
+
+    async fn restore(self, store: &Store) -> Result<ProviderMutationReceipt, Status> {
+        // The original operation is authoritative even after readiness changes.
+        // A missing operation cannot authorize replaying the mutation itself.
+        config_update_operation::get_provider_operation(store, &self.id, &self.workspace)
+            .await
+            .map(|operation| operation.receipt)
+            .map_err(|_| replay_unavailable())
+    }
 }
 
 /// Public profile declarations and diagnostics have a nonsecret contract. These
@@ -388,17 +423,34 @@ macro_rules! attachment_mutation {
             $method,
             $handler,
             User,
-            |response: &Response<$resp>| sandbox_receipt(
-                response.get_ref().sandbox.as_ref(),
-                response.get_ref().$field
-            ),
+            |response: &Response<$resp>| {
+                let response = response.get_ref();
+                Ok(Outcome::Attachment {
+                    id: response
+                        .sandbox
+                        .as_ref()
+                        .ok_or_else(uncertain)?
+                        .object_id()
+                        .into(),
+                    changed: response.$field,
+                    receipt: ProviderReceiptReference::new(
+                        response.receipt.as_ref().ok_or_else(uncertain)?,
+                    ),
+                })
+            },
             async |store: &Store, outcome: Outcome| {
-                let Outcome::Sandbox { id, changed } = outcome else {
+                let Outcome::Attachment {
+                    id,
+                    changed,
+                    receipt,
+                } = outcome
+                else {
                     return Err(replay_unavailable());
                 };
                 Ok($resp {
                     sandbox: Some(live(store, &id).await?),
                     $field: changed,
+                    receipt: Some(receipt.restore(store).await?),
                 })
             }
         );
@@ -480,17 +532,37 @@ macro_rules! provider_mutation {
             $method,
             $handler,
             Admin,
-            |response: &Response<ProviderResponse>| Ok(Outcome::Provider(Reference::new(
-                response.get_ref().provider.as_ref().ok_or_else(uncertain)?
-            ))),
+            |response: &Response<ProviderResponse>| {
+                let response = response.get_ref();
+                Ok(Outcome::Provider {
+                    reference: Reference::new(response.provider.as_ref().ok_or_else(uncertain)?),
+                    mutation_id: response.mutation_id.clone(),
+                    target_receipts: response
+                        .target_receipts
+                        .iter()
+                        .map(ProviderReceiptReference::new)
+                        .collect(),
+                })
+            },
             async |store: &Store, outcome: Outcome| {
-                let Outcome::Provider(reference) = outcome else {
+                let Outcome::Provider {
+                    reference,
+                    mutation_id,
+                    target_receipts,
+                } = outcome
+                else {
                     return Err(replay_unavailable());
                 };
+                let mut receipts = Vec::with_capacity(target_receipts.len());
+                for receipt in target_receipts {
+                    receipts.push(receipt.restore(store).await?);
+                }
                 Ok(ProviderResponse {
                     provider: Some(provider::redact_provider_credentials(
                         reference.restore(store).await?,
                     )),
+                    mutation_id,
+                    target_receipts: receipts,
                 })
             }
         );
