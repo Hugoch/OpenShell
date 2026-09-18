@@ -47,7 +47,7 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const CONFIG_APPLY_TIMEOUT: Duration = Duration::from_mins(1);
 // The gateway may hold the initial stream open while an operator repairs an
 // invalid image policy. Keep this above the five-minute provisioning window.
-const SESSION_PREPARE_TIMEOUT: Duration = Duration::from_mins(6);
+pub const SESSION_PREPARE_TIMEOUT: Duration = Duration::from_mins(6);
 
 type StartupPolicyPreparer =
     Box<dyn FnOnce(SandboxPolicy) -> Result<Option<SandboxPolicy>, String> + Send>;
@@ -734,7 +734,9 @@ async fn run_prepared_session(
         .map_err(|_| "failed to queue configuration bootstrap result")?;
     }
     let config_sequences = Arc::new(Mutex::new(ConfigSequenceWatermarks::default()));
-    config.ready_tx.send_replace(true);
+    if prepared.protocol_revision != SUPERVISOR_PROTOCOL_REVISION {
+        config.ready_tx.send_replace(true);
+    }
 
     // Main loop: receive gateway messages + send heartbeats.
     let mut heartbeat_interval =
@@ -762,6 +764,7 @@ async fn run_prepared_session(
                     terminating: &config.terminating,
                     config_apply_tx: config.config_apply_tx.as_ref(),
                     config_sequences: &config_sequences,
+                    ready_tx: &config.ready_tx,
                 };
                 handle_gateway_message(
                     &msg,
@@ -824,6 +827,7 @@ async fn apply_bootstrap(
                     )
                 })
                 .collect(),
+            admission: None,
         };
     };
     let (response, receiver) = tokio::sync::oneshot::channel();
@@ -837,12 +841,14 @@ async fn apply_bootstrap(
     {
         return ConfigBootstrapResult {
             results: Vec::new(),
+            admission: None,
         };
     }
     match tokio::time::timeout(CONFIG_APPLY_TIMEOUT, receiver).await {
         Ok(Ok(result)) => result,
         _ => ConfigBootstrapResult {
             results: Vec::new(),
+            admission: None,
         },
     }
 }
@@ -930,12 +936,18 @@ struct GatewayMessageContext<'a> {
     terminating: &'a Arc<AtomicBool>,
     config_apply_tx: Option<&'a mpsc::Sender<ConfigApplyRequest>>,
     config_sequences: &'a Arc<Mutex<ConfigSequenceWatermarks>>,
+    ready_tx: &'a watch::Sender<bool>,
 }
 
 fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<'_>) {
     match &msg.payload {
         Some(gateway_message::Payload::Heartbeat(_)) => {
             // Gateway heartbeat — nothing to do.
+        }
+        Some(gateway_message::Payload::ConfigurationAdmission(admission)) => {
+            let accepted = admission.state
+                == i32::from(openshell_core::proto::ConfigurationAdmissionState::Accepted);
+            context.ready_tx.send_replace(accepted);
         }
         Some(gateway_message::Payload::ConfigUpdate(update)) => {
             let update = update.clone();
@@ -971,6 +983,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
                     result: Some(failed_component_result(
                         component, revision, outcome, code, message,
                     )),
+                    admission: None,
                 };
                 let result = if invalid_update {
                     fallback(

@@ -2875,6 +2875,9 @@ message GatewayMessage {
     RelayClose relay_close = 5;
     ConfigUpdate config_update = 6;
     StartupConfigCandidate startup_config_candidate = 7;
+    // Durable gateway acknowledgement of streamed configuration admission.
+    // The supervisor must not launch the workload until this is ACCEPTED.
+    SandboxConfigurationAdmission configuration_admission = 8;
   }
 }
 
@@ -2994,11 +2997,16 @@ message ConfigUpdateResult {
   // Echoes ConfigUpdate.component_sequence.
   uint64 component_sequence = 2;
   ConfigComponentApplyResult result = 3;
+  // Admission state for a sandbox-configuration update. Omitted for provider
+  // environment updates and compatibility supervisors.
+  SandboxConfigurationAdmission admission = 4;
 }
 
 // Aggregate application result for the SessionAccepted bootstrap.
 message ConfigBootstrapResult {
   repeated ConfigComponentApplyResult results = 1;
+  // Admission state of the complete gateway-authored bootstrap generation.
+  SandboxConfigurationAdmission admission = 2;
 }
 
 // Gateway rejects the supervisor session.

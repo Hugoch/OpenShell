@@ -21,9 +21,10 @@ use openshell_core::proto::{
     ConfigApplyOutcome, ConfigBootstrap, ConfigComponent, ConfigComponentApplyResult,
     ConfigSnapshotRevision, ConfigUpdate, ConfigUpdateResult, GatewayMessage, PolicySource,
     ProviderReadinessObservation, RelayFrame, RelayInit, RelayOpen, ReportMainProcessExitRequest,
-    ReportMainProcessExitResponse, Sandbox, SandboxPhase, SessionAccepted, SessionRejected,
-    SshRelayTarget, StartupConfigCandidate, SupervisorMessage, config_snapshot_revision,
-    config_update, gateway_message, relay_open, startup_config_prepared, supervisor_message,
+    ReportMainProcessExitResponse, Sandbox, SandboxConfigurationAdmission, SandboxPhase,
+    SessionAccepted, SessionRejected, SshRelayTarget, StartupConfigCandidate, SupervisorMessage,
+    config_snapshot_revision, config_update, gateway_message, relay_open, startup_config_prepared,
+    supervisor_message,
 };
 use openshell_core::proto::{
     LEGACY_SUPERVISOR_PROTOCOL_REVISION, PREVIOUS_SUPERVISOR_PROTOCOL_REVISION,
@@ -124,7 +125,81 @@ struct InFlightConfigUpdate {
     update_id: String,
     component_sequence: u64,
     revision: ConfigSnapshotRevision,
+    admission: Option<SandboxConfigurationAdmission>,
     sent_at: Instant,
+}
+
+struct CompletedConfigUpdate {
+    outcome: ConfigApplyOutcome,
+    admission: Option<SandboxConfigurationAdmission>,
+}
+
+fn expected_configuration_admission(
+    snapshot: &openshell_core::proto::SandboxConfigSnapshot,
+) -> SandboxConfigurationAdmission {
+    use openshell_core::proto::ConfigurationAdmissionState;
+
+    SandboxConfigurationAdmission {
+        instance_id: snapshot.configuration_instance_id.clone(),
+        state: if snapshot.configuration_admitted {
+            ConfigurationAdmissionState::Accepted.into()
+        } else {
+            ConfigurationAdmissionState::Rejected.into()
+        },
+        policy_version: snapshot.version,
+        policy_hash: snapshot.policy_hash.clone(),
+        config_revision: snapshot.config_revision,
+        provider_env_revision: snapshot.provider_env_revision,
+        error: snapshot.configuration_error.clone(),
+    }
+}
+
+fn validate_configuration_admission(
+    reported: Option<&SandboxConfigurationAdmission>,
+    expected: &SandboxConfigurationAdmission,
+    outcome: ConfigApplyOutcome,
+) -> Result<SandboxConfigurationAdmission, Status> {
+    use openshell_core::proto::ConfigurationAdmissionState;
+
+    let reported = reported.ok_or_else(|| {
+        Status::invalid_argument("sandbox configuration admission result is required")
+    })?;
+    if reported.instance_id != expected.instance_id
+        || reported.policy_version != expected.policy_version
+        || reported.policy_hash != expected.policy_hash
+        || reported.config_revision != expected.config_revision
+        || reported.provider_env_revision != expected.provider_env_revision
+    {
+        return Err(Status::invalid_argument(
+            "configuration admission does not match the delivered generation",
+        ));
+    }
+    let expected_state = ConfigurationAdmissionState::try_from(expected.state).unwrap_or_default();
+    let reported_state = ConfigurationAdmissionState::try_from(reported.state).unwrap_or_default();
+    if expected_state == ConfigurationAdmissionState::Rejected {
+        if reported_state != ConfigurationAdmissionState::Rejected {
+            return Err(Status::invalid_argument(
+                "rejected gateway configuration was reported as accepted",
+            ));
+        }
+        return Ok(expected.clone());
+    }
+    if outcome_acknowledges_revision(outcome)
+        && reported_state == ConfigurationAdmissionState::Accepted
+    {
+        let mut admission = expected.clone();
+        admission.error.clear();
+        return Ok(admission);
+    }
+    if reported_state == ConfigurationAdmissionState::Rejected {
+        let mut admission = expected.clone();
+        admission.state = ConfigurationAdmissionState::Rejected.into();
+        admission.error = "effective configuration could not be activated".to_string();
+        return Ok(admission);
+    }
+    Err(Status::invalid_argument(
+        "configuration admission is inconsistent with the apply result",
+    ))
 }
 
 /// Idempotency state for tool server endpoint-status reports from one live supervisor.
@@ -184,8 +259,9 @@ fn build_config_update(
 ) -> (GatewayMessage, InFlightConfigUpdate) {
     state.sequence = state.sequence.saturating_add(1);
     let component_sequence = state.sequence;
-    let (component, revision) = match message {
+    let (component, revision, admission) = match message {
         SupervisorConfigMessage::SandboxConfig(snapshot) => {
+            let admission = expected_configuration_admission(&snapshot);
             let revision = ConfigSnapshotRevision {
                 component: Some(config_snapshot_revision::Component::SandboxConfig(
                     openshell_core::proto::SandboxConfigRevision {
@@ -197,7 +273,11 @@ fn build_config_update(
                     },
                 )),
             };
-            (config_update::Component::SandboxConfig(*snapshot), revision)
+            (
+                config_update::Component::SandboxConfig(*snapshot),
+                revision,
+                Some(admission),
+            )
         }
         SupervisorConfigMessage::ProviderEnvironment(snapshot) => {
             let revision = ConfigSnapshotRevision {
@@ -208,6 +288,7 @@ fn build_config_update(
             (
                 config_update::Component::ProviderEnvironment(snapshot),
                 revision,
+                None,
             )
         }
     };
@@ -224,6 +305,7 @@ fn build_config_update(
             update_id,
             component_sequence,
             revision,
+            admission,
             sent_at: Instant::now(),
         },
     )
@@ -495,7 +577,7 @@ impl SupervisorSessionRegistry {
         sandbox_id: &str,
         session_id: &str,
         result: &ConfigUpdateResult,
-    ) -> Result<(), Status> {
+    ) -> Result<CompletedConfigUpdate, Status> {
         let component = result
             .result
             .as_ref()
@@ -533,6 +615,10 @@ impl SupervisorSessionRegistry {
             ));
         }
         let outcome = validate_component_apply_result(component_result, &in_flight.revision)?;
+        let completed = CompletedConfigUpdate {
+            outcome,
+            admission: in_flight.admission.clone(),
+        };
         if outcome_acknowledges_revision(outcome) {
             delivery_state.last_acknowledged_revision = Some(in_flight.revision.clone());
         }
@@ -541,7 +627,7 @@ impl SupervisorSessionRegistry {
             if delivery_state.last_acknowledged_revision.as_ref()
                 == Some(&config_message_revision(&pending))
             {
-                return Ok(());
+                return Ok(completed);
             }
             let (message, next) = build_config_update(delivery_state, pending);
             match session.tx.try_send(message) {
@@ -551,7 +637,7 @@ impl SupervisorSessionRegistry {
                 }
             }
         }
-        Ok(())
+        Ok(completed)
     }
 
     /// Record a successfully persisted bootstrap result in the live session's
@@ -1288,18 +1374,10 @@ async fn accept_supervisor_session(
     outbound_tx: mpsc::Sender<GatewayMessage>,
     mut inbound: tonic::Streaming<SupervisorMessage>,
 ) -> Result<(), Status> {
-    let bootstrap_admission = bootstrap.as_ref().and_then(|bootstrap| {
-        let snapshot = bootstrap.sandbox_config.as_ref()?;
-        Some(openshell_core::proto::SandboxConfigurationAdmission {
-            instance_id: instance_id.clone(),
-            state: openshell_core::proto::ConfigurationAdmissionState::Accepted.into(),
-            policy_version: snapshot.version,
-            policy_hash: snapshot.policy_hash.clone(),
-            config_revision: snapshot.config_revision,
-            provider_env_revision: snapshot.provider_env_revision,
-            error: String::new(),
-        })
-    });
+    let expected_bootstrap_admission = bootstrap
+        .as_ref()
+        .and_then(|bootstrap| bootstrap.sandbox_config.as_ref())
+        .map(expected_configuration_admission);
     let expected_bootstrap_revisions = bootstrap
         .as_ref()
         .map(bootstrap_revision_fence)
@@ -1389,7 +1467,7 @@ async fn accept_supervisor_session(
     }
 
     if !stream_applies_config
-        && !mark_supervisor_initialized(&state, &sandbox_id, &session_id, &instance_id, None).await
+        && !mark_supervisor_initialized(&state, &sandbox_id, &session_id, &instance_id).await
     {
         state
             .supervisor_sessions
@@ -1436,7 +1514,7 @@ async fn accept_supervisor_session(
             &instance_id,
             stream_applies_config,
             &expected_bootstrap_revisions,
-            bootstrap_admission.as_ref(),
+            expected_bootstrap_admission.as_ref(),
             &session_tx,
             &mut inbound,
             shutdown_rx,
@@ -1888,7 +1966,7 @@ async fn run_session_loop(
     instance_id: &str,
     stream_applies_config: bool,
     expected_bootstrap_revisions: &[(ConfigComponent, ConfigSnapshotRevision)],
-    bootstrap_admission: Option<&openshell_core::proto::SandboxConfigurationAdmission>,
+    expected_bootstrap_admission: Option<&SandboxConfigurationAdmission>,
     tx: &mpsc::Sender<GatewayMessage>,
     inbound: &mut tonic::Streaming<SupervisorMessage>,
     mut shutdown_rx: oneshot::Receiver<()>,
@@ -1910,7 +1988,7 @@ async fn run_session_loop(
             msg = inbound.message() => {
                 match msg {
                     Ok(Some(msg)) => {
-                        let bootstrap_succeeded = match msg.payload.as_ref() {
+                        let bootstrap_result = match msg.payload.as_ref() {
                             Some(supervisor_message::Payload::ConfigBootstrapResult(result))
                                 if stream_applies_config =>
                             {
@@ -1918,7 +1996,7 @@ async fn run_session_loop(
                                     &result.results,
                                     expected_bootstrap_revisions,
                                 ) {
-                                    Ok(succeeded) => Some(succeeded),
+                                    Ok(succeeded) => Some((succeeded, result.admission.clone())),
                                     Err(error) => {
                                         warn!(
                                             sandbox_id,
@@ -1936,29 +2014,45 @@ async fn run_session_loop(
                             state,
                             sandbox_id,
                             session_id,
+                            instance_id,
                             stream_applies_config,
+                            tx,
                             msg,
                         ).await;
-                        match bootstrap_succeeded {
-                            Some(true) => {
-                                if !mark_supervisor_initialized(
+                        if let Some((succeeded, reported_admission)) = bootstrap_result {
+                                bootstrap_complete = true;
+                                let Some(expected_admission) = expected_bootstrap_admission else {
+                                    warn!(sandbox_id, session_id, "supervisor bootstrap omitted expected admission");
+                                    break;
+                                };
+                                let outcome = if succeeded {
+                                    ConfigApplyOutcome::Applied
+                                } else {
+                                    ConfigApplyOutcome::Unsupported
+                                };
+                                let admission = match validate_configuration_admission(
+                                    reported_admission.as_ref(),
+                                    expected_admission,
+                                    outcome,
+                                ) {
+                                    Ok(admission) => admission,
+                                    Err(error) => {
+                                        warn!(sandbox_id, session_id, error = %error, "invalid supervisor bootstrap admission");
+                                        break;
+                                    }
+                                };
+                                if !persist_and_ack_admission(
                                     state,
                                     sandbox_id,
                                     session_id,
                                     instance_id,
-                                    bootstrap_admission,
+                                    &admission,
+                                    tx,
                                 )
                                 .await
                                 {
                                     break;
                                 }
-                                bootstrap_complete = true;
-                            }
-                            Some(false) => {
-                                warn!(sandbox_id, session_id, "supervisor configuration bootstrap failed");
-                                break;
-                            }
-                            None => {}
                         }
                     }
                     Ok(None) => {
@@ -2010,7 +2104,9 @@ async fn handle_supervisor_message(
     state: &Arc<ServerState>,
     sandbox_id: &str,
     session_id: &str,
+    instance_id: &str,
     stream_applies_config: bool,
+    tx: &mpsc::Sender<GatewayMessage>,
     msg: SupervisorMessage,
 ) {
     match msg.payload {
@@ -2049,18 +2145,21 @@ async fn handle_supervisor_message(
             );
         }
         Some(supervisor_message::Payload::ConfigUpdateResult(result)) => {
-            if let Err(error) = state
+            let completed = match state
                 .supervisor_sessions
                 .complete_config_update(sandbox_id, session_id, &result)
             {
-                debug!(
-                    sandbox_id,
-                    session_id,
-                    error = %error,
-                    "ignored unmatched supervisor configuration result"
-                );
-                return;
-            }
+                Ok(completed) => completed,
+                Err(error) => {
+                    debug!(
+                        sandbox_id,
+                        session_id,
+                        error = %error,
+                        "ignored unmatched supervisor configuration result"
+                    );
+                    return;
+                }
+            };
             if let Some(result) = result.result.as_ref()
                 && let Err(error) = record_component_apply_result(state, sandbox_id, result).await
             {
@@ -2074,6 +2173,29 @@ async fn handle_supervisor_message(
                     error = %error,
                     "failed to persist supervisor configuration result"
                 );
+                return;
+            }
+            if let Some(expected_admission) = completed.admission.as_ref() {
+                let admission = match validate_configuration_admission(
+                    result.admission.as_ref(),
+                    expected_admission,
+                    completed.outcome,
+                ) {
+                    Ok(admission) => admission,
+                    Err(error) => {
+                        warn!(sandbox_id, session_id, error = %error, "invalid supervisor configuration admission");
+                        return;
+                    }
+                };
+                let _ = persist_and_ack_admission(
+                    state,
+                    sandbox_id,
+                    session_id,
+                    instance_id,
+                    &admission,
+                    tx,
+                )
+                .await;
             }
         }
         Some(supervisor_message::Payload::ConfigBootstrapResult(result)) => {
@@ -2190,7 +2312,6 @@ async fn mark_supervisor_initialized(
     sandbox_id: &str,
     session_id: &str,
     instance_id: &str,
-    admission: Option<&openshell_core::proto::SandboxConfigurationAdmission>,
 ) -> bool {
     if !state
         .supervisor_sessions
@@ -2198,18 +2319,11 @@ async fn mark_supervisor_initialized(
     {
         return false;
     }
-    let result = if let Some(admission) = admission {
-        state
-            .compute
-            .supervisor_session_initialized(sandbox_id, instance_id, admission)
-            .await
-    } else {
-        state
-            .compute
-            .supervisor_session_connected(sandbox_id, instance_id)
-            .await
-    };
-    if let Err(err) = result {
+    if let Err(err) = state
+        .compute
+        .supervisor_session_connected(sandbox_id, instance_id)
+        .await
+    {
         warn!(
             sandbox_id,
             session_id,
@@ -2221,6 +2335,43 @@ async fn mark_supervisor_initialized(
         state.telemetry.sandbox_session_connected(sandbox_id);
         true
     }
+}
+
+async fn persist_and_ack_admission(
+    state: &Arc<ServerState>,
+    sandbox_id: &str,
+    session_id: &str,
+    instance_id: &str,
+    admission: &SandboxConfigurationAdmission,
+    tx: &mpsc::Sender<GatewayMessage>,
+) -> bool {
+    if !state
+        .supervisor_sessions
+        .is_current_session(sandbox_id, session_id)
+    {
+        return false;
+    }
+    if let Err(error) = state
+        .compute
+        .supervisor_session_admission(sandbox_id, instance_id, admission)
+        .await
+    {
+        warn!(sandbox_id, session_id, error = %error, "failed to persist supervisor configuration admission");
+        return false;
+    }
+    if tx
+        .send(GatewayMessage {
+            payload: Some(gateway_message::Payload::ConfigurationAdmission(
+                admission.clone(),
+            )),
+        })
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    state.telemetry.sandbox_session_connected(sandbox_id);
+    true
 }
 
 async fn record_component_apply_result(
@@ -2387,7 +2538,24 @@ mod tests {
             })),
         });
 
-        for original in std::iter::once(bootstrap).chain(updates) {
+        let admission = SandboxConfigurationAdmission {
+            instance_id: "configuration-1".into(),
+            state: openshell_core::proto::ConfigurationAdmissionState::Accepted.into(),
+            policy_version: 3,
+            policy_hash: "policy-hash".into(),
+            config_revision: 7,
+            provider_env_revision: 5,
+            error: String::new(),
+        };
+        let admission_ack = GatewayMessage {
+            payload: Some(gateway_message::Payload::ConfigurationAdmission(
+                admission.clone(),
+            )),
+        };
+        for original in std::iter::once(bootstrap)
+            .chain(updates)
+            .chain(std::iter::once(admission_ack))
+        {
             let decoded = GatewayMessage::decode(original.encode_to_vec().as_slice()).unwrap();
             assert_eq!(decoded, original);
         }
@@ -2420,6 +2588,7 @@ mod tests {
                         outcome: ConfigApplyOutcome::Applied.into(),
                         failure: None,
                     }),
+                    admission: Some(admission),
                 },
             )),
         };
@@ -2432,6 +2601,38 @@ mod tests {
         assert!(validate_protocol_revision("sb-1", SUPERVISOR_PROTOCOL_REVISION).is_ok());
         assert!(validate_protocol_revision("sb-1", PREVIOUS_SUPERVISOR_PROTOCOL_REVISION).is_ok());
         assert!(validate_protocol_revision("sb-1", LEGACY_SUPERVISOR_PROTOCOL_REVISION).is_ok());
+    }
+
+    #[test]
+    fn configuration_admission_preserves_gateway_rejection_and_accepts_repair() {
+        use openshell_core::proto::ConfigurationAdmissionState;
+
+        let mut expected = SandboxConfigurationAdmission {
+            instance_id: "configuration-1".into(),
+            state: ConfigurationAdmissionState::Rejected.into(),
+            policy_version: 3,
+            policy_hash: "policy-hash".into(),
+            config_revision: 7,
+            provider_env_revision: 5,
+            error: "invalid image policy".into(),
+        };
+        let rejected = validate_configuration_admission(
+            Some(&expected),
+            &expected,
+            ConfigApplyOutcome::Applied,
+        )
+        .unwrap();
+        assert_eq!(rejected, expected);
+
+        expected.state = ConfigurationAdmissionState::Accepted.into();
+        expected.error.clear();
+        let accepted = validate_configuration_admission(
+            Some(&expected),
+            &expected,
+            ConfigApplyOutcome::Applied,
+        )
+        .unwrap();
+        assert_eq!(accepted, expected);
     }
 
     #[test]
@@ -2518,7 +2719,7 @@ mod tests {
         state.supervisor_sessions.register(
             "sb-bootstrap-ack".into(),
             "session-1".into(),
-            tx,
+            tx.clone(),
             shutdown_tx,
         );
         let snapshot = ProviderEnvironmentSnapshot {
@@ -2540,11 +2741,14 @@ mod tests {
             &state,
             "sb-bootstrap-ack",
             "session-1",
+            "instance-1",
             true,
+            &tx,
             SupervisorMessage {
                 payload: Some(supervisor_message::Payload::ConfigBootstrapResult(
                     ConfigBootstrapResult {
                         results: vec![result],
+                        admission: None,
                     },
                 )),
             },
@@ -3183,6 +3387,7 @@ mod tests {
                         outcome: ConfigApplyOutcome::Applied.into(),
                         failure: None,
                     }),
+                    admission: None,
                 },
             )
             .unwrap();

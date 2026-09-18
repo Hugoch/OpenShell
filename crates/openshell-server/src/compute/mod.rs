@@ -3358,7 +3358,7 @@ impl ComputeRuntime {
             .await
     }
 
-    pub async fn supervisor_session_initialized(
+    pub async fn supervisor_session_admission(
         &self,
         sandbox_id: &str,
         instance_id: &str,
@@ -3475,7 +3475,10 @@ impl ComputeRuntime {
                             status.exit_code = None;
                             if let Some(admission) = admission {
                                 status.configuration_admission = Some(admission.clone());
-                                status.configuration_activated = Some(true);
+                                status.configuration_activated = Some(
+                                    admission.state
+                                        == i32::from(openshell_core::proto::ConfigurationAdmissionState::Accepted),
+                                );
                             }
                             sandbox.set_phase(SandboxPhase::Ready as i32);
                         } else {
@@ -10507,45 +10510,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn supervisor_session_initialized_accepts_streamed_configuration_atomically() {
+    async fn supervisor_session_admission_preserves_repair_on_same_instance() {
         use openshell_core::proto::{ConfigurationAdmissionState, SandboxConfigurationAdmission};
 
         let runtime = test_runtime(Arc::new(TestDriver::default())).await;
-        let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Provisioning);
-        sandbox
-            .status
-            .get_or_insert_default()
-            .configuration_admission = Some(SandboxConfigurationAdmission {
-            instance_id: "pending-fence".into(),
-            state: ConfigurationAdmissionState::Pending.into(),
-            ..Default::default()
-        });
+        let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Provisioning);
         runtime.store.put_message(&sandbox).await.unwrap();
-
-        let admission = SandboxConfigurationAdmission {
-            instance_id: "test-generation".into(),
-            state: ConfigurationAdmissionState::Accepted.into(),
+        let mut admission = SandboxConfigurationAdmission {
+            instance_id: "configuration-1".into(),
+            state: ConfigurationAdmissionState::Rejected.into(),
             policy_version: 7,
             policy_hash: "policy-hash".into(),
             config_revision: 11,
             provider_env_revision: 13,
-            error: String::new(),
+            error: "invalid image policy".into(),
         };
+
         runtime
-            .supervisor_session_initialized("sb-1", "test-generation", &admission)
+            .supervisor_session_admission("sb-1", "supervisor-1", &admission)
             .await
             .unwrap();
-
-        let stored = runtime
+        let rejected = runtime
             .store
             .get_message::<Sandbox>("sb-1")
             .await
             .unwrap()
             .unwrap();
-        let status = stored.status.as_ref().unwrap();
-        assert_eq!(status.configuration_admission.as_ref(), Some(&admission));
-        assert_eq!(status.configuration_activated, Some(true));
-        assert_eq!(stored.phase(), SandboxPhase::Ready as i32);
+        assert_eq!(rejected.phase(), SandboxPhase::Provisioning as i32);
+        assert_eq!(
+            rejected.status.as_ref().unwrap().configuration_activated,
+            Some(false)
+        );
+
+        admission.state = ConfigurationAdmissionState::Accepted.into();
+        admission.error.clear();
+        runtime
+            .supervisor_session_admission("sb-1", "supervisor-1", &admission)
+            .await
+            .unwrap();
+        let repaired = runtime
+            .store
+            .get_message::<Sandbox>("sb-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(repaired.phase(), SandboxPhase::Ready as i32);
+        assert_eq!(
+            repaired.status.as_ref().unwrap().main_process_instance_id,
+            "supervisor-1"
+        );
+        assert_eq!(
+            repaired.status.as_ref().unwrap().configuration_activated,
+            Some(true)
+        );
     }
 
     #[tokio::test]

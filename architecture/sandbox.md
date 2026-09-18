@@ -659,7 +659,18 @@ sequenceDiagram
     GW->>DB: Build fresh authoritative bootstrap
     GW->>SUP: SessionAccepted(bootstrap)
     SUP->>SUP: Initialize from bootstrap
-    SUP->>GW: ConfigBootstrapResult
+    SUP->>GW: ConfigBootstrapResult(component outcomes, admission)
+    GW->>DB: Persist admission for the delivered generation
+    GW->>SUP: ConfigurationAdmission(durable state)
+    alt Configuration accepted
+        SUP->>SUP: Launch workload
+    else Configuration rejected
+        GW->>SUP: ConfigUpdate(repaired snapshot)
+        SUP->>GW: ConfigUpdateResult(component outcome, admission)
+        GW->>DB: Persist accepted repair
+        GW->>SUP: ConfigurationAdmission(accepted)
+        SUP->>SUP: Launch workload on the same supervisor
+    end
 ```
 
 The gateway can send complete component replacements on the accepted stream
@@ -682,21 +693,25 @@ without changing publishers. Provider payloads can contain
 credentials, so the gateway does not persist or render complete stream
 messages in logs.
 
-The supervisor currently parses and ignores stream-delivered configuration.
-Polling remains the only path that changes runtime state and repairs dropped or
-unavailable delivery. The gateway serializes construction per sandbox and
-component, and coalesces repeated mutations into the latest full snapshot. An
-enqueue result means only that the local stream queue accepted the message. A
-bounded scope fanout scheduler coalesces repeated workspace and global changes,
-and semaphores sized from the database pool bound delivery workers and snapshot
-builds. Fanout waits for worker capacity before admitting each recipient, so a
-fleet-wide change cannot create a fleet-sized task backlog or saturate the store
-and credential backends. Snapshot construction has a deadline that starts once
-a build holds a permit, and the gateway rejects encoded stream messages that
-approach the transport decoder limit. A later migration will apply these
-payloads directly and acknowledge their exact revisions before removing
-supervisor polling. At that point, the gateway will require a valid bootstrap
-before marking a session ready.
+Current-protocol supervisors apply stream-delivered configuration and report
+both component outcomes and admission for the exact gateway-authored generation.
+The gateway validates generation identity, persists admission, and returns that
+durable state on the stream. The supervisor holds the workload boundary until
+it receives an accepted acknowledgement. Rejection leaves the stream and
+supervisor alive so a later complete replacement can repair the generation and
+release the same workload. Compatibility protocol revisions continue using
+polling.
+
+The gateway serializes construction per sandbox and component, and coalesces
+repeated mutations into the latest full snapshot. An enqueue result means only
+that the local stream queue accepted the message. A bounded scope fanout
+scheduler coalesces repeated workspace and global changes, and semaphores sized
+from the database pool bound delivery workers and snapshot builds. Fanout waits
+for worker capacity before admitting each recipient, so a fleet-wide change
+cannot create a fleet-sized task backlog or saturate the store and credential
+backends. Snapshot construction has a deadline that starts once a build holds a
+permit, and the gateway rejects encoded stream messages that approach the
+transport decoder limit.
 
 ## Configuration Admission
 
