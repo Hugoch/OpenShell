@@ -1288,6 +1288,18 @@ async fn accept_supervisor_session(
     outbound_tx: mpsc::Sender<GatewayMessage>,
     mut inbound: tonic::Streaming<SupervisorMessage>,
 ) -> Result<(), Status> {
+    let bootstrap_admission = bootstrap.as_ref().and_then(|bootstrap| {
+        let snapshot = bootstrap.sandbox_config.as_ref()?;
+        Some(openshell_core::proto::SandboxConfigurationAdmission {
+            instance_id: instance_id.clone(),
+            state: openshell_core::proto::ConfigurationAdmissionState::Accepted.into(),
+            policy_version: snapshot.version,
+            policy_hash: snapshot.policy_hash.clone(),
+            config_revision: snapshot.config_revision,
+            provider_env_revision: snapshot.provider_env_revision,
+            error: String::new(),
+        })
+    });
     let expected_bootstrap_revisions = bootstrap
         .as_ref()
         .map(bootstrap_revision_fence)
@@ -1377,7 +1389,7 @@ async fn accept_supervisor_session(
     }
 
     if !stream_applies_config
-        && !mark_supervisor_initialized(&state, &sandbox_id, &session_id, &instance_id).await
+        && !mark_supervisor_initialized(&state, &sandbox_id, &session_id, &instance_id, None).await
     {
         state
             .supervisor_sessions
@@ -1424,6 +1436,7 @@ async fn accept_supervisor_session(
             &instance_id,
             stream_applies_config,
             &expected_bootstrap_revisions,
+            bootstrap_admission.as_ref(),
             &session_tx,
             &mut inbound,
             shutdown_rx,
@@ -1875,6 +1888,7 @@ async fn run_session_loop(
     instance_id: &str,
     stream_applies_config: bool,
     expected_bootstrap_revisions: &[(ConfigComponent, ConfigSnapshotRevision)],
+    bootstrap_admission: Option<&openshell_core::proto::SandboxConfigurationAdmission>,
     tx: &mpsc::Sender<GatewayMessage>,
     inbound: &mut tonic::Streaming<SupervisorMessage>,
     mut shutdown_rx: oneshot::Receiver<()>,
@@ -1932,6 +1946,7 @@ async fn run_session_loop(
                                     sandbox_id,
                                     session_id,
                                     instance_id,
+                                    bootstrap_admission,
                                 )
                                 .await
                                 {
@@ -2175,6 +2190,7 @@ async fn mark_supervisor_initialized(
     sandbox_id: &str,
     session_id: &str,
     instance_id: &str,
+    admission: Option<&openshell_core::proto::SandboxConfigurationAdmission>,
 ) -> bool {
     if !state
         .supervisor_sessions
@@ -2182,11 +2198,18 @@ async fn mark_supervisor_initialized(
     {
         return false;
     }
-    if let Err(err) = state
-        .compute
-        .supervisor_session_connected(sandbox_id, instance_id)
-        .await
-    {
+    let result = if let Some(admission) = admission {
+        state
+            .compute
+            .supervisor_session_initialized(sandbox_id, instance_id, admission)
+            .await
+    } else {
+        state
+            .compute
+            .supervisor_session_connected(sandbox_id, instance_id)
+            .await
+    };
+    if let Err(err) = result {
         warn!(
             sandbox_id,
             session_id,

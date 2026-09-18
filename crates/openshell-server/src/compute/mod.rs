@@ -3354,8 +3354,24 @@ impl ComputeRuntime {
         sandbox_id: &str,
         instance_id: &str,
     ) -> Result<(), String> {
-        self.set_supervisor_session_state(sandbox_id, true, Some(instance_id), false)
+        self.set_supervisor_session_state(sandbox_id, true, Some(instance_id), None, false)
             .await
+    }
+
+    pub async fn supervisor_session_initialized(
+        &self,
+        sandbox_id: &str,
+        instance_id: &str,
+        admission: &openshell_core::proto::SandboxConfigurationAdmission,
+    ) -> Result<(), String> {
+        self.set_supervisor_session_state(
+            sandbox_id,
+            true,
+            Some(instance_id),
+            Some(admission),
+            false,
+        )
+        .await
     }
 
     pub async fn supervisor_session_disconnected(
@@ -3363,8 +3379,14 @@ impl ComputeRuntime {
         sandbox_id: &str,
         terminal_delivery_finalized: bool,
     ) -> Result<(), String> {
-        self.set_supervisor_session_state(sandbox_id, false, None, terminal_delivery_finalized)
-            .await
+        self.set_supervisor_session_state(
+            sandbox_id,
+            false,
+            None,
+            None,
+            terminal_delivery_finalized,
+        )
+        .await
     }
 
     async fn set_supervisor_session_state(
@@ -3372,6 +3394,7 @@ impl ComputeRuntime {
         sandbox_id: &str,
         connected: bool,
         instance_id: Option<&str>,
+        admission: Option<&openshell_core::proto::SandboxConfigurationAdmission>,
         terminal_delivery_finalized: bool,
     ) -> Result<(), String> {
         let _guard = self.sync_lock.lock().await;
@@ -3384,6 +3407,7 @@ impl ComputeRuntime {
             sandbox_id,
             connected,
             instance_id,
+            admission,
             terminal_delivery_finalized,
             existing,
         )
@@ -3395,6 +3419,7 @@ impl ComputeRuntime {
         sandbox_id: &str,
         connected: bool,
         instance_id: Option<&str>,
+        admission: Option<&openshell_core::proto::SandboxConfigurationAdmission>,
         terminal_delivery_finalized: bool,
         mut existing: Option<Sandbox>,
     ) -> Result<(), String> {
@@ -3448,6 +3473,10 @@ impl ComputeRuntime {
                             status.main_process_instance_id =
                                 instance_id.unwrap_or_default().to_string();
                             status.exit_code = None;
+                            if let Some(admission) = admission {
+                                status.configuration_admission = Some(admission.clone());
+                                status.configuration_activated = Some(true);
+                            }
                             sandbox.set_phase(SandboxPhase::Ready as i32);
                         } else {
                             ensure_supervisor_not_ready_status(&mut sandbox.status);
@@ -10478,6 +10507,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn supervisor_session_initialized_accepts_streamed_configuration_atomically() {
+        use openshell_core::proto::{ConfigurationAdmissionState, SandboxConfigurationAdmission};
+
+        let runtime = test_runtime(Arc::new(TestDriver::default())).await;
+        let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Provisioning);
+        sandbox
+            .status
+            .get_or_insert_default()
+            .configuration_admission = Some(SandboxConfigurationAdmission {
+            instance_id: "pending-fence".into(),
+            state: ConfigurationAdmissionState::Pending.into(),
+            ..Default::default()
+        });
+        runtime.store.put_message(&sandbox).await.unwrap();
+
+        let admission = SandboxConfigurationAdmission {
+            instance_id: "test-generation".into(),
+            state: ConfigurationAdmissionState::Accepted.into(),
+            policy_version: 7,
+            policy_hash: "policy-hash".into(),
+            config_revision: 11,
+            provider_env_revision: 13,
+            error: String::new(),
+        };
+        runtime
+            .supervisor_session_initialized("sb-1", "test-generation", &admission)
+            .await
+            .unwrap();
+
+        let stored = runtime
+            .store
+            .get_message::<Sandbox>("sb-1")
+            .await
+            .unwrap()
+            .unwrap();
+        let status = stored.status.as_ref().unwrap();
+        assert_eq!(status.configuration_admission.as_ref(), Some(&admission));
+        assert_eq!(status.configuration_activated, Some(true));
+        assert_eq!(stored.phase(), SandboxPhase::Ready as i32);
+    }
+
+    #[tokio::test]
     async fn supervisor_session_connected_rejects_stopped_sandbox() {
         let runtime = test_runtime(Arc::new(TestDriver::default())).await;
         let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Stopped);
@@ -10518,6 +10589,7 @@ mod tests {
                 "sb-1",
                 true,
                 Some("test-generation"),
+                None,
                 false,
                 stale,
             )
