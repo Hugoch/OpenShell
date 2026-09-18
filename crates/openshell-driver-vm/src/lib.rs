@@ -23,6 +23,8 @@ pub mod gpu;
 mod isolation;
 #[cfg(feature = "compute-driver")]
 pub mod lifecycle;
+#[cfg(feature = "managed")]
+mod managed;
 #[cfg(feature = "compute-driver")]
 pub mod otel_tracing;
 #[cfg(feature = "compute-driver")]
@@ -40,6 +42,8 @@ pub use lifecycle::{
     LaunchPlan, LifecycleError, LifecycleExtension, LifecycleExtensionRegistry, LifecycleResult,
     RestoreContext,
 };
+#[cfg(feature = "managed")]
+pub use managed::{ManagedVmDriverProcess, VmComputeConfig, spawn_managed_vm_driver};
 #[cfg(feature = "compute-driver")]
 pub use runtime::{
     VM_RUNTIME_DIR_ENV, VmBackend, VmLaunchConfig, VsockPortMap, configured_runtime_dir, run_vm,

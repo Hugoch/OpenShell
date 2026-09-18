@@ -16,9 +16,6 @@ compile_error!(
      build a telemetry-free gateway with `--no-default-features --features defaults-without-telemetry`"
 );
 
-#[cfg(all(not(target_os = "windows"), feature = "compute-driver-vm"))]
-mod vm;
-
 #[cfg(any(
     all(target_os = "windows", feature = "compute-driver-mxc"),
     all(
@@ -436,13 +433,16 @@ impl openshell_server::ComputeDriverFactory for VmFactory {
             &mut config.guest_tls_key,
             context.guest_tls_paths(),
         );
-        let endpoint = vm::spawn(
+        let launch = openshell_driver_vm::spawn_managed_vm_driver(
             context.gateway_log_level(),
             context.gateway_name(),
             &config,
-            context.otlp_config(),
-        )
-        .await?;
+            context.otlp_config().map(|config| config.endpoint.as_str()),
+        )?;
+        let (child, socket_path) = launch.into_parts();
+        let endpoint = openshell_server::connect_managed_compute_driver("vm", socket_path, child)
+            .await
+            .map_err(|error| openshell_core::Error::execution(error.to_string()))?;
         Ok(openshell_server::ComputeDriverInstance::ManagedRemote(
             endpoint,
         ))
@@ -452,10 +452,10 @@ impl openshell_server::ComputeDriverFactory for VmFactory {
 #[cfg(all(not(target_os = "windows"), feature = "compute-driver-vm"))]
 fn vm_config(
     context: openshell_server::ComputeDriverConfigContext<'_>,
-) -> openshell_core::Result<vm::VmComputeConfig> {
-    let mut config: vm::VmComputeConfig = context.driver_config()?;
+) -> openshell_core::Result<openshell_driver_vm::VmComputeConfig> {
+    let mut config: openshell_driver_vm::VmComputeConfig = context.driver_config()?;
     if config.state_dir.as_os_str().is_empty() {
-        config.state_dir = vm::VmComputeConfig::default_state_dir();
+        config.state_dir = openshell_driver_vm::VmComputeConfig::default_state_dir();
     }
     Ok(config)
 }
