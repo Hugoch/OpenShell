@@ -251,19 +251,28 @@ fn validate_sandbox_provider_count(spec: &SandboxSpec) -> Result<(), Status> {
 
 fn validate_sandbox_policy_size(spec: &SandboxSpec) -> Result<(), Status> {
     if let Some(ref policy) = spec.policy {
-        let size = openshell_policy::lower_authored_policy(policy.clone())
-            .map_err(|error| {
-                invalid_argument("spec.policy", format!("invalid authored policy: {error}"))
-            })?
-            .encoded_len();
-        if size > MAX_POLICY_SIZE {
-            return Err(invalid_argument(
-                "spec.policy",
-                format!("policy serialized size exceeds maximum ({size} > {MAX_POLICY_SIZE})"),
-            ));
-        }
+        let policy = openshell_policy::lower_authored_policy(policy.clone()).map_err(|error| {
+            invalid_argument("spec.policy", format!("invalid authored policy: {error}"))
+        })?;
+        validate_canonical_policy_size(&policy, "spec.policy")?;
     }
 
+    Ok(())
+}
+
+/// Bound the internal protobuf representation that the gateway hashes and
+/// persists. Call this after canonicalization when defaults can grow a policy.
+pub(super) fn validate_canonical_policy_size(
+    policy: &ProtoSandboxPolicy,
+    field: &'static str,
+) -> Result<(), Status> {
+    let size = policy.encoded_len();
+    if size > MAX_POLICY_SIZE {
+        return Err(invalid_argument(
+            field,
+            format!("policy serialized size exceeds maximum ({size} > {MAX_POLICY_SIZE})"),
+        ));
+    }
     Ok(())
 }
 

@@ -34,16 +34,16 @@ fn policy_descriptor() -> prost_reflect::MessageDescriptor {
     .expect("compiled descriptor set must contain SandboxPolicy")
 }
 
-fn validate_exact_yaml_numbers(value: &serde_yml::Value) -> Result<()> {
+fn validate_proto_json_yaml(value: &serde_yml::Value) -> Result<()> {
     match value {
         serde_yml::Value::Sequence(values) => {
             for value in values {
-                validate_exact_yaml_numbers(value)?;
+                validate_proto_json_yaml(value)?;
             }
         }
         serde_yml::Value::Mapping(entries) => {
             for value in entries.values() {
-                validate_exact_yaml_numbers(value)?;
+                validate_proto_json_yaml(value)?;
             }
         }
         serde_yml::Value::Number(number) => {
@@ -66,13 +66,156 @@ fn validate_exact_yaml_numbers(value: &serde_yml::Value) -> Result<()> {
     Ok(())
 }
 
+fn validate_plain_mapping_key(source: &str) -> Result<()> {
+    let value: serde_yml::Value = serde_yml::from_str(source)
+        .into_diagnostic()
+        .wrap_err("failed to inspect policy YAML mapping key")?;
+    if !matches!(value, serde_yml::Value::String(_)) {
+        miette::bail!(
+            "policy YAML mapping key {source:?} is not a string in the protobuf JSON data model"
+        );
+    }
+    Ok(())
+}
+
+fn is_yaml_trivia(kind: serde_yml::cst::SyntaxKind) -> bool {
+    use serde_yml::cst::SyntaxKind;
+    matches!(
+        kind,
+        SyntaxKind::Whitespace
+            | SyntaxKind::Newline
+            | SyntaxKind::Comment
+            | SyntaxKind::Bom
+            | SyntaxKind::Directive
+    )
+}
+
+fn validate_mapping_entry_keys(
+    node: &serde_yml::cst::GreenNode,
+    source: &str,
+    base: usize,
+) -> Result<()> {
+    use serde_yml::cst::{GreenChild, SyntaxKind};
+
+    let mut offset = base;
+    let mut found_key = false;
+    for child in node.children() {
+        match child {
+            GreenChild::Token { kind, len } if *kind == SyntaxKind::ColonIndicator => break,
+            GreenChild::Token { kind, .. }
+                if is_yaml_trivia(*kind) || *kind == SyntaxKind::QuestionIndicator => {}
+            GreenChild::Token { kind, len } if !found_key => {
+                let raw = &source[offset..offset + *len as usize];
+                match kind {
+                    SyntaxKind::PlainScalar => validate_plain_mapping_key(raw)?,
+                    SyntaxKind::SingleQuotedScalar
+                    | SyntaxKind::DoubleQuotedScalar
+                    | SyntaxKind::LiteralScalar
+                    | SyntaxKind::FoldedScalar => {}
+                    _ => miette::bail!(
+                        "policy YAML mapping keys must be string scalars for the protobuf JSON data model"
+                    ),
+                }
+                found_key = true;
+            }
+            GreenChild::Node(_) if !found_key => miette::bail!(
+                "policy YAML mapping keys must be string scalars for the protobuf JSON data model"
+            ),
+            _ => {}
+        }
+        offset += child.text_len();
+    }
+    if !found_key {
+        miette::bail!(
+            "policy YAML mapping keys must be string scalars for the protobuf JSON data model"
+        );
+    }
+    Ok(())
+}
+
+fn validate_flow_mapping_keys(
+    node: &serde_yml::cst::GreenNode,
+    source: &str,
+    base: usize,
+) -> Result<()> {
+    use serde_yml::cst::{GreenChild, SyntaxKind};
+
+    let mut offset = base;
+    let mut expecting_key = true;
+    let mut found_key = false;
+    for child in node.children() {
+        match child {
+            GreenChild::Token { kind, .. }
+                if is_yaml_trivia(*kind)
+                    || *kind == SyntaxKind::OpenBrace
+                    || *kind == SyntaxKind::QuestionIndicator => {}
+            GreenChild::Token { kind, .. } if *kind == SyntaxKind::Comma => {
+                expecting_key = true;
+                found_key = false;
+            }
+            GreenChild::Token { kind, .. } if *kind == SyntaxKind::CloseBrace => {}
+            GreenChild::Token { kind, .. } if *kind == SyntaxKind::ColonIndicator => {
+                if expecting_key && !found_key {
+                    miette::bail!(
+                        "policy YAML mapping keys must be string scalars for the protobuf JSON data model"
+                    );
+                }
+                expecting_key = false;
+            }
+            GreenChild::Token { kind, len } if expecting_key && !found_key => {
+                let raw = &source[offset..offset + *len as usize];
+                match kind {
+                    SyntaxKind::PlainScalar => validate_plain_mapping_key(raw)?,
+                    SyntaxKind::SingleQuotedScalar | SyntaxKind::DoubleQuotedScalar => {}
+                    _ => miette::bail!(
+                        "policy YAML mapping keys must be string scalars for the protobuf JSON data model"
+                    ),
+                }
+                found_key = true;
+            }
+            GreenChild::Node(_) if expecting_key => miette::bail!(
+                "policy YAML mapping keys must be string scalars for the protobuf JSON data model"
+            ),
+            _ => {}
+        }
+        offset += child.text_len();
+    }
+    Ok(())
+}
+
+fn validate_proto_json_mapping_keys(source: &str) -> Result<()> {
+    fn walk(node: &serde_yml::cst::GreenNode, source: &str, base: usize) -> Result<()> {
+        use serde_yml::cst::{GreenChild, SyntaxKind};
+
+        match node.kind() {
+            SyntaxKind::MappingEntry => validate_mapping_entry_keys(node, source, base)?,
+            SyntaxKind::FlowMapping => validate_flow_mapping_keys(node, source, base)?,
+            _ => {}
+        }
+        let mut offset = base;
+        for child in node.children() {
+            if let GreenChild::Node(child_node) = child {
+                walk(child_node, source, offset)?;
+            }
+            offset += child.text_len();
+        }
+        Ok(())
+    }
+
+    let document = serde_yml::cst::parse_document(source)
+        .into_diagnostic()
+        .wrap_err("failed to inspect policy YAML mapping keys")?;
+    walk(document.syntax(), source, 0)
+}
+
 /// Parse strict proto-shaped policy YAML into the generated public message.
 pub fn parse_policy_proto(source: &str) -> Result<proto::SandboxPolicy> {
-    let value: serde_yml::Value =
-        serde_yml::from_str_with_config(source, &crate::parser_config(ParseLimits::default()))
-            .into_diagnostic()
-            .wrap_err("failed to parse sandbox policy YAML")?;
-    validate_exact_yaml_numbers(&value)?;
+    let config = crate::parser_config(ParseLimits::default());
+    let value: serde_yml::Value = serde_yml::from_str_with_config(source, &config)
+        .into_diagnostic()
+        .wrap_err("failed to parse sandbox policy YAML")?;
+    validate_proto_json_mapping_keys(source)?;
+    validate_proto_json_yaml(&value)?;
     let json_value = serde_json::to_value(value)
         .into_diagnostic()
         .wrap_err("policy YAML must use the JSON-compatible protobuf data model")?;
@@ -120,11 +263,12 @@ pub fn parse_policy_proto_file(path: &Path, limits: ParseLimits) -> Result<proto
     let source = std::str::from_utf8(&bytes)
         .into_diagnostic()
         .wrap_err("sandbox policy is not valid UTF-8")?;
-    let value: serde_yml::Value =
-        serde_yml::from_str_with_config(source, &crate::parser_config(limits))
-            .into_diagnostic()
-            .wrap_err("failed to parse sandbox policy YAML")?;
-    validate_exact_yaml_numbers(&value)?;
+    let config = crate::parser_config(limits);
+    let value: serde_yml::Value = serde_yml::from_str_with_config(source, &config)
+        .into_diagnostic()
+        .wrap_err("failed to parse sandbox policy YAML")?;
+    validate_proto_json_mapping_keys(source)?;
+    validate_proto_json_yaml(&value)?;
     let json_value = serde_json::to_value(value)
         .into_diagnostic()
         .wrap_err("policy YAML must use the JSON-compatible protobuf data model")?;
@@ -960,5 +1104,356 @@ network_policies:
 ";
         let error = parse_policy_proto(source).expect_err("scalar matcher must be rejected");
         assert!(error.to_string().contains("proto-shaped"));
+    }
+
+    #[test]
+    fn generated_policy_rejects_legacy_non_proto_shapes() {
+        let cases = [
+            (
+                "scalar query matcher",
+                r"
+version: 1
+network_policies:
+  api:
+    endpoints:
+      - host: api.example.com
+        port: 443
+        rules:
+          - allow:
+              query:
+                owner: NVIDIA/*
+",
+            ),
+            (
+                "legacy any matcher",
+                r"
+version: 1
+network_policies:
+  api:
+    endpoints:
+      - host: api.example.com
+        port: 443
+        rules:
+          - allow:
+              query:
+                owner:
+                  any: [NVIDIA/*, openai/*]
+",
+            ),
+            (
+                "scalar parameter matcher",
+                r"
+version: 1
+network_policies:
+  mcp:
+    endpoints:
+      - host: mcp.example.com
+        port: 443
+        protocol: mcp
+        rules:
+          - allow:
+              method: tools/call
+              params:
+                name: search_*
+",
+            ),
+            (
+                "unwrapped parameter object",
+                r"
+version: 1
+network_policies:
+  mcp:
+    endpoints:
+      - host: mcp.example.com
+        port: 443
+        protocol: mcp
+        rules:
+          - allow:
+              method: tools/call
+              params:
+                arguments:
+                  query: public-*
+",
+            ),
+            (
+                "scalar binary",
+                r"
+version: 1
+network_policies:
+  api:
+    binaries: [/usr/bin/curl]
+",
+            ),
+        ];
+
+        for (name, source) in cases {
+            let Err(error) = parse_policy_proto(source) else {
+                panic!("{name} unexpectedly parsed");
+            };
+            assert!(
+                error.to_string().contains("proto-shaped"),
+                "{name}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_policy_rejects_incomplete_and_ambiguous_oneofs() {
+        let cases = [
+            (
+                "missing matcher kind",
+                r"
+version: 1
+network_policies:
+  api:
+    endpoints:
+      - host: api.example.com
+        port: 443
+        rules:
+          - allow:
+              query:
+                owner: {}
+",
+            ),
+            (
+                "multiple matcher kinds",
+                r"
+version: 1
+network_policies:
+  api:
+    endpoints:
+      - host: api.example.com
+        port: 443
+        rules:
+          - allow:
+              tool:
+                glob: search_*
+                any:
+                  values: [fetch_*]
+",
+            ),
+            (
+                "missing parameter matcher kind",
+                r"
+version: 1
+network_policies:
+  mcp:
+    endpoints:
+      - host: mcp.example.com
+        port: 443
+        protocol: mcp
+        rules:
+          - allow:
+              method: tools/call
+              params:
+                arguments: {}
+",
+            ),
+        ];
+
+        for (name, source) in cases {
+            assert!(
+                parse_policy_proto(source).is_err(),
+                "{name} unexpectedly parsed"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_policy_follows_protobuf_null_semantics() {
+        let policy = parse_policy_proto(
+            r"
+version: 1
+filesystem_policy: null
+network_policies:
+  mcp:
+    endpoints:
+      - host: mcp.example.com
+        port: 443
+        protocol: mcp
+        mcp:
+          versions: null
+        rules:
+          - allow:
+              method: tools/call
+              tool: null
+",
+        )
+        .expect("protobuf JSON null must leave fields unset");
+
+        assert!(policy.filesystem_policy.is_none());
+        let endpoint = &policy.network_policies["mcp"].endpoints[0];
+        assert!(endpoint.mcp.as_ref().unwrap().versions.is_empty());
+        assert!(endpoint.rules[0].allow.as_ref().unwrap().tool.is_none());
+
+        let missing_version = parse_policy_proto("version:\n")
+            .expect_err("null version must become the unsupported scalar default");
+        assert!(missing_version.to_string().contains("expected version 1"));
+    }
+
+    #[test]
+    fn generated_policy_follows_protobuf_json_scalar_rules() {
+        let policy = parse_policy_proto(
+            r#"
+version: "1"
+network_policies:
+  api:
+    endpoints:
+      - host: api.example.com
+        port: "443"
+"#,
+        )
+        .expect("protobuf JSON permits quoted integer scalars");
+        assert_eq!(policy.version, 1);
+        assert_eq!(policy.network_policies["api"].endpoints[0].port, 443);
+        assert_eq!(
+            parse_policy_proto("version: 1.0\n")
+                .expect("an exact integral JSON number must parse")
+                .version,
+            1
+        );
+
+        for (name, source) in [
+            (
+                "number for string",
+                "version: 1\nprocess: { run_as_user: 1000 }\n",
+            ),
+            (
+                "string for bool",
+                "version: 1\nfilesystem_policy: { include_workdir: \"true\" }\n",
+            ),
+            ("non-integral number", "version: 1.5\n"),
+            ("negative unsigned integer", "version: -1\n"),
+            ("out-of-range uint32", "version: 4294967296\n"),
+        ] {
+            assert!(
+                parse_policy_proto(source).is_err(),
+                "{name} unexpectedly parsed"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_policy_accepts_proto_json_names_but_serializes_proto_names() {
+        let policy = parse_policy_proto(
+            r"
+version: 1
+filesystemPolicy:
+  includeWorkdir: true
+  readOnly: [/usr]
+",
+        )
+        .expect("protobuf JSON lowerCamelCase names must parse");
+        assert!(policy.filesystem_policy.as_ref().unwrap().include_workdir);
+
+        let yaml = serialize_policy_proto(&policy).expect("policy must serialize");
+        assert!(yaml.contains("filesystem_policy:"));
+        assert!(yaml.contains("include_workdir: true"));
+        assert!(!yaml.contains("filesystemPolicy"));
+    }
+
+    #[test]
+    fn generated_policy_rejects_public_attempts_to_set_internal_authority() {
+        let error = parse_policy_proto(
+            r"
+version: 1
+network_policies:
+  api:
+    endpoints:
+      - host: api.example.com
+        port: 443
+        advisor_proposed: true
+",
+        )
+        .expect_err("runtime-only authority must not be accepted from YAML");
+        assert!(error.to_string().contains("proto-shaped"));
+    }
+
+    #[test]
+    fn generated_policy_rejects_yaml_features_outside_the_safe_profile() {
+        let cases = [
+            ("duplicate key", "version: 1\nversion: 1\n"),
+            (
+                "merge key",
+                "version: 1\nbase: &base { include_workdir: true }\nfilesystem_policy:\n  <<: *base\n",
+            ),
+            ("multiple documents", "version: 1\n---\nversion: 1\n"),
+            ("custom YAML tag", "version: !custom 1\n"),
+            (
+                "non-finite number",
+                "version: 1\nnetwork_middlewares:\n  audit:\n    middleware: example/audit\n    config: { threshold: .nan }\n",
+            ),
+            (
+                "non-string protobuf map key",
+                "version: 1\nnetwork_policies:\n  1: {}\n",
+            ),
+            (
+                "non-string protobuf flow-map key",
+                "version: 1\nnetwork_policies: {1: {}}\n",
+            ),
+        ];
+
+        for (name, source) in cases {
+            assert!(
+                parse_policy_proto(source).is_err(),
+                "{name} unexpectedly parsed"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_policy_accepts_quoted_and_plain_string_mapping_keys() {
+        let policy = parse_policy_proto(
+            "version: 1\nnetwork_policies:\n  \"1\":\n    endpoints: []\n  ordinary-name:\n    endpoints: []\n",
+        )
+        .expect("quoted and ordinary string mapping keys should parse");
+
+        assert!(policy.network_policies.contains_key("1"));
+        assert!(policy.network_policies.contains_key("ordinary-name"));
+    }
+
+    #[test]
+    fn generated_policy_enforces_default_input_and_collection_limits() {
+        let limits = ParseLimits::default();
+        let prefix = "version: 1\n#";
+        let at_limit = format!("{prefix}{}", "x".repeat(limits.max_bytes - prefix.len()));
+        assert_eq!(at_limit.len(), limits.max_bytes);
+        parse_policy_proto(&at_limit).expect("document at byte limit must parse");
+        let over_limit = format!("{at_limit}x");
+        assert!(parse_policy_proto(&over_limit).is_err());
+
+        let mut oversized_sequence = String::from("version: 1\nfilesystem_policy:\n  read_only:\n");
+        for _ in 0..=limits.max_sequence_elements {
+            oversized_sequence.push_str("    - /usr\n");
+        }
+        assert!(parse_policy_proto(&oversized_sequence).is_err());
+
+        let mut oversized_map = String::from("version: 1\nnetwork_policies:\n");
+        for index in 0..=limits.max_mapping_keys {
+            use std::fmt::Write as _;
+            writeln!(oversized_map, "  rule_{index}: {{}}").unwrap();
+        }
+        assert!(parse_policy_proto(&oversized_map).is_err());
+
+        let mut deeply_nested = String::from(
+            "version: 1\nnetwork_middlewares:\n  audit:\n    middleware: example/audit\n    config: ",
+        );
+        for _ in 0..limits.max_depth {
+            deeply_nested.push_str("{child: ");
+        }
+        deeply_nested.push_str("null");
+        for _ in 0..limits.max_depth {
+            deeply_nested.push('}');
+        }
+        deeply_nested.push('\n');
+        assert!(parse_policy_proto(&deeply_nested).is_err());
+
+        let alias_amplification = format!(
+            "version: 1\nnetwork_middlewares:\n  audit:\n    middleware: example/audit\n    config:\n      base: &base {{ value: x }}\n      copies: [{}]\n",
+            std::iter::repeat_n("*base", 6)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        assert!(parse_policy_proto(&alias_amplification).is_err());
     }
 }

@@ -113,8 +113,8 @@ use tracing::{debug, info, warn};
 
 use super::validation::{
     level_matches, source_matches, validate_and_canonicalize_policy, validate_annotations,
-    validate_no_reserved_provider_policy_keys, validate_policy_safety,
-    validate_static_fields_unchanged,
+    validate_canonical_policy_size, validate_no_reserved_provider_policy_keys,
+    validate_policy_safety, validate_static_fields_unchanged,
 };
 use super::{StoredSettingValue, StoredSettings};
 use crate::persistence::current_time_ms;
@@ -3623,6 +3623,7 @@ async fn handle_update_config_inner(
             clear_provider_credentialed_markers(&mut new_policy);
             validate_no_reserved_provider_policy_keys(&new_policy)?;
             new_policy = validate_and_canonicalize_policy(new_policy)?;
+            validate_canonical_policy_size(&new_policy, "policy")?;
             validate_policy_safety(&new_policy)?;
             crate::middleware::validate_policy(state.middleware_registry.as_ref(), &new_policy)
                 .await?;
@@ -4038,6 +4039,7 @@ async fn handle_update_config_inner(
     };
 
     new_policy = validate_and_canonicalize_policy(new_policy)?;
+    validate_canonical_policy_size(&new_policy, "policy")?;
     let backfill_policy = should_backfill_policy.then(|| new_policy.clone());
     validate_policy_safety(&new_policy)?;
     crate::middleware::validate_policy(state.middleware_registry.as_ref(), &new_policy).await?;
@@ -7092,6 +7094,7 @@ fn stage_validated_merge_operation(
     let merged = merge_policy(current_policy.clone(), std::slice::from_ref(operation))
         .map_err(map_policy_merge_error)?;
     let candidate = merged.policy;
+    validate_canonical_policy_size(&candidate, "merge_operations")?;
     validate_policy_safety(&candidate)?;
     validate_candidate_effective_policy(&candidate, validation_context.provider_layers)?;
     let mut effective = if validation_context.provider_layers.is_empty() {
@@ -7154,6 +7157,7 @@ async fn apply_merge_operations_with_retry(
 
         let merged = merge_policy(current_policy, operations).map_err(map_policy_merge_error)?;
         let new_policy = merged.policy;
+        validate_canonical_policy_size(&new_policy, "merge_operations")?;
         let hash = deterministic_policy_hash(&new_policy);
 
         if let Some(baseline_policy) = baseline_policy {
@@ -8540,6 +8544,148 @@ mod tests {
                 .expect_err("invalid authored policy must fail at the public boundary");
             assert_eq!(error.code(), Code::InvalidArgument, "{case}");
         }
+    }
+
+    #[test]
+    fn public_policy_boundary_rejects_structurally_incomplete_messages() {
+        let mut missing_allow = authored::SandboxPolicy {
+            version: 1,
+            ..Default::default()
+        };
+        missing_allow.network_policies.insert(
+            "api".to_string(),
+            authored::NetworkPolicyRule {
+                endpoints: vec![authored::NetworkEndpoint {
+                    host: "api.example.com".to_string(),
+                    port: 443,
+                    rules: vec![authored::L7Rule { allow: None }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+
+        let mut missing_matcher_kind = authored_policy(
+            openshell_policy::parse_sandbox_policy(
+                "version: 1\nnetwork_policies:\n  api:\n    endpoints:\n      - { host: api.example.com, port: 443 }\n",
+            )
+            .unwrap(),
+        );
+        missing_matcher_kind
+            .network_policies
+            .get_mut("api")
+            .unwrap()
+            .endpoints[0]
+            .rules = vec![authored::L7Rule {
+            allow: Some(authored::L7Allow {
+                query: std::iter::once(("owner".to_string(), authored::Matcher { kind: None }))
+                    .collect(),
+                ..Default::default()
+            }),
+        }];
+
+        let mut oversized_port = authored::SandboxPolicy {
+            version: 1,
+            ..Default::default()
+        };
+        oversized_port.network_policies.insert(
+            "api".to_string(),
+            authored::NetworkPolicyRule {
+                endpoints: vec![authored::NetworkEndpoint {
+                    host: "api.example.com".to_string(),
+                    port: 65_536,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+
+        for (name, policy) in [
+            ("missing allow", missing_allow),
+            ("missing matcher kind", missing_matcher_kind),
+            ("oversized port", oversized_port),
+            ("missing version", authored::SandboxPolicy::default()),
+        ] {
+            let Err(error) = lower_public_policy(policy) else {
+                panic!("{name} unexpectedly lowered");
+            };
+            assert_eq!(error.code(), Code::InvalidArgument, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn global_policy_replacement_rejects_policy_over_canonical_size_limit() {
+        let state = test_server_state().await;
+        let mut policy = openshell_policy::restrictive_default_policy();
+        policy.network_policies.insert(
+            "padding".to_string(),
+            NetworkPolicyRule {
+                name: "x".repeat(super::super::MAX_POLICY_SIZE),
+                ..Default::default()
+            },
+        );
+
+        let error = handle_update_config(
+            &state,
+            with_user(Request::new(UpdateConfigRequest {
+                global: true,
+                policy: Some(authored_policy(policy)),
+                ..Default::default()
+            })),
+        )
+        .await
+        .expect_err("oversized replacement must be rejected");
+
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(
+            error
+                .message()
+                .contains("policy serialized size exceeds maximum"),
+            "{error}"
+        );
+        assert!(
+            state
+                .store
+                .get_latest_policy(GLOBAL_POLICY_SANDBOX_ID)
+                .await
+                .unwrap()
+                .is_none(),
+            "oversized replacement must not persist"
+        );
+    }
+
+    #[test]
+    fn incremental_merge_rejects_policy_over_canonical_size_limit() {
+        let current = openshell_policy::restrictive_default_policy();
+        let operation = PolicyMergeOp::AddRule {
+            rule_name: "x".repeat(super::super::MAX_POLICY_SIZE),
+            rule: NetworkPolicyRule {
+                endpoints: vec![NetworkEndpoint {
+                    host: "api.example.com".to_string(),
+                    port: 443,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        };
+
+        let error = stage_validated_merge_operation(
+            &current,
+            &operation,
+            PolicyMergeValidationContext {
+                provider_layers: &[],
+                credential_binding: None,
+            },
+        )
+        .expect_err("oversized merge must be rejected");
+
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(
+            error
+                .message()
+                .contains("policy serialized size exceeds maximum"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

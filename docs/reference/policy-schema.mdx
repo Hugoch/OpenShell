@@ -36,7 +36,14 @@ The YAML root and each present top-level section listed as an object or map must
 
 Static fields are set at sandbox creation time. Changing them requires destroying and recreating the sandbox. Dynamic fields can be updated on a running sandbox with `openshell policy update` for incremental merges or `openshell policy set` for full replacement, and take effect without restarting.
 
-For query parameters and MCP tool names, the OPA loader normalizes nonempty string matchers to explicit `glob` objects after validation. For example, `query: { status: "active*" }` becomes `query: { status: { glob: "active*" } }` in runtime endpoint data. The same normalization applies to allow and deny rules and to MCP `tool` aliases. Matchers supported by both YAML and protobuf use the same runtime representation; `any` matchers retain their listed values. Raw OPA data also accepts empty scalar query matchers, which match empty query values and remain unchanged during loading. An empty protobuf glob cannot represent that OPA-only matcher.
+Policy files use the public protobuf message shape. Query and MCP tool matchers
+must select a `Matcher` oneof with `glob` or `any`. For example, write
+`query: { status: { glob: "active*" } }` rather than the legacy scalar
+`query: { status: "active*" }`. An `any` matcher is
+`{ any: { values: ["open", "pending"] } }`. MCP `params` entries use the
+`ParameterMatcher` shape, such as
+`name: { matcher: { glob: "search_*" } }`. Scalar matchers, the old
+`{ any: [...] }` form, and unwrapped nested parameter objects are rejected.
 
 ## Parsing and representation
 
@@ -47,7 +54,21 @@ models. The parser requires `version: 1`, rejects duplicate mapping keys and
 YAML merge keys, and accepts one document of at most 4 MiB. It limits nesting
 to 64 levels, total AST nodes to 100,000, parser events to 300,000, cumulative
 scalar data to 4 MiB, alias expansions to 100 with a 5:1 alias-to-anchor ratio,
-and each mapping or sequence to 10,000 entries.
+and each mapping or sequence to 10,000 entries. Every mapping key must be a
+string. Quote keys such as `"1"`, `"true"`, or `"null"` when those exact
+strings are intended. Middleware config integers must be exactly representable
+as protobuf `double` values, so integers that would round above the 53-bit
+precision range are rejected.
+
+ProtoJSON treats YAML `null` as an unset field. Do not use `null` for matchers
+or selectors. For example, `tool: null` removes the tool selector instead of
+matching a null value. `version: null` becomes the default value `0` and fails
+policy validation.
+
+The gateway separately limits the canonical protobuf policy to 256 KiB. This
+limit applies after defaults and normalization to sandbox creation, full policy
+replacement, global policy replacement, and incremental merges. The gateway
+returns `INVALID_ARGUMENT` and does not persist a candidate that exceeds it.
 
 Unknown keys in closed schema objects are rejected with their field path before
 the policy is converted or analyzed. The following maps are intentionally
@@ -402,7 +423,7 @@ Use `rules` for MCP allow rules and `deny_rules` for MCP deny rules. Deny rules 
 |---|---|---|---|
 | `method` | string | No | MCP method name, such as `initialize`, `tools/list`, `tools/call`, or an unknown extension method. Globs are accepted only for the `tools/` method family, such as `tools/*`. Required unless `mcp.allow_all_known_mcp_methods` is `true`; when that option is true, omitted method uses the endpoint method profile. Do not use `method: "*"` for MCP; omit `method` only when using the allow-all MCP method profile. |
 | `tool` | matcher | No | Matcher for `tools/call` `params.name`. Use `{ glob: "name" }` or `{ any: { values: [...] } }`. Requires `method: tools/call` unless `mcp.allow_all_known_mcp_methods` is `true`; validation fails otherwise. Omit to match every tool. |
-| `params` | map | No | MCP currently accepts only `params.name` as a lower-level tool-name matcher. Requires `method: tools/call` unless `mcp.allow_all_known_mcp_methods` is `true`; validation fails otherwise. Tool argument matching is not supported yet; allowed tools accept all argument payloads by default. |
+| `params` | map | No | MCP currently accepts only `params.name` as a lower-level tool-name matcher. Use the `ParameterMatcher` shape, for example `name: { matcher: { glob: "search_*" } }`. Requires `method: tools/call` unless `mcp.allow_all_known_mcp_methods` is `true`; validation fails otherwise. Tool argument matching is not supported yet; allowed tools accept all argument payloads by default. |
 
 An MCP client first sends `initialize`. After the server returns a successful response, the client sends `notifications/initialized`. After initialization completes and the server advertises the `tools` capability, the client can call an advertised tool. The response does not need an allow rule because these rules inspect messages sent from the client to the server. This example adds both client initialization messages to the existing tool rules. It omits `tools/list` because it assumes the client already knows the tool names; add that method when the client performs discovery.
 

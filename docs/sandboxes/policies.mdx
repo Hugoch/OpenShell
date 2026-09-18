@@ -13,6 +13,8 @@ Use this page to apply and iterate policy changes on running sandboxes. For a fu
 Policy files use the public protobuf field shape directly. Legacy scalar
 matcher shorthands are not accepted. Write matchers as messages, for example
 `tool: { glob: read_status }` or `tool: { any: { values: [a, b] } }`.
+The local YAML parser accepts at most 4 MiB. The gateway then limits the
+canonical protobuf policy to 256 KiB after applying defaults and normalization.
 
 ## Policy Structure
 

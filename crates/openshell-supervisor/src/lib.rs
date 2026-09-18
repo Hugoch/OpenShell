@@ -5242,6 +5242,7 @@ network_policies:
     struct TestStartupGateway {
         desired: Arc<std::sync::Mutex<openshell_core::grpc_client::SettingsPollResult>>,
         reports: UnboundedSender<openshell_core::proto::ConfigurationAdmissionState>,
+        reported_errors: Arc<std::sync::Mutex<Vec<String>>>,
         reject_next_accept: Arc<AtomicBool>,
         snapshot_error: Option<tonic::Code>,
         report_error: Option<tonic::Code>,
@@ -5288,7 +5289,7 @@ network_policies:
             _instance_id: &str,
             snapshot: Option<&openshell_core::grpc_client::SettingsPollResult>,
             state: openshell_core::proto::ConfigurationAdmissionState,
-            _error: &str,
+            error: &str,
         ) -> Result<()> {
             use openshell_core::proto::ConfigurationAdmissionState;
             if let Some(code) = self.report_error {
@@ -5297,6 +5298,7 @@ network_policies:
                 ));
             }
             self.reports.send(state).unwrap();
+            self.reported_errors.lock().unwrap().push(error.to_string());
             if state == ConfigurationAdmissionState::Accepted {
                 if self.pending_acceptance {
                     return std::future::pending().await;
@@ -5353,6 +5355,7 @@ network_policies:
                     openshell_core::proto::PolicySource::Sandbox,
                 ))),
                 reports,
+                reported_errors: Arc::new(std::sync::Mutex::new(Vec::new())),
                 reject_next_accept: Arc::new(AtomicBool::new(false)),
                 snapshot_error: None,
                 report_error: None,
@@ -5429,6 +5432,7 @@ network_policies:
                     openshell_core::proto::PolicySource::Sandbox,
                 ))),
                 reports,
+                reported_errors: Arc::new(std::sync::Mutex::new(Vec::new())),
                 reject_next_accept: Arc::new(AtomicBool::new(false)),
                 snapshot_error,
                 report_error,
@@ -5463,6 +5467,81 @@ network_policies:
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn invalid_baked_policy_blocks_startup_until_gateway_policy_is_repaired() {
+        use openshell_core::proto::{ConfigurationAdmissionState, PolicySource};
+
+        let (reports, mut reported) = tokio::sync::mpsc::unbounded_channel();
+        let reported_errors = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let gateway = TestStartupGateway {
+            desired: Arc::new(std::sync::Mutex::new(settings_poll_result(
+                None,
+                0,
+                PolicySource::Sandbox,
+            ))),
+            reports,
+            reported_errors: reported_errors.clone(),
+            reject_next_accept: Arc::new(AtomicBool::new(false)),
+            snapshot_error: None,
+            report_error: None,
+            pending_snapshot: false,
+            pending_acceptance: false,
+        };
+        let active_gateway = gateway.clone();
+        let handle = tokio::spawn(async move {
+            load_policy_with_gateway(
+                Some("sandbox-id".to_string()),
+                Some("sandbox".to_string()),
+                Some("http://unused.invalid".to_string()),
+                None,
+                None,
+                &openshell_extension_core::ExtensionCredentialStore::new(),
+                LocalPolicyIdentity::Required,
+                Some(ImagePolicyDiscovery::Invalid),
+                &active_gateway,
+            )
+            .await
+        });
+
+        assert_eq!(
+            reported.recv().await,
+            Some(ConfigurationAdmissionState::Pending)
+        );
+        assert_eq!(
+            reported.recv().await,
+            Some(ConfigurationAdmissionState::Rejected)
+        );
+        assert!(
+            !handle.is_finished(),
+            "invalid image policy must block launch"
+        );
+        assert_eq!(
+            reported_errors.lock().unwrap().last().map(String::as_str),
+            Some("Image policy is invalid; replace the sandbox policy to repair configuration")
+        );
+
+        let mut repaired = proto_policy_fixture();
+        enrich_proto_baseline_paths(&mut repaired);
+        {
+            let mut desired = gateway.desired.lock().unwrap();
+            desired.policy = Some(repaired);
+            desired.version = 1;
+            desired.policy_hash = "hash-v1".to_string();
+            desired.config_revision = 100;
+            desired.configuration_admitted = true;
+        }
+
+        assert_eq!(
+            reported.recv().await,
+            Some(ConfigurationAdmissionState::Accepted)
+        );
+        let bundle = handle
+            .await
+            .expect("startup task must not panic")
+            .expect("repaired gateway policy must unblock startup");
+        assert!(bundle.2.is_some(), "accepted bundle must retain the policy");
+    }
+
     #[tokio::test]
     async fn startup_waits_for_repair_and_retries_stale_activation_before_returning() {
         use openshell_core::proto::{ConfigurationAdmissionState, PolicySource};
@@ -5474,6 +5553,7 @@ network_policies:
         let gateway = TestStartupGateway {
             desired: Arc::new(std::sync::Mutex::new(rejected)),
             reports,
+            reported_errors: Arc::new(std::sync::Mutex::new(Vec::new())),
             reject_next_accept: Arc::new(AtomicBool::new(true)),
             snapshot_error: None,
             report_error: None,
