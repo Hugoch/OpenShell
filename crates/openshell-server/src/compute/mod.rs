@@ -1236,7 +1236,7 @@ impl ComputeRuntime {
                         driver
                             .stop_sandbox(Request::new(StopSandboxRequest {
                                 sandbox_id,
-                                sandbox_name,
+                                name: sandbox_name,
                             }))
                             .await
                     }
@@ -1466,7 +1466,7 @@ impl ComputeRuntime {
                             driver
                                 .start_sandbox(Request::new(StartSandboxRequest {
                                     sandbox_id,
-                                    sandbox_name,
+                                    name: sandbox_name,
                                     launch_authentication,
                                     generation_id,
                                 }))
@@ -1656,7 +1656,6 @@ impl ComputeRuntime {
                 expected_resource_version,
                 move |sandbox| {
                     sandbox.set_phase(phase as i32);
-                    let name = sandbox.object_name().to_string();
                     if matches!(phase, SandboxPhase::Stopping | SandboxPhase::Starting) {
                         let status = sandbox.status.get_or_insert_with(Default::default);
                         // Retain the previous instance id as a tombstone until
@@ -1679,7 +1678,6 @@ impl ComputeRuntime {
                     }
                     upsert_ready_condition(
                         &mut sandbox.status,
-                        &name,
                         SandboxCondition {
                             r#type: "Ready".to_string(),
                             status: "False".to_string(),
@@ -1835,7 +1833,7 @@ impl ComputeRuntime {
                         driver
                             .delete_sandbox(Request::new(DeleteSandboxRequest {
                                 sandbox_id,
-                                sandbox_name,
+                                name: sandbox_name,
                             }))
                             .await
                     }
@@ -2410,8 +2408,8 @@ impl ComputeRuntime {
                 if !sandbox_phase_should_be_running(phase) {
                     return (0, 0);
                 }
-
                 let sandbox_name = sandbox.object_name().to_string();
+
                 match self
                     .driver
                     .call(
@@ -2424,7 +2422,7 @@ impl ComputeRuntime {
                                 driver
                                     .stop_sandbox(Request::new(StopSandboxRequest {
                                         sandbox_id,
-                                        sandbox_name,
+                                        name: sandbox_name,
                                     }))
                                     .await
                             }
@@ -2599,7 +2597,7 @@ impl ComputeRuntime {
                                 driver
                                     .start_sandbox(Request::new(StartSandboxRequest {
                                         sandbox_id,
-                                        sandbox_name,
+                                        name: sandbox_name,
                                         launch_authentication,
                                         generation_id,
                                     }))
@@ -2736,7 +2734,7 @@ impl ComputeRuntime {
                                 driver
                                     .stop_sandbox(Request::new(StopSandboxRequest {
                                         sandbox_id: driver_sandbox_id,
-                                        sandbox_name,
+                                        name: sandbox_name,
                                     }))
                                     .await
                             },
@@ -2790,7 +2788,7 @@ impl ComputeRuntime {
                                 driver
                                     .start_sandbox(Request::new(StartSandboxRequest {
                                         sandbox_id: driver_sandbox_id,
-                                        sandbox_name,
+                                        name: sandbox_name,
                                         launch_authentication: Vec::new(),
                                         generation_id,
                                     }))
@@ -2828,10 +2826,8 @@ impl ComputeRuntime {
                     return;
                 }
                 s.set_phase(SandboxPhase::Error as i32);
-                let name = s.object_name().to_string();
                 upsert_ready_condition(
                     &mut s.status,
-                    &name,
                     SandboxCondition {
                         r#type: "Ready".to_string(),
                         status: "False".to_string(),
@@ -2868,10 +2864,8 @@ impl ComputeRuntime {
             .store
             .update_message_cas::<Sandbox, _>(&sandbox_id, 0, |s| {
                 s.set_phase(SandboxPhase::Provisioning as i32);
-                let name = s.object_name().to_string();
                 upsert_ready_condition(
                     &mut s.status,
-                    &name,
                     SandboxCondition {
                         r#type: "Ready".to_string(),
                         status: "False".to_string(),
@@ -3448,16 +3442,15 @@ impl ComputeRuntime {
                     sandbox_id,
                     expected_resource_version,
                     |sandbox| {
-                        let sandbox_name = sandbox.object_name().to_string();
                         if connected {
-                            ensure_supervisor_ready_status(&mut sandbox.status, &sandbox_name);
+                            ensure_supervisor_ready_status(&mut sandbox.status);
                             let status = sandbox.status.get_or_insert_with(Default::default);
                             status.main_process_instance_id =
                                 instance_id.unwrap_or_default().to_string();
                             status.exit_code = None;
                             sandbox.set_phase(SandboxPhase::Ready as i32);
                         } else {
-                            ensure_supervisor_not_ready_status(&mut sandbox.status, &sandbox_name);
+                            ensure_supervisor_not_ready_status(&mut sandbox.status);
                             sandbox.set_phase(SandboxPhase::Provisioning as i32);
                         }
                         apply_configuration_readiness(sandbox);
@@ -3802,7 +3795,7 @@ impl ComputeRuntime {
                         driver
                             .delete_sandbox(Request::new(DeleteSandboxRequest {
                                 sandbox_id,
-                                sandbox_name,
+                                name: sandbox_name,
                             }))
                             .await
                     }
@@ -4081,10 +4074,8 @@ impl ComputeRuntime {
                     expected_resource_version,
                     |sandbox| {
                         sandbox.set_phase(SandboxPhase::Error as i32);
-                        let name = sandbox.object_name().to_string();
                         upsert_ready_condition(
                             &mut sandbox.status,
-                            &name,
                             SandboxCondition {
                                 r#type: "Ready".to_string(),
                                 status: "False".to_string(),
@@ -4143,7 +4134,7 @@ impl ComputeRuntime {
                         driver
                             .get_sandbox(Request::new(GetSandboxRequest {
                                 sandbox_id,
-                                sandbox_name,
+                                name: sandbox_name,
                             }))
                             .await
                     }
@@ -4206,7 +4197,6 @@ fn validate_driver_sandbox_timestamps(sandbox: &DriverSandbox) -> Result<(), Str
 }
 
 fn apply_main_process_exit(sandbox: &mut Sandbox, instance_id: &str, exit_code: i32) {
-    let sandbox_name = sandbox.object_name().to_string();
     // A driver can observe the container exit before the supervisor's
     // authoritative main-process report arrives. In that ordering,
     // ContainerExited is only a provisional classification: replace it with
@@ -4218,10 +4208,7 @@ fn apply_main_process_exit(sandbox: &mut Sandbox, instance_id: &str, exit_code: 
                 condition.r#type == "Ready" && condition.reason == "ContainerExited"
             })
         });
-    let status = sandbox.status.get_or_insert_with(|| SandboxStatus {
-        sandbox_name: sandbox_name.clone(),
-        ..Default::default()
-    });
+    let status = sandbox.status.get_or_insert_with(SandboxStatus::default);
     status.main_process_instance_id = instance_id.to_string();
     status.exit_code = Some(exit_code);
     if preserve_infrastructure_error {
@@ -4242,7 +4229,6 @@ fn apply_main_process_exit(sandbox: &mut Sandbox, instance_id: &str, exit_code: 
     };
     upsert_ready_condition(
         &mut sandbox.status,
-        &sandbox_name,
         SandboxCondition {
             r#type: "Ready".to_string(),
             status: "False".to_string(),
@@ -4332,7 +4318,10 @@ fn driver_sandbox_from_public(
             .as_ref()
             .map(|spec| driver_sandbox_spec_from_public(spec, driver_name))
             .transpose()?,
-        status: sandbox.status.as_ref().map(driver_status_from_public),
+        status: sandbox
+            .status
+            .as_ref()
+            .map(|status| driver_status_from_public(status, sandbox.object_name())),
         workspace: sandbox.object_workspace().to_string(),
     })
 }
@@ -4637,9 +4626,9 @@ fn build_platform_resources_config(
     }
 }
 
-fn driver_status_from_public(status: &SandboxStatus) -> DriverSandboxStatus {
+fn driver_status_from_public(status: &SandboxStatus, sandbox_name: &str) -> DriverSandboxStatus {
     DriverSandboxStatus {
-        sandbox_name: status.sandbox_name.clone(),
+        name: sandbox_name.to_string(),
         instance_id: status.agent_pod.clone(),
         agent_fd: status.agent_fd.clone(),
         sandbox_fd: status.sandbox_fd.clone(),
@@ -4662,7 +4651,6 @@ fn driver_condition_from_public(condition: &SandboxCondition) -> DriverCondition
         transition_time: condition.transition_time,
     }
 }
-
 impl ObjectType for Sandbox {
     fn object_type() -> &'static str {
         "sandbox"
@@ -4713,7 +4701,6 @@ fn public_status_from_driver(
     current_policy_version: u32,
 ) -> SandboxStatus {
     SandboxStatus {
-        sandbox_name: status.sandbox_name.clone(),
         agent_pod: status.instance_id.clone(),
         agent_fd: status.agent_fd.clone(),
         sandbox_fd: status.sandbox_fd.clone(),
@@ -4775,7 +4762,7 @@ fn apply_driver_snapshot(
             let mut status = sandbox.status.clone();
             rewrite_user_facing_conditions(&mut status, sandbox.spec.as_ref());
             if supervisor_promoted {
-                ensure_supervisor_ready_status(&mut status, sandbox_name);
+                ensure_supervisor_ready_status(&mut status);
             }
             (phase, status)
         },
@@ -4790,7 +4777,7 @@ fn apply_driver_snapshot(
                 composed.phase,
                 cpv,
             ));
-            composed.apply_readiness_conditions(&mut status, sandbox_name, sandbox.spec.as_ref());
+            composed.apply_readiness_conditions(&mut status, sandbox.spec.as_ref());
             (composed.phase, status)
         },
     );
@@ -4846,11 +4833,6 @@ fn apply_driver_snapshot(
         status.endpoint_statuses = endpoint_statuses;
     }
 
-    if let Some(status) = status.as_mut()
-        && status.sandbox_name.is_empty()
-    {
-        status.sandbox_name.clone_from(sandbox_name);
-    }
     if let (Some(status), Some(current_status)) = (status.as_mut(), sandbox.status.as_ref()) {
         status
             .main_process_instance_id
@@ -5016,10 +4998,9 @@ fn driver_snapshot_confirms_stopping(incoming: &DriverSandbox) -> bool {
     })
 }
 
-fn ensure_supervisor_ready_status(status: &mut Option<SandboxStatus>, sandbox_name: &str) {
+fn ensure_supervisor_ready_status(status: &mut Option<SandboxStatus>) {
     upsert_ready_condition(
         status,
-        sandbox_name,
         SandboxCondition {
             r#type: "Ready".to_string(),
             status: "True".to_string(),
@@ -5071,22 +5052,20 @@ impl ComposedPhase {
     fn apply_readiness_conditions(
         &self,
         status: &mut Option<SandboxStatus>,
-        sandbox_name: &str,
         spec: Option<&SandboxSpec>,
     ) {
         rewrite_user_facing_conditions(status, spec);
         if self.backend_ready_without_session {
-            ensure_supervisor_not_connected_status(status, sandbox_name);
+            ensure_supervisor_not_connected_status(status);
         } else if self.session_connected && self.phase == SandboxPhase::Ready {
-            ensure_supervisor_ready_status(status, sandbox_name);
+            ensure_supervisor_ready_status(status);
         }
     }
 }
 
-fn ensure_supervisor_not_connected_status(status: &mut Option<SandboxStatus>, sandbox_name: &str) {
+fn ensure_supervisor_not_connected_status(status: &mut Option<SandboxStatus>) {
     upsert_ready_condition(
         status,
-        sandbox_name,
         SandboxCondition {
             r#type: "Ready".to_string(),
             status: "False".to_string(),
@@ -5097,10 +5076,9 @@ fn ensure_supervisor_not_connected_status(status: &mut Option<SandboxStatus>, sa
     );
 }
 
-fn ensure_supervisor_not_ready_status(status: &mut Option<SandboxStatus>, sandbox_name: &str) {
+fn ensure_supervisor_not_ready_status(status: &mut Option<SandboxStatus>) {
     upsert_ready_condition(
         status,
-        sandbox_name,
         SandboxCondition {
             r#type: "Ready".to_string(),
             status: "False".to_string(),
@@ -5111,15 +5089,8 @@ fn ensure_supervisor_not_ready_status(status: &mut Option<SandboxStatus>, sandbo
     );
 }
 
-fn upsert_ready_condition(
-    status: &mut Option<SandboxStatus>,
-    sandbox_name: &str,
-    condition: SandboxCondition,
-) {
-    let status = status.get_or_insert_with(|| SandboxStatus {
-        sandbox_name: sandbox_name.to_string(),
-        ..Default::default()
-    });
+fn upsert_ready_condition(status: &mut Option<SandboxStatus>, condition: SandboxCondition) {
+    let status = status.get_or_insert_with(SandboxStatus::default);
 
     if let Some(existing) = status
         .conditions
@@ -5947,7 +5918,7 @@ mod tests {
             let sandbox = current
                 .iter()
                 .find(|sandbox| {
-                    sandbox.name == request.sandbox_name
+                    sandbox.name == request.name
                         && (request.sandbox_id.is_empty() || sandbox.id == request.sandbox_id)
                 })
                 .cloned()
@@ -6344,7 +6315,7 @@ mod tests {
             self.stop_requests
                 .lock()
                 .expect("stop requests lock poisoned")
-                .push((request.sandbox_id, request.sandbox_name));
+                .push((request.sandbox_id, request.name));
             self.stop_calls.fetch_add(1, Ordering::SeqCst);
             self.stop_started.notify_one();
             if self.stop_blocked.load(Ordering::SeqCst) {
@@ -6375,7 +6346,7 @@ mod tests {
             self.start_requests
                 .lock()
                 .expect("start requests lock poisoned")
-                .push((request.sandbox_id, request.sandbox_name));
+                .push((request.sandbox_id, request.name));
             self.start_authentications
                 .lock()
                 .expect("start authentications lock poisoned")
@@ -6410,7 +6381,7 @@ mod tests {
             self.delete_requests
                 .lock()
                 .expect("delete requests lock poisoned")
-                .push((request.sandbox_id, request.sandbox_name));
+                .push((request.sandbox_id, request.name));
             self.delete_calls.fetch_add(1, Ordering::SeqCst);
             self.delete_started.notify_one();
             if self.delete_blocked.load(Ordering::SeqCst) {
@@ -6933,8 +6904,8 @@ mod tests {
                 deletion_time: None,
             }),
             sandbox_id: sandbox.object_id().to_string(),
-            sandbox_name: sandbox.object_name().to_string(),
-            service_name: "web".to_string(),
+            sandbox: sandbox.object_name().to_string(),
+            name: "web".to_string(),
             target_port: 8080,
             domain: true,
         }
@@ -7094,7 +7065,7 @@ mod tests {
 
     fn make_driver_status(condition: DriverCondition) -> DriverSandboxStatus {
         DriverSandboxStatus {
-            sandbox_name: "test".to_string(),
+            name: "test".to_string(),
             instance_id: "test-pod".to_string(),
             agent_fd: String::new(),
             sandbox_fd: String::new(),
@@ -7112,7 +7083,7 @@ mod tests {
             workspace: "default".to_string(),
             spec: None,
             status: Some(DriverSandboxStatus {
-                sandbox_name: name.to_string(),
+                name: name.to_string(),
                 instance_id: format!("{name}-pod"),
                 agent_fd: String::new(),
                 sandbox_fd: String::new(),
@@ -7184,7 +7155,6 @@ mod tests {
             last_reported_time: Some("2026-09-05T01:01:00.000Z".parse().unwrap()),
         };
         sandbox.status = Some(SandboxStatus {
-            sandbox_name: "sandbox-name".to_string(),
             phase: SandboxPhase::Ready as i32,
             endpoint_statuses: vec![endpoint.clone()],
             ..Default::default()
@@ -7522,7 +7492,6 @@ mod tests {
     #[test]
     fn rewrite_user_facing_conditions_rewrites_gpu_unschedulable_message() {
         let mut status = Some(SandboxStatus {
-            sandbox_name: "test".to_string(),
             agent_pod: "test-pod".to_string(),
             conditions: vec![SandboxCondition {
                 r#type: "Ready".to_string(),
@@ -7555,7 +7524,6 @@ mod tests {
     fn rewrite_user_facing_conditions_leaves_non_gpu_unschedulable_message_unchanged() {
         let original = "0/1 nodes are available: 1 Insufficient cpu.";
         let mut status = Some(SandboxStatus {
-            sandbox_name: "test".to_string(),
             agent_pod: "test-pod".to_string(),
             conditions: vec![SandboxCondition {
                 r#type: "Ready".to_string(),
@@ -8370,7 +8338,7 @@ mod tests {
         );
         let mut progressing = ready_driver_sandbox(sandbox.object_id(), sandbox.object_name());
         progressing.status = Some(DriverSandboxStatus {
-            sandbox_name: sandbox.object_name().to_string(),
+            name: sandbox.object_name().to_string(),
             instance_id: format!("{}-pod", sandbox.object_name()),
             conditions: vec![
                 DriverCondition {
@@ -8743,7 +8711,7 @@ mod tests {
 
         let mut resumed = ready_driver_sandbox(sandbox.object_id(), sandbox.object_name());
         resumed.status = Some(DriverSandboxStatus {
-            sandbox_name: sandbox.object_name().to_string(),
+            name: sandbox.object_name().to_string(),
             instance_id: format!("{}-pod", sandbox.object_name()),
             conditions: vec![
                 DriverCondition {
@@ -8947,7 +8915,7 @@ mod tests {
                 namespace: "default".to_string(),
                 spec: None,
                 status: Some(DriverSandboxStatus {
-                    sandbox_name: "sandbox-a".to_string(),
+                    name: "sandbox-a".to_string(),
                     instance_id: "agent-pod".to_string(),
                     agent_fd: String::new(),
                     sandbox_fd: String::new(),
@@ -10258,7 +10226,6 @@ mod tests {
         let runtime = test_runtime(Arc::new(TestDriver::default())).await;
         let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
         sandbox.status = Some(SandboxStatus {
-            sandbox_name: "sandbox-a".to_string(),
             main_process_instance_id: "instance-1".to_string(),
             ..Default::default()
         });
@@ -10321,7 +10288,6 @@ mod tests {
             SandboxPhase::Stopped,
         );
         sandbox.status = Some(SandboxStatus {
-            sandbox_name: sandbox.object_name().to_string(),
             phase: SandboxPhase::Stopped as i32,
             conditions: vec![SandboxCondition {
                 r#type: "Ready".to_string(),
@@ -10358,7 +10324,6 @@ mod tests {
         let runtime = test_runtime(Arc::new(TestDriver::default())).await;
         let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Completed);
         sandbox.status = Some(SandboxStatus {
-            sandbox_name: "sandbox-a".to_string(),
             phase: SandboxPhase::Completed as i32,
             main_process_instance_id: "instance-1".to_string(),
             exit_code: Some(0),
@@ -10390,7 +10355,6 @@ mod tests {
         let runtime = test_runtime(Arc::new(TestDriver::default())).await;
         let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
         sandbox.status = Some(SandboxStatus {
-            sandbox_name: "sandbox-a".to_string(),
             conditions: vec![SandboxCondition {
                 r#type: "Ready".to_string(),
                 status: "True".to_string(),
@@ -10578,7 +10542,6 @@ mod tests {
         let runtime = test_runtime(Arc::new(TestDriver::default())).await;
         let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
         sandbox.status = Some(SandboxStatus {
-            sandbox_name: "sandbox-a".to_string(),
             conditions: vec![SandboxCondition {
                 r#type: "Ready".to_string(),
                 status: "True".to_string(),
@@ -10625,7 +10588,7 @@ mod tests {
 
     fn make_ready_driver_status() -> DriverSandboxStatus {
         DriverSandboxStatus {
-            sandbox_name: "test".to_string(),
+            name: "test".to_string(),
             instance_id: "test-pod".to_string(),
             agent_fd: String::new(),
             sandbox_fd: String::new(),
@@ -10643,7 +10606,7 @@ mod tests {
 
     fn make_deleting_driver_status() -> DriverSandboxStatus {
         DriverSandboxStatus {
-            sandbox_name: "test".to_string(),
+            name: "test".to_string(),
             instance_id: "test-pod".to_string(),
             agent_fd: String::new(),
             sandbox_fd: String::new(),
@@ -10921,7 +10884,7 @@ mod tests {
                 namespace: "default".to_string(),
                 spec: None,
                 status: Some(DriverSandboxStatus {
-                    sandbox_name: "sandbox-a".to_string(),
+                    name: "sandbox-a".to_string(),
                     instance_id: "agent-pod".to_string(),
                     agent_fd: String::new(),
                     sandbox_fd: String::new(),
@@ -10943,7 +10906,7 @@ mod tests {
                 namespace: "default".to_string(),
                 spec: None,
                 status: Some(DriverSandboxStatus {
-                    sandbox_name: "sandbox-a".to_string(),
+                    name: "sandbox-a".to_string(),
                     instance_id: "agent-pod".to_string(),
                     agent_fd: String::new(),
                     sandbox_fd: String::new(),
@@ -11157,7 +11120,7 @@ mod tests {
                 namespace: "default".to_string(),
                 spec: None,
                 status: Some(DriverSandboxStatus {
-                    sandbox_name: "sandbox-a".to_string(),
+                    name: "sandbox-a".to_string(),
                     instance_id: "agent-pod".to_string(),
                     agent_fd: String::new(),
                     sandbox_fd: String::new(),
@@ -12015,7 +11978,7 @@ mod tests {
             remote
                 .get_sandbox(Request::new(GetSandboxRequest {
                     sandbox_id: sandbox.id.clone(),
-                    sandbox_name: String::new(),
+                    name: String::new(),
                 }))
                 .await
                 .unwrap();
@@ -12026,7 +11989,7 @@ mod tests {
             remote
                 .stop_sandbox(Request::new(StopSandboxRequest {
                     sandbox_id: sandbox.id.clone(),
-                    sandbox_name: String::new(),
+                    name: String::new(),
                 }))
                 .await
                 .unwrap();
@@ -12037,7 +12000,7 @@ mod tests {
             remote
                 .delete_sandbox(Request::new(DeleteSandboxRequest {
                     sandbox_id: sandbox.id,
-                    sandbox_name: String::new(),
+                    name: String::new(),
                 }))
                 .await
                 .unwrap();

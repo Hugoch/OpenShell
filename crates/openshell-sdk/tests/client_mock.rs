@@ -272,7 +272,7 @@ impl OpenShell for TestOpenShell {
         request: tonic::Request<proto::GetSandboxTemplateRequest>,
     ) -> Result<Response<proto::SandboxTemplateResponse>, Status> {
         let request = request.into_inner();
-        let workspace = selected_workspace(&request.workspace_scope).unwrap_or("default");
+        let workspace = selected_workspace(&request.workspace_scope).unwrap_or_default();
         let template = workload_template_proto(&request.name, workspace);
         *self.state.last_template_get.lock().await = Some(request);
         Ok(Response::new(proto::SandboxTemplateResponse {
@@ -311,9 +311,9 @@ impl OpenShell for TestOpenShell {
     ) -> Result<Response<proto::SandboxResponse>, Status> {
         let request = request.into_inner();
         let sandbox = sandbox_with_phase_ws(
-            &request.name,
+            request.name.as_str(),
             proto::SandboxPhase::Stopped,
-            selected_workspace(&request.workspace_scope).unwrap_or("default"),
+            selected_workspace(&request.workspace_scope).unwrap_or_default(),
         );
         *self.state.last_stop.lock().await = Some(request);
         Ok(Response::new(proto::SandboxResponse {
@@ -327,9 +327,9 @@ impl OpenShell for TestOpenShell {
     ) -> Result<Response<proto::SandboxResponse>, Status> {
         let request = request.into_inner();
         let sandbox = sandbox_with_phase_ws(
-            &request.name,
+            request.name.as_str(),
             proto::SandboxPhase::Starting,
-            selected_workspace(&request.workspace_scope).unwrap_or("default"),
+            selected_workspace(&request.workspace_scope).unwrap_or_default(),
         );
         *self.state.last_start.lock().await = Some(request);
         Ok(Response::new(proto::SandboxResponse {
@@ -342,10 +342,10 @@ impl OpenShell for TestOpenShell {
         request: tonic::Request<proto::GetSandboxRequest>,
     ) -> Result<Response<proto::SandboxResponse>, Status> {
         let req = request.into_inner();
-        let name = req.name;
+        let name = req.name.clone();
         *self.state.last_get_name.lock().await = Some(name.clone());
         *self.state.last_get_workspace.lock().await =
-            selected_workspace(&req.workspace_scope).map(str::to_string);
+            selected_workspace(&req.workspace_scope).map(ToString::to_string);
         let count = self.state.get_calls.fetch_add(1, Ordering::SeqCst);
 
         if let Some(error) = &self.state.get_error {
@@ -444,9 +444,9 @@ impl OpenShell for TestOpenShell {
         request: tonic::Request<proto::DeleteSandboxRequest>,
     ) -> Result<Response<proto::DeleteSandboxResponse>, Status> {
         let req = request.into_inner();
-        *self.state.last_delete_name.lock().await = Some(req.name);
+        *self.state.last_delete_name.lock().await = Some(req.name.clone());
         *self.state.last_delete_workspace.lock().await =
-            selected_workspace(&req.workspace_scope).map(str::to_string);
+            selected_workspace(&req.workspace_scope).map(ToString::to_string);
         if let Some(response) = &self.state.delete_response {
             return Ok(Response::new(response.clone()));
         }
@@ -1033,7 +1033,7 @@ async fn create_sandbox_from_template_passes_template_name() {
 
     let observed = state.last_create.lock().await.clone().unwrap();
     assert_eq!(observed.name, "from-template");
-    assert_eq!(observed.workload_template_name, "python");
+    assert_eq!(observed.workload_template, "python");
     let observed_spec = observed.spec.unwrap();
     assert_eq!(observed_spec.providers, vec!["openai".to_string()]);
     assert_eq!(observed_spec.command, vec!["python", "-m", "agent"]);
@@ -1240,7 +1240,7 @@ async fn stop_and_start_map_requests_and_phases() {
     let stopped = client.stop_sandbox("sleepy").await.unwrap();
     assert_eq!(stopped.phase, SandboxPhase::Stopped);
     let stop = state.last_stop.lock().await.clone().unwrap();
-    assert_eq!(stop.name, "sleepy");
+    assert_eq!(Some(stop.name.as_str()), Some("sleepy"));
     assert_eq!(selected_workspace(&stop.workspace_scope), Some("default"));
 
     let started = client
@@ -1250,7 +1250,7 @@ async fn stop_and_start_map_requests_and_phases() {
         .unwrap();
     assert_eq!(started.phase, SandboxPhase::Starting);
     let start = state.last_start.lock().await.clone().unwrap();
-    assert_eq!(start.name, "sleepy");
+    assert_eq!(Some(start.name.as_str()), Some("sleepy"));
     assert_eq!(selected_workspace(&start.workspace_scope), Some("team-a"));
 }
 
@@ -1518,7 +1518,7 @@ async fn exec_buffers_stdout_stderr_and_exit() {
     assert_eq!(result.stderr, b"warn\n");
 
     let observed = state.last_exec_request.lock().await.clone().unwrap();
-    assert_eq!(observed.sandbox_id, "id-my-box");
+    assert_eq!(observed.sandbox, "my-box");
     assert_eq!(
         observed.command,
         vec!["echo".to_string(), "hello".to_string()]
@@ -1667,7 +1667,7 @@ async fn workspace_scoped_create_from_template_passes_workspace() {
         selected_workspace(&observed.workspace_scope),
         Some("staging")
     );
-    assert_eq!(observed.workload_template_name, "python");
+    assert_eq!(observed.workload_template, "python");
     assert_eq!(observed.spec.unwrap().policy.unwrap().version, 2);
 }
 
@@ -1855,7 +1855,7 @@ async fn delete_workspace_returns_ack() {
 }
 
 #[tokio::test]
-async fn sandbox_ref_includes_workspace_field() {
+async fn sandbox_result_includes_workspace_field() {
     let state = Arc::new(MockState {
         phase_sequence: vec![proto::SandboxPhase::Ready],
         ..Default::default()

@@ -26,7 +26,7 @@ describe('raw sandbox endpoint status', () => {
             router.service(OpenShell, {
               getSandbox: (request) => {
                 expect(request.name).toBe('tool-sandbox');
-                expect(request.workspaceScope?.selection).toEqual({ case: 'workspace', value: 'tool-workspace' });
+                expect(request.workspaceScope?.selection.value).toBe('tool-workspace');
                 return {
                   sandbox: {
                     metadata: { id: 'sandbox-id', name: request.name, workspace: 'tool-workspace' },

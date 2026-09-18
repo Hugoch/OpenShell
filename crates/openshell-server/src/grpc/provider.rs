@@ -1904,7 +1904,7 @@ pub async fn validate_provider_update_against_attached_sandboxes_with_catalog(
         validate_provider_environment_keys_unique_at(
             store,
             catalog,
-            workspace,
+                        workspace,
             &spec.providers,
             Some(provider),
             crate::persistence::current_time_ms(),
@@ -2393,7 +2393,7 @@ use tonic::{Request, Response};
 use crate::auth::principal::Principal;
 use crate::auth::workspace_authz::{
     AuthorizedWorkspaceScope, MinWorkspaceRole, authorize_list_workspace_selector,
-    authorize_workspace, authorize_workspace_selector, require_platform_admin,
+    authorize_workspace, require_platform_admin,
 };
 use openshell_core::oauth::{
     self, TokenExchangeParams, effective_client_assertion_type, effective_token_type,
@@ -2521,17 +2521,25 @@ fn publish_provider_change(state: &Arc<ServerState>, workspace: &str) {
     }
 }
 
+fn selected_profile_workspace(
+    workspace_scope: Option<&openshell_core::proto::WorkspaceSelector>,
+) -> Result<&str, Status> {
+    workspace_scope.map_or(Ok(""), |scope| {
+        crate::auth::workspace_authz::selected_workspace_name(Some(scope))
+    })
+}
+
 pub(super) async fn handle_create_provider(
     state: &Arc<ServerState>,
     request: Request<CreateProviderRequest>,
 ) -> Result<Response<ProviderResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        req.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -2603,11 +2611,11 @@ pub(super) async fn handle_get_provider(
 ) -> Result<Response<ProviderResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        req.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
@@ -2689,7 +2697,7 @@ pub(super) async fn handle_list_provider_profiles(
     let workspace = authorize_and_resolve_profile_workspace(
         state,
         &principal,
-        &request.workspace,
+        selected_profile_workspace(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?
@@ -2698,7 +2706,7 @@ pub(super) async fn handle_list_provider_profiles(
         request.page_size,
         &request.page_token,
         "ListProviderProfiles",
-        &[&request.workspace],
+        &[&workspace],
     )?;
     let after = pagination.profile_cursor()?;
     let catalog = state
@@ -2746,7 +2754,7 @@ pub(super) async fn handle_get_provider_profile(
     let workspace = authorize_and_resolve_profile_workspace(
         state,
         &principal,
-        &req.workspace,
+        selected_profile_workspace(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?
@@ -2776,7 +2784,7 @@ pub(super) async fn handle_import_provider_profiles(
     let workspace = authorize_and_resolve_profile_workspace(
         state,
         &principal,
-        &request.workspace,
+        selected_profile_workspace(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?
@@ -2867,7 +2875,7 @@ pub(super) async fn handle_update_provider_profiles(
     let workspace = authorize_and_resolve_profile_workspace(
         state,
         &principal,
-        &request.workspace,
+        selected_profile_workspace(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?
@@ -2998,7 +3006,7 @@ pub(super) async fn handle_lint_provider_profiles(
     let workspace = authorize_and_resolve_profile_workspace(
         state,
         &principal,
-        &request.workspace,
+        selected_profile_workspace(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?
@@ -3030,7 +3038,7 @@ pub(super) async fn handle_delete_provider_profile(
     let workspace = authorize_and_resolve_profile_workspace(
         state,
         &principal,
-        &req.workspace,
+        selected_profile_workspace(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?
@@ -3828,11 +3836,11 @@ pub(super) async fn handle_update_provider(
 ) -> Result<Response<ProviderResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        req.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -4414,11 +4422,11 @@ pub(super) async fn handle_get_provider_refresh_status(
 ) -> Result<Response<GetProviderRefreshStatusResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let request = request.into_inner();
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        request.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
@@ -4468,11 +4476,11 @@ pub(super) async fn handle_configure_provider_refresh(
     let principal = super::extract_principal(&request)?;
     let replay_facts = super::mutation_replay::ordinary::Facts::from_request(&request);
     let request = request.into_inner();
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        request.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -4889,11 +4897,11 @@ pub(super) async fn handle_rotate_provider_credential(
     let principal = super::extract_principal(&request)?;
     let replay_facts = super::mutation_replay::ordinary::Facts::from_request(&request);
     let request = request.into_inner();
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        request.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -4959,11 +4967,11 @@ pub(super) async fn handle_delete_provider_refresh(
 ) -> Result<Response<DeleteProviderRefreshResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let request = request.into_inner();
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        request.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -5043,11 +5051,11 @@ pub(super) async fn handle_delete_provider(
 ) -> Result<Response<DeleteProviderResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         &principal,
-        req.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -5401,7 +5409,7 @@ mod tests {
             port,
             path: path.to_string(),
             protocol: "rest".to_string(),
-            access: "full".to_string(),
+            access: openshell_core::proto::NetworkAccessPreset::Full as i32,
             ..Default::default()
         }];
         handle_import_provider_profiles(
@@ -5412,7 +5420,9 @@ mod tests {
                     profile: Some(profile),
                     source: format!("{id}.yaml"),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5542,7 +5552,7 @@ mod tests {
             port: 443,
             path: "/v1/**".to_string(),
             protocol: "rest".to_string(),
-            access: "full".to_string(),
+            access: openshell_core::proto::NetworkAccessPreset::Full as i32,
             ..Default::default()
         }];
         let response = handle_import_provider_profiles(
@@ -5553,7 +5563,9 @@ mod tests {
                     profile: Some(profile),
                     source: "grant-new.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5582,7 +5594,9 @@ mod tests {
                         profile: Some(custom_profile("guarded-import")),
                         source: "guarded-import.yaml".to_string(),
                     }],
-                    workspace: "default".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
             )
             .await
@@ -5638,7 +5652,9 @@ mod tests {
                 }),
                 expected_resource_version: 0,
                 id: "custom-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5684,7 +5700,9 @@ mod tests {
                 }),
                 expected_resource_version: 0,
                 id: "vended-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5707,7 +5725,9 @@ mod tests {
                 }),
                 expected_resource_version: 0,
                 id: "missing-custom".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5740,7 +5760,9 @@ mod tests {
                 }),
                 expected_resource_version: 0,
                 id: "custom-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5764,7 +5786,9 @@ mod tests {
                 }),
                 expected_resource_version: 0,
                 id: "custom-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5814,7 +5838,9 @@ mod tests {
                 }),
                 expected_resource_version: 0,
                 id: "profile-a".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -5886,7 +5912,7 @@ mod tests {
             port: 443,
             path: "/v1/**".to_string(),
             protocol: "rest".to_string(),
-            access: "full".to_string(),
+            access: openshell_core::proto::NetworkAccessPreset::Full as i32,
             ..Default::default()
         }];
         let response = handle_update_provider_profiles(
@@ -5899,7 +5925,9 @@ mod tests {
                 }),
                 expected_resource_version: 0,
                 id: "grant-updated".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6193,7 +6221,9 @@ mod tests {
                     profile: Some(profile),
                     source: format!("{id}.yaml"),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6259,7 +6289,9 @@ mod tests {
             authed_request(ListProviderProfilesRequest {
                 page_size: 100,
                 page_token: String::new(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6311,7 +6343,9 @@ mod tests {
             authed_request(ListProviderProfilesRequest {
                 page_size: 100,
                 page_token: String::new(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6328,7 +6362,9 @@ mod tests {
                 authed_request(ListProviderProfilesRequest {
                     page_size,
                     page_token,
-                    workspace: "default".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
             )
             .await
@@ -6356,7 +6392,9 @@ mod tests {
             authed_request(ListProviderProfilesRequest {
                 page_size: 1,
                 page_token: String::new(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6369,7 +6407,7 @@ mod tests {
             authed_request(ListProviderProfilesRequest {
                 page_size: 1,
                 page_token: first.next_page_token,
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -6385,7 +6423,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "github".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6403,7 +6443,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "generic".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6422,7 +6464,9 @@ mod tests {
                     profile: Some(custom_profile("custom-api")),
                     source: "custom-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6437,7 +6481,9 @@ mod tests {
             authed_request(ListProviderProfilesRequest {
                 page_size: 100,
                 page_token: String::new(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6454,7 +6500,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "custom-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6488,7 +6536,9 @@ mod tests {
                     profile: Some(profile),
                     source: "duration-api.proto".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 request_id: String::new(),
             }),
         )
@@ -6501,7 +6551,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "duration-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6544,7 +6596,9 @@ mod tests {
                     profile: Some(profile),
                     source: "invalid-duration-api.proto".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 request_id: String::new(),
             }),
         )
@@ -6577,7 +6631,9 @@ mod tests {
                     profile: Some(initial_profile),
                     source: "fanout.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6635,7 +6691,7 @@ mod tests {
         conflicting_profile.endpoints.push(NetworkEndpoint {
             host: "api.example.com".to_string(),
             port: 443,
-            tls: "skip".to_string(),
+            tls: openshell_core::proto::NetworkTlsMode::Skip as i32,
             ..Default::default()
         });
         let response = handle_update_provider_profiles(
@@ -6648,7 +6704,9 @@ mod tests {
                 }),
                 expected_resource_version: resource_version,
                 id: "fanout-ambiguity".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6665,7 +6723,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "fanout-ambiguity".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6687,7 +6747,9 @@ mod tests {
                     profile: Some(custom_profile("vended-api")),
                     source: "vended-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6716,7 +6778,9 @@ mod tests {
                     profile: Some(custom_profile("custom-llm")),
                     source: "custom-llm.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6730,7 +6794,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "custom-llm".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6762,7 +6828,9 @@ mod tests {
                         source: "case.yaml".to_string(),
                     },
                 ],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6791,7 +6859,9 @@ mod tests {
                     profile: Some(custom_profile("alex-api")),
                     source: "alex-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6801,7 +6871,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: " Alex-API ".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6817,7 +6889,9 @@ mod tests {
                 request_id: String::new(),
                 allow_missing: false,
                 id: " Alex-API ".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6851,7 +6925,9 @@ mod tests {
                         source: "bulk-two.yaml".to_string(),
                     },
                 ],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6871,7 +6947,9 @@ mod tests {
                 &state,
                 authed_request(GetProviderProfileRequest {
                     id: id.to_string(),
-                    workspace: "default".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
             )
             .await
@@ -6922,7 +7000,9 @@ mod tests {
                     }),
                     source: "advanced-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6935,7 +7015,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "advanced-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6979,7 +7061,9 @@ mod tests {
                         source: "lint-two.yaml".to_string(),
                     },
                 ],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -6998,7 +7082,9 @@ mod tests {
                 &state,
                 authed_request(GetProviderProfileRequest {
                     id: id.to_string(),
-                    workspace: "default".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
             )
             .await
@@ -7019,7 +7105,9 @@ mod tests {
                     profile: Some(custom_profile("scoped-lint")),
                     source: "scoped-lint.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -7032,7 +7120,9 @@ mod tests {
                     profile: Some(custom_profile("scoped-lint")),
                     source: "scoped-lint.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -7067,7 +7157,9 @@ mod tests {
                     profile: Some(custom_profile("scoped-lint")),
                     source: "scoped-lint.yaml".to_string(),
                 }],
-                workspace: "alpha".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "alpha".to_string(),
+                )),
             }),
         )
         .await
@@ -7093,7 +7185,9 @@ mod tests {
                     profile: Some(custom_profile("custom-api")),
                     source: "custom-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -7105,7 +7199,9 @@ mod tests {
                 request_id: String::new(),
                 allow_missing: false,
                 id: "vended-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -7147,7 +7243,9 @@ mod tests {
                 request_id: String::new(),
                 allow_missing: false,
                 id: "custom-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -7159,12 +7257,12 @@ mod tests {
             &state,
             authed_request(AttachSandboxProviderRequest {
                 request_id: String::new(),
-                sandbox_name: "sandbox-custom".to_string(),
-                provider_name: "custom-provider".to_string(),
-                expected_resource_version: 0,
+                sandbox: "sandbox-custom".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                provider: "custom-provider".to_string(),
+                expected_resource_version: 0,
             }),
         )
         .await
@@ -7201,7 +7299,7 @@ mod tests {
                 request_id: String::new(),
                 allow_missing: false,
                 id: "global-custom".to_string(),
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -8616,7 +8714,9 @@ mod tests {
                     profile: Some(custom_profile("custom-api")),
                     source: "custom-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -8628,7 +8728,9 @@ mod tests {
                 request_id: String::new(),
                 allow_missing: false,
                 id: "custom-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -8643,7 +8745,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "custom-api".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -8669,7 +8773,9 @@ mod tests {
                     request_id: String::new(),
                     allow_missing: false,
                     id: "guarded-delete".to_string(),
-                    workspace: "default".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
             )
             .await
@@ -8705,7 +8811,9 @@ mod tests {
                     profile: Some(custom_profile("guarded-create")),
                     source: "guarded-create.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -9189,7 +9297,9 @@ mod tests {
                     "OPENAI_API_KEY",
                     "sk-first",
                 )),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -9231,7 +9341,9 @@ mod tests {
                 )),
                 credential_expiration_times: HashMap::new(),
                 clear_credential_expiration_keys: Vec::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         );
         let attach_from_another_replica = async {
@@ -9255,7 +9367,7 @@ mod tests {
         let targets: HashSet<_> = response
             .target_receipts
             .iter()
-            .map(|receipt| receipt.desired.as_ref().unwrap().sandbox_name.as_str())
+            .map(|receipt| receipt.desired.as_ref().unwrap().sandbox.as_str())
             .collect();
         assert_eq!(targets, HashSet::from(["first", "second"]));
         assert!(!response.mutation_id.is_empty());
@@ -9273,7 +9385,7 @@ mod tests {
             );
             assert_eq!(
                 desired.attachment_epoch,
-                format!("epoch-{}", desired.sandbox_name)
+                format!("epoch-{}", desired.sandbox)
             );
         }
     }
@@ -9291,7 +9403,9 @@ mod tests {
                     "OPENAI_API_KEY",
                     "sk-first",
                 )),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -9343,7 +9457,9 @@ mod tests {
                 )),
                 credential_expiration_times: HashMap::new(),
                 clear_credential_expiration_keys: Vec::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await;
@@ -9378,7 +9494,7 @@ mod tests {
         let targets: HashSet<_> = response
             .target_receipts
             .iter()
-            .map(|receipt| receipt.desired.as_ref().unwrap().sandbox_name.as_str())
+            .map(|receipt| receipt.desired.as_ref().unwrap().sandbox.as_str())
             .collect();
         assert_eq!(targets, HashSet::from(["s1", "s2"]));
         assert_eq!(response.target_receipts.len(), target_epochs.len());
@@ -9394,7 +9510,7 @@ mod tests {
             assert_eq!(desired.provider_resource_version, published_version);
             assert_eq!(
                 desired.attachment_epoch,
-                target_epochs[desired.sandbox_name.as_str()]
+                target_epochs[desired.sandbox.as_str()]
             );
             assert!(!desired.policy_hash.is_empty());
         }
@@ -9679,7 +9795,9 @@ mod tests {
                     profile: Some(custom_profile("gitlab")),
                     source: "custom-gitlab.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -9741,7 +9859,9 @@ mod tests {
                     profile: Some(profile),
                     source: "enterprise-github.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -9909,7 +10029,9 @@ mod tests {
                     profile: Some(profile),
                     source: "provider-profile.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -10285,7 +10407,9 @@ mod tests {
                     }),
                     source: "delegated-refresh-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -10329,7 +10453,9 @@ mod tests {
                     profile: Some(mixed_required_profile),
                     source: "mixed-required-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -10373,7 +10499,9 @@ mod tests {
                     profile: Some(optional_static_profile),
                     source: "optional-static-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -10907,7 +11035,7 @@ mod tests {
             port: 443,
             path: "/v1/**".to_string(),
             protocol: "rest".to_string(),
-            access: "full".to_string(),
+            access: openshell_core::proto::NetworkAccessPreset::Full as i32,
             ..Default::default()
         }];
         handle_import_provider_profiles(
@@ -10918,7 +11046,9 @@ mod tests {
                     profile: Some(profile),
                     source: "stable-refresh-provider.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -14504,7 +14634,7 @@ mod tests {
         let catalog_error = handle_list_provider_profiles(
             &state,
             authed_request(ListProviderProfilesRequest {
-                workspace: String::new(),
+                workspace_scope: None,
                 ..ListProviderProfilesRequest::default()
             }),
         )
@@ -14521,7 +14651,7 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "nonexistent".to_string(),
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -14533,7 +14663,7 @@ mod tests {
             &state,
             authed_request(ImportProviderProfilesRequest {
                 request_id: String::new(),
-                workspace: String::new(),
+                workspace_scope: None,
                 profiles: Vec::new(),
             }),
         )
@@ -14551,7 +14681,7 @@ mod tests {
             authed_request(UpdateProviderProfilesRequest {
                 request_id: String::new(),
                 id: "nonexistent".to_string(),
-                workspace: String::new(),
+                workspace_scope: None,
                 ..UpdateProviderProfilesRequest::default()
             }),
         )
@@ -14567,7 +14697,7 @@ mod tests {
         let validation_error = handle_lint_provider_profiles(
             &state,
             authed_request(LintProviderProfilesRequest {
-                workspace: String::new(),
+                workspace_scope: None,
                 profiles: Vec::new(),
             }),
         )
@@ -14586,7 +14716,7 @@ mod tests {
                 request_id: String::new(),
                 allow_missing: false,
                 id: "nonexistent".to_string(),
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -14781,7 +14911,9 @@ mod tests {
                     profile: Some(custom_profile("ws-custom")),
                     source: "ws-custom.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -14835,7 +14967,8 @@ mod tests {
                             profile: Some(custom_profile(&id)),
                             source: format!("{id}.yaml"),
                         }],
-                        workspace,
+                        workspace_scope: (!workspace.is_empty())
+                            .then(|| openshell_core::proto::workspace_selector(workspace)),
                     }),
                 )
                 .await
@@ -14859,7 +14992,8 @@ mod tests {
                     authed_request(ListProviderProfilesRequest {
                         page_size: 200,
                         page_token: String::new(),
-                        workspace,
+                        workspace_scope: (!workspace.is_empty())
+                            .then(|| openshell_core::proto::workspace_selector(workspace)),
                     }),
                 )
                 .await
@@ -14911,7 +15045,8 @@ mod tests {
                         request_id: String::new(),
                         allow_missing: false,
                         id,
-                        workspace,
+                        workspace_scope: (!workspace.is_empty())
+                            .then(|| openshell_core::proto::workspace_selector(workspace)),
                     }),
                 )
                 .await
@@ -14947,7 +15082,8 @@ mod tests {
                             profile: Some(custom_profile(&id)),
                             source: format!("{id}.yaml"),
                         }],
-                        workspace,
+                        workspace_scope: (!workspace.is_empty())
+                            .then(|| openshell_core::proto::workspace_selector(workspace)),
                     }),
                 )
                 .await
@@ -14982,7 +15118,9 @@ mod tests {
             authed_request(ListProviderProfilesRequest {
                 page_size: 200,
                 page_token: String::new(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15006,7 +15144,7 @@ mod tests {
                     profile: Some(github),
                     source: "providers/github.yaml".to_string(),
                 }],
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -15018,7 +15156,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "github".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15061,7 +15201,9 @@ mod tests {
                     profile: Some(custom_profile("scoped-api")),
                     source: "scoped-api.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15072,7 +15214,9 @@ mod tests {
             authed_request(ListProviderProfilesRequest {
                 page_size: 200,
                 page_token: String::new(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15108,7 +15252,7 @@ mod tests {
                     profile: Some(custom_profile("platform-only")),
                     source: "platform-only.yaml".to_string(),
                 }],
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -15119,7 +15263,9 @@ mod tests {
             authed_request(ListProviderProfilesRequest {
                 page_size: 200,
                 page_token: String::new(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15146,7 +15292,7 @@ mod tests {
                     profile: Some(custom_profile("shadow-target")),
                     source: "shadow-target.yaml".to_string(),
                 }],
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -15162,7 +15308,9 @@ mod tests {
                     profile: Some(ws_profile),
                     source: "shadow-target.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15172,7 +15320,9 @@ mod tests {
             &state,
             authed_request(GetProviderProfileRequest {
                 id: "shadow-target".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15196,7 +15346,7 @@ mod tests {
                     profile: Some(custom_profile("shadow-warn")),
                     source: "shadow-warn.yaml".to_string(),
                 }],
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -15210,7 +15360,9 @@ mod tests {
                     profile: Some(custom_profile("shadow-warn")),
                     source: "shadow-warn.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15240,7 +15392,7 @@ mod tests {
                     profile: Some(custom_profile("global-only")),
                     source: "global-only.yaml".to_string(),
                 }],
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -15254,7 +15406,9 @@ mod tests {
                     profile: Some(custom_profile("ws-only")),
                     source: "ws-only.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15265,7 +15419,7 @@ mod tests {
             authed_request(ListProviderProfilesRequest {
                 page_size: 200,
                 page_token: String::new(),
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -15296,7 +15450,7 @@ mod tests {
                     profile: Some(platform_profile),
                     source: "scope-test.yaml".to_string(),
                 }],
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -15312,7 +15466,9 @@ mod tests {
                     profile: Some(ws_profile),
                     source: "scope-test.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15347,7 +15503,7 @@ mod tests {
                     profile: Some(platform_profile),
                     source: "scope-test-ws.yaml".to_string(),
                 }],
-                workspace: String::new(),
+                workspace_scope: None,
             }),
         )
         .await
@@ -15363,7 +15519,9 @@ mod tests {
                     profile: Some(ws_profile),
                     source: "scope-test-ws.yaml".to_string(),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -15412,7 +15570,9 @@ mod tests {
         let err = handle_create_provider(
             &state,
             non_member_request(CreateProviderRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -15427,7 +15587,9 @@ mod tests {
         let err = handle_get_provider(
             &state,
             non_member_request(GetProviderRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -15457,7 +15619,9 @@ mod tests {
         let err = handle_update_provider(
             &state,
             non_member_request(UpdateProviderRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -15472,7 +15636,9 @@ mod tests {
         let err = handle_get_provider_refresh_status(
             &state,
             non_member_request(GetProviderRefreshStatusRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    ("no-such-ws").to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -15487,7 +15653,9 @@ mod tests {
         let err = handle_configure_provider_refresh(
             &state,
             non_member_request(ConfigureProviderRefreshRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -15502,7 +15670,9 @@ mod tests {
         let err = handle_rotate_provider_credential(
             &state,
             non_member_request(RotateProviderCredentialRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -15518,7 +15688,9 @@ mod tests {
             &state,
             non_member_request(DeleteProviderRefreshRequest {
                 allow_missing: false,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -15534,7 +15706,9 @@ mod tests {
             &state,
             non_member_request(DeleteProviderRequest {
                 allow_missing: false,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -15551,7 +15725,7 @@ mod tests {
         let err = handle_list_provider_profiles(
             &state,
             non_member_request(ListProviderProfilesRequest {
-                workspace: "no-such-ws".into(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
                 ..Default::default()
             }),
         )
@@ -15566,7 +15740,7 @@ mod tests {
         let err = handle_get_provider_profile(
             &state,
             non_member_request(GetProviderProfileRequest {
-                workspace: "no-such-ws".into(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
                 ..Default::default()
             }),
         )
@@ -15581,7 +15755,7 @@ mod tests {
         let err = handle_import_provider_profiles(
             &state,
             non_member_request(ImportProviderProfilesRequest {
-                workspace: "no-such-ws".into(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
                 ..Default::default()
             }),
         )
@@ -15596,7 +15770,7 @@ mod tests {
         let err = handle_update_provider_profiles(
             &state,
             non_member_request(UpdateProviderProfilesRequest {
-                workspace: "no-such-ws".into(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
                 ..Default::default()
             }),
         )
@@ -15611,7 +15785,7 @@ mod tests {
         let err = handle_lint_provider_profiles(
             &state,
             non_member_request(LintProviderProfilesRequest {
-                workspace: "no-such-ws".into(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
                 ..Default::default()
             }),
         )
@@ -15627,7 +15801,7 @@ mod tests {
             &state,
             non_member_request(DeleteProviderProfileRequest {
                 allow_missing: false,
-                workspace: "no-such-ws".into(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
                 ..Default::default()
             }),
         )

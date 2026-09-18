@@ -31,7 +31,7 @@ use crate::proto::{
     PolicyChunk, PolicySource, PolicyStatus, RefreshSandboxTokenRequest,
     ReportEndpointStatusRequest, ReportPolicyStatusRequest, SandboxPolicy as ProtoSandboxPolicy,
     SubmitPolicyAnalysisRequest, SubmitPolicyAnalysisResponse, UpdateConfigRequest,
-    open_shell_client::OpenShellClient, workspace_selector,
+    open_shell_client::OpenShellClient,
 };
 use crate::sandbox_env;
 use crate::time::{duration_to_std, timestamp_to_millis};
@@ -895,14 +895,17 @@ async fn connect(endpoint: &str) -> Result<OpenShellClient<AuthedChannel>> {
 /// Returns `Ok(Some(policy))` when the server has a policy configured,
 /// or `Ok(None)` when the sandbox was created without a policy (the sandbox
 /// should discover one from disk or use the restrictive default).
-pub async fn fetch_policy(endpoint: &str, sandbox_id: &str) -> Result<Option<ProtoSandboxPolicy>> {
-    debug!(endpoint = %endpoint, sandbox_id = %sandbox_id, "Connecting to OpenShell server");
+pub async fn fetch_policy(
+    endpoint: &str,
+    sandbox_name: &str,
+) -> Result<Option<ProtoSandboxPolicy>> {
+    debug!(endpoint = %endpoint, sandbox_name = %sandbox_name, "Connecting to OpenShell server");
 
     let mut client = connect(endpoint).await?;
 
     debug!("Connected, fetching sandbox policy");
 
-    fetch_policy_with_client(&mut client, sandbox_id).await
+    fetch_policy_with_client(&mut client, sandbox_name).await
 }
 
 /// Fetch the authoritative policy and revision metadata in one response.
@@ -913,20 +916,22 @@ pub async fn fetch_policy(endpoint: &str, sandbox_id: &str) -> Result<Option<Pro
 /// by the policy.
 pub async fn fetch_settings_snapshot(
     endpoint: &str,
-    sandbox_id: &str,
+    sandbox_name: &str,
 ) -> Result<SettingsPollResult> {
-    debug!(endpoint = %endpoint, sandbox_id = %sandbox_id, "Connecting to fetch OpenShell settings snapshot");
+    debug!(endpoint = %endpoint, sandbox_name = %sandbox_name, "Connecting to fetch OpenShell settings snapshot");
     let mut client = connect(endpoint).await?;
-    fetch_settings_snapshot_with_client(&mut client, sandbox_id).await
+    fetch_settings_snapshot_with_client(&mut client, sandbox_name, None).await
 }
 
 async fn fetch_settings_snapshot_with_client(
     client: &mut OpenShellClient<AuthedChannel>,
-    sandbox_id: &str,
+    sandbox_name: &str,
+    workspace: Option<&str>,
 ) -> Result<SettingsPollResult> {
     let response = client
         .get_sandbox_config(GetSandboxConfigRequest {
-            sandbox_id: sandbox_id.to_string(),
+            workspace_scope: workspace.map(crate::proto::workspace_selector),
+            name: sandbox_name.to_string(),
         })
         .await
         .map_err(grpc_status_error)?;
@@ -934,12 +939,16 @@ async fn fetch_settings_snapshot_with_client(
     Ok(settings_poll_result(response.into_inner()))
 }
 
+fn learned_workspace_selector(workspace: Option<&str>) -> Option<crate::proto::WorkspaceSelector> {
+    workspace.map(crate::proto::workspace_selector)
+}
+
 /// Fetch sandbox policy using an existing client connection.
 async fn fetch_policy_with_client(
     client: &mut OpenShellClient<AuthedChannel>,
-    sandbox_id: &str,
+    sandbox_name: &str,
 ) -> Result<Option<ProtoSandboxPolicy>> {
-    let snapshot = fetch_settings_snapshot_with_client(client, sandbox_id).await?;
+    let snapshot = fetch_settings_snapshot_with_client(client, sandbox_name, None).await?;
 
     // version 0 with no policy means the sandbox was created without one.
     if snapshot.version == 0 && snapshot.policy.is_none() {
@@ -960,9 +969,9 @@ async fn sync_policy_with_client(
 ) -> Result<()> {
     client
         .update_config(UpdateConfigRequest {
-            name: sandbox.to_string(),
+            sandbox: sandbox.to_string(),
+            workspace_scope: Some(crate::proto::workspace_selector(workspace)),
             policy: Some(policy.clone()),
-            workspace_scope: Some(workspace_selector(workspace)),
             ..Default::default()
         })
         .await
@@ -978,14 +987,12 @@ async fn sync_policy_with_client(
 /// channel instead of establishing three separate connections.
 pub async fn discover_and_sync_policy(
     endpoint: &str,
-    sandbox_id: &str,
     sandbox: &str,
     discovered_policy: &ProtoSandboxPolicy,
     workspace: &str,
 ) -> Result<ProtoSandboxPolicy> {
     debug!(
         endpoint = %endpoint,
-        sandbox_id = %sandbox_id,
         sandbox = %sandbox,
         "Syncing discovered policy and re-fetching canonical version"
     );
@@ -996,8 +1003,9 @@ pub async fn discover_and_sync_policy(
     sync_policy_with_client(&mut client, sandbox, discovered_policy, workspace).await?;
 
     // Re-fetch from the gateway to get the canonical version/hash.
-    fetch_policy_with_client(&mut client, sandbox_id)
+    fetch_settings_snapshot_with_client(&mut client, sandbox, Some(workspace))
         .await?
+        .policy
         .ok_or_else(|| {
             miette::miette!("Server still returned no policy after sync — this is a bug")
         })
@@ -1021,14 +1029,13 @@ pub async fn sync_policy(
 /// Sync an enriched policy and return the authoritative revision snapshot.
 pub async fn sync_policy_and_fetch_snapshot(
     endpoint: &str,
-    sandbox_id: &str,
     sandbox: &str,
     policy: &ProtoSandboxPolicy,
     workspace: &str,
 ) -> Result<SettingsPollResult> {
     let mut client = connect(endpoint).await?;
     sync_policy_with_client(&mut client, sandbox, policy, workspace).await?;
-    fetch_settings_snapshot_with_client(&mut client, sandbox_id).await
+    fetch_settings_snapshot_with_client(&mut client, sandbox, Some(workspace)).await
 }
 
 /// Report an exact runtime configuration generation. Pending registration uses
@@ -1342,7 +1349,7 @@ impl From<crate::proto::SandboxConfigSnapshot> for SettingsPollResult {
 
 #[cfg(test)]
 mod settings_poll_tests {
-    use super::settings_poll_result;
+    use super::{learned_workspace_selector, settings_poll_result};
     use crate::PolicyValidationFailureMode;
     use crate::proto::GetSandboxConfigResponse;
 
@@ -1399,6 +1406,19 @@ mod settings_poll_tests {
         assert_eq!(result.provider_env_revision, 9);
         assert_eq!(result.workspace, "workspace-a");
         assert!(result.extension_authentication_enabled);
+    }
+
+    #[test]
+    fn workspace_selector_is_omitted_until_bootstrap_learns_the_workspace() {
+        assert!(learned_workspace_selector(None).is_none());
+
+        let selector = learned_workspace_selector(Some("team-a")).expect("workspace selector");
+        assert_eq!(
+            selector.selection,
+            Some(crate::proto::workspace_selector::Selection::Workspace(
+                "team-a".to_string()
+            ))
+        );
     }
 }
 
@@ -1536,12 +1556,17 @@ impl CachedOpenShellClient {
     }
 
     /// Poll for current effective sandbox settings and policy metadata.
-    pub async fn poll_settings(&self, sandbox_id: &str) -> Result<SettingsPollResult> {
+    pub async fn poll_settings(&self, sandbox_name: &str) -> Result<SettingsPollResult> {
+        // Sandbox-authenticated callers may omit the selector during bootstrap.
+        // Once the first response identifies the workspace, scope every later
+        // poll explicitly instead of constructing an invalid empty selector.
+        let workspace_scope = learned_workspace_selector(self.workspace.get().map(String::as_str));
         let response = self
             .client
             .clone()
             .get_sandbox_config(GetSandboxConfigRequest {
-                sandbox_id: sandbox_id.to_string(),
+                workspace_scope,
+                name: sandbox_name.to_string(),
             })
             .await
             .into_diagnostic()?;
@@ -1646,7 +1671,7 @@ impl CachedOpenShellClient {
                 proposed_chunks,
                 network_activity_summaries,
                 analysis_mode: analysis_mode.to_string(),
-                workspace: self.workspace(),
+                workspace_scope: Some(crate::proto::workspace_selector(self.workspace())),
             })
             .await
             .into_diagnostic()?;
@@ -1667,9 +1692,9 @@ impl CachedOpenShellClient {
             .client
             .clone()
             .get_draft_policy(GetDraftPolicyRequest {
-                name: sandbox_name.to_string(),
                 status_filter: status_filter.to_string(),
-                workspace_scope: Some(workspace_selector(self.workspace())),
+                sandbox: sandbox_name.to_string(),
+                workspace_scope: Some(crate::proto::workspace_selector(self.workspace())),
             })
             .await
             .into_diagnostic()?;

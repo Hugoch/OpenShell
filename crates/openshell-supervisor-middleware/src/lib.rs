@@ -1669,7 +1669,7 @@ impl ChainRunner {
         let context = RequestContext {
             request_id,
             sandbox_id,
-            sandbox_name,
+            sandbox: sandbox_name,
             workspace,
             originating_process: None,
         };
@@ -3398,7 +3398,7 @@ mod tests {
         let context = received[0].context.as_ref().expect("request context");
         assert_eq!(context.request_id, "req");
         assert_eq!(context.sandbox_id, "sbx-id");
-        assert_eq!(context.sandbox_name, "sbx-name");
+        assert_eq!(context.sandbox, "sbx-name");
         assert_eq!(context.workspace, "wrks-default");
         assert!(context.originating_process.is_none());
         let target = received[0].target.as_ref().expect("request target");

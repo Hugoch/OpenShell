@@ -22,10 +22,10 @@ func newServiceClient(conn grpc.ClientConnInterface) *serviceClient {
 func (s *serviceClient) Expose(ctx context.Context, workspace, sandboxName, serviceName string, targetPort uint32, domain bool) (*ServiceEndpoint, error) {
 	resp, err := s.client.ExposeService(ctx, &pb.ExposeServiceRequest{
 		Sandbox:        sandboxName,
-		Service:        serviceName,
+		WorkspaceScope: namedWorkspaceScope(workspace),
+		Name:           serviceName,
 		TargetPort:     targetPort,
 		Domain:         domain,
-		WorkspaceScope: namedWorkspaceScope(workspace),
 	})
 	if err != nil {
 		return nil, converter.FromGRPCError(err)
@@ -36,8 +36,8 @@ func (s *serviceClient) Expose(ctx context.Context, workspace, sandboxName, serv
 func (s *serviceClient) Get(ctx context.Context, workspace, sandboxName, serviceName string) (*ServiceEndpoint, error) {
 	resp, err := s.client.GetService(ctx, &pb.GetServiceRequest{
 		Sandbox:        sandboxName,
-		Service:        serviceName,
 		WorkspaceScope: namedWorkspaceScope(workspace),
+		Name:           serviceName,
 	})
 	if err != nil {
 		return nil, converter.FromGRPCError(err)
@@ -89,8 +89,8 @@ func (s *serviceClient) Delete(ctx context.Context, workspace, sandboxName, serv
 	resp, err := s.client.DeleteService(ctx, &pb.DeleteServiceRequest{
 		AllowMissing:   allowMissing(opts),
 		Sandbox:        sandboxName,
-		Service:        serviceName,
 		WorkspaceScope: namedWorkspaceScope(workspace),
+		Name:           serviceName,
 	})
 	if err != nil {
 		return nil, converter.FromGRPCError(err)

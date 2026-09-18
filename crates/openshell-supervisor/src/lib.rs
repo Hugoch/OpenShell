@@ -719,7 +719,7 @@ pub async fn run_sandbox(
         initial_extension_authentication_enabled,
     ) = load_policy(LoadPolicyOptions {
         sandbox_id: sandbox_id.clone(),
-        sandbox,
+        sandbox: sandbox.clone(),
         openshell_endpoint: openshell_endpoint.clone(),
         policy_rules,
         policy_data,
@@ -1117,12 +1117,14 @@ pub async fn run_sandbox(
     }
 
     // Spawn background policy poll task (gRPC mode only).
-    if let (Some(id), Some(endpoint), Some(engine)) = (
+    if let (Some(id), Some(sandbox), Some(endpoint), Some(engine)) = (
         sandbox_id.as_deref(),
+        sandbox.as_deref(),
         openshell_endpoint.as_deref(),
         opa_engine.as_ref(),
     ) {
         let poll_id = id.to_string();
+        let poll_sandbox = sandbox.to_string();
         let poll_endpoint = endpoint.to_string();
         let poll_engine = engine.clone();
         let poll_ocsf_enabled = ocsf_enabled.clone();
@@ -1140,6 +1142,7 @@ pub async fn run_sandbox(
         let poll_ctx = PolicyPollLoopContext {
             endpoint: poll_endpoint,
             sandbox_id: poll_id,
+            sandbox: poll_sandbox,
             opa_engine: poll_engine,
             loaded_policy_origin,
             entrypoint_pid: poll_pid,
@@ -2387,8 +2390,14 @@ async fn load_policy(
         let mut snapshot = if let Some(snapshot) = initial_snapshot {
             snapshot.into()
         } else {
+            let sandbox = sandbox.as_deref().ok_or_else(|| {
+                miette::miette!(
+                    "Cannot fetch sandbox policy: sandbox name not available.\n\
+                     Set OPENSHELL_SANDBOX or --sandbox to enable policy fetch."
+                )
+            })?;
             grpc_retry("Policy fetch", || {
-                openshell_core::grpc_client::fetch_settings_snapshot(endpoint, id)
+                openshell_core::grpc_client::fetch_settings_snapshot(endpoint, sandbox)
             })
             .await?
         };
@@ -2429,7 +2438,6 @@ async fn load_policy(
             snapshot = grpc_retry("Policy discovery sync", || {
                 openshell_core::grpc_client::sync_policy_and_fetch_snapshot(
                     endpoint,
-                    id,
                     sandbox,
                     &discovered,
                     &ws,
@@ -2461,7 +2469,6 @@ async fn load_policy(
             if let Some(sandbox_name) = sandbox.as_deref() {
                 match openshell_core::grpc_client::sync_policy_and_fetch_snapshot(
                     endpoint,
-                    id,
                     sandbox_name,
                     &sync_policy,
                     &snapshot.workspace,
@@ -2626,7 +2633,7 @@ async fn load_policy(
     Err(miette::miette!(
         "Sandbox policy required. Provide one of:\n\
          - --policy-rules and --policy-data (or OPENSHELL_POLICY_RULES and OPENSHELL_POLICY_DATA env vars)\n\
-         - --sandbox-id and --openshell-endpoint (or OPENSHELL_SANDBOX_ID and OPENSHELL_ENDPOINT env vars)"
+         - --sandbox-id, --sandbox, and --openshell-endpoint (or OPENSHELL_SANDBOX_ID, OPENSHELL_SANDBOX, and OPENSHELL_ENDPOINT env vars)"
     ))
 }
 
@@ -3235,7 +3242,7 @@ fn initial_provider_credentials(
 trait PolicyGatewayClient: Clone + Send + Sync + 'static {
     async fn poll_settings(
         &self,
-        sandbox_id: &str,
+        sandbox: &str,
     ) -> Result<openshell_core::grpc_client::SettingsPollResult>;
 
     async fn report_policy_status(
@@ -3281,9 +3288,9 @@ trait PolicyGatewayClient: Clone + Send + Sync + 'static {
 impl PolicyGatewayClient for openshell_core::grpc_client::CachedOpenShellClient {
     async fn poll_settings(
         &self,
-        sandbox_id: &str,
+        sandbox: &str,
     ) -> Result<openshell_core::grpc_client::SettingsPollResult> {
-        self.poll_settings(sandbox_id).await
+        self.poll_settings(sandbox).await
     }
 
     async fn report_policy_status(
@@ -3464,6 +3471,8 @@ async fn report_initial_policy_failure(
 struct PolicyPollLoopContext {
     endpoint: String,
     sandbox_id: String,
+    /// Canonical sandbox reference used by name-scoped configuration APIs.
+    sandbox: String,
     opa_engine: Arc<OpaEngine>,
     /// Source of the policy currently loaded into OPA. This distinguishes an
     /// explicit local-file override from an unbound gateway revision so the
@@ -4502,7 +4511,7 @@ async fn run_policy_poll_loop_with_client<C: PolicyGatewayClient>(
         )
         .await;
     } else {
-        match client.poll_settings(&ctx.sandbox_id).await {
+        match client.poll_settings(&ctx.sandbox).await {
             Ok(result) => {
                 let _ = ctx.workspace_tx.send(client.workspace());
                 match (
@@ -4653,7 +4662,7 @@ async fn run_policy_poll_loop_with_client<C: PolicyGatewayClient>(
                 }
                 () = tokio::time::sleep(delay) => {}
             }
-            match client.poll_settings(&ctx.sandbox_id).await {
+            match client.poll_settings(&ctx.sandbox).await {
                 Ok(result) => {
                     let _ = ctx.workspace_tx.send(client.workspace());
                     result
@@ -6221,15 +6230,17 @@ network_policies:
         reports: UnboundedSender<(u32, bool, String)>,
         environment_identity: Arc<std::sync::Mutex<EnvironmentIdentity>>,
         poll_calls: Arc<AtomicUsize>,
+        polled_sandboxes: Arc<tokio::sync::Mutex<Vec<String>>>,
     }
 
     #[tonic::async_trait]
     impl PolicyGatewayClient for ScriptedPolicyGateway {
         async fn poll_settings(
             &self,
-            _sandbox_id: &str,
+            sandbox: &str,
         ) -> Result<openshell_core::grpc_client::SettingsPollResult> {
             self.poll_calls.fetch_add(1, Ordering::SeqCst);
+            self.polled_sandboxes.lock().await.push(sandbox.to_string());
             let result = self
                 .polls
                 .lock()
@@ -6284,9 +6295,9 @@ network_policies:
     impl PolicyGatewayClient for CredentialRejectingPolicyGateway {
         async fn poll_settings(
             &self,
-            sandbox_id: &str,
+            sandbox: &str,
         ) -> Result<openshell_core::grpc_client::SettingsPollResult> {
-            self.inner.poll_settings(sandbox_id).await
+            self.inner.poll_settings(sandbox).await
         }
 
         async fn fetch_provider_environment(
@@ -6342,6 +6353,7 @@ network_policies:
                     EnvironmentIdentity::default(),
                 )),
                 poll_calls: Arc::new(AtomicUsize::new(0)),
+                polled_sandboxes: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             },
             poll_tx,
             report_rx,
@@ -6437,9 +6449,9 @@ network_policies:
     impl PolicyGatewayClient for ScriptedProviderGateway {
         async fn poll_settings(
             &self,
-            sandbox_id: &str,
+            sandbox: &str,
         ) -> Result<openshell_core::grpc_client::SettingsPollResult> {
-            self.policy.poll_settings(sandbox_id).await
+            self.policy.poll_settings(sandbox).await
         }
 
         async fn report_policy_status(
@@ -6582,9 +6594,9 @@ network_policies:
     impl PolicyGatewayClient for GenerationChangingPolicyGateway {
         async fn poll_settings(
             &self,
-            sandbox_id: &str,
+            sandbox: &str,
         ) -> Result<openshell_core::grpc_client::SettingsPollResult> {
-            let result = self.inner.poll_settings(sandbox_id).await?;
+            let result = self.inner.poll_settings(sandbox).await?;
             if self.first_poll.swap(false, Ordering::SeqCst) {
                 self.engine
                     .enter_fail_closed("generation replaced while first poll was pending")?;
@@ -6948,6 +6960,7 @@ network_policies:
         PolicyPollLoopContext {
             endpoint: String::new(),
             sandbox_id: "sandbox-test".to_string(),
+            sandbox: "sandbox-test-name".to_string(),
             opa_engine,
             loaded_policy_origin,
             entrypoint_pid: Arc::new(AtomicU32::new(0)),
@@ -7364,10 +7377,16 @@ network_policies:
             default_middleware_connector(),
         );
         let (client, polls, mut reports) = scripted_policy_gateway();
+        let observed_client = client.clone();
         polls.send(v1).unwrap();
 
         let handle = tokio::spawn(run_policy_poll_loop_with_client(ctx, client));
         expect_policy_report(&mut reports, 1).await;
+        assert_eq!(
+            observed_client.polled_sandboxes.lock().await.as_slice(),
+            &["sandbox-test-name"],
+            "settings polling must use the canonical sandbox reference, not its ID"
+        );
 
         polls.send(v2.clone()).unwrap();
         expect_policy_report(&mut reports, 2).await;

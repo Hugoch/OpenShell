@@ -153,6 +153,7 @@ impl ObjectWorkspace for StoredConfigComponentObservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openshell_core::proto::{SandboxPhase, SandboxStatus};
     use prost::Message;
     use prost_types::{DescriptorProto, EnumDescriptorProto, FileDescriptorSet};
     use sha2::{Digest, Sha256};
@@ -161,11 +162,11 @@ mod tests {
     const STORAGE_V1_SCHEMA_SHA256: &str =
         "d68401809d8cea445c35233ef32412bbd041cb2ac5acaf368a0d0bf74d2ddf17";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "68b67a499144ebe9e8c9ac67fd51ed174b8f90e1c895c407a1ec83821ab71734";
+        "6c9b49049f0de12aecb68621b139553e35d6fa8fae2e35e4002c75e5e1bdbe60";
     const DURABLE_SCHEMA_SHA256: &str =
-        "c794edf1c7838e33562b2601681129c87d6430ad26893db864f30dfcc299df3b";
+        "965a8a09fa80168906a4f9cc6169d3623b98f5281c367695f2f2898230915dd0";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
-        "376cc8ecbc8b9b995e2170ccb5c2f18ef82adf9b5f55f1683571410722dfd4cf";
+        "a6e97fdde30c439ffaa03c2952a43033f8ea338fed6b1456ebe2d7d8af14e834";
     // A persisted Sandbox without endpoint status retains its lifecycle fields;
     // the absent repeated field decodes empty and needs no database rewrite.
     const SANDBOX_WITHOUT_ENDPOINT_STATUS: &str = "0a1e0a0a73616e64626f782d6964120773616e64626f783a0764656661756c741a2b0a0773616e64626f782a0d0a05526561647912045472756530023807420d73757065727669736f722d6964";
@@ -181,6 +182,10 @@ mod tests {
         "0a0472756c651a07666978747572652d0000403f3a0b6578616d706c652e636f6d40bb035002";
     const V0_0_116_POLICY_RECORD: &str = "0a09706f6c6963792d6964120a73616e64626f782d6964180222030102032a0673686132353632066c6f616465643a046e6f6e6540fa0148ac0252110a06736f75726365120766697874757265";
     const V0_0_116_DRAFT_RECORD: &str = "0a086368756e6b2d6964120a73616e64626f782d69641802220770656e64696e672a0472756c65320204053a076669787475726549000000000000e83f50de02589003620b6578616d706c652e636f6d68bb037801";
+    // SandboxStatus encoded before its redundant parent sandbox name was removed.
+    // Field 1 is ignored while the remaining durable status fields retain their tags.
+    const PRE_CANONICAL_SANDBOX_REFERENCE_STATUS: &str =
+        "0a0b6c65676163792d6e616d6512056167656e7430023807";
     const STORAGE_MESSAGE_NAMES: [&str; 9] = [
         "DraftChunkPayload",
         "PolicyRevisionPayload",
@@ -614,9 +619,9 @@ mod tests {
                 overlap_hash.as_str(),
             ),
             (
-                (314, 22),
-                (93, 16),
-                (80, 16),
+                (314, 25),
+                (93, 19),
+                (80, 19),
                 PUBLIC_RPC_SCHEMA_SHA256,
                 DURABLE_SCHEMA_SHA256,
                 PUBLIC_DURABLE_OVERLAP_SHA256
@@ -671,7 +676,6 @@ mod tests {
         assert_eq!(metadata.name, "sandbox");
         assert_eq!(metadata.workspace, "default");
         let status = sandbox.status.expect("sandbox status");
-        assert_eq!(status.sandbox_name, "sandbox");
         assert_eq!(status.phase(), SandboxPhase::Ready);
         assert_eq!(status.current_policy_version, 7);
         assert_eq!(status.main_process_instance_id, "supervisor-id");
@@ -762,6 +766,17 @@ mod tests {
         assert_eq!(draft.host, "example.com");
         assert_eq!(draft.port, 443);
         assert_eq!(draft.hit_count, 1);
+    }
+
+    #[test]
+    fn sandbox_status_without_parent_reference_decodes_previous_payload() {
+        let status =
+            SandboxStatus::decode(legacy_bytes(PRE_CANONICAL_SANDBOX_REFERENCE_STATUS).as_slice())
+                .expect("previous sandbox status must decode");
+
+        assert_eq!(status.agent_pod, "agent");
+        assert_eq!(status.phase, SandboxPhase::Ready as i32);
+        assert_eq!(status.current_policy_version, 7);
     }
 
     #[tokio::test]
