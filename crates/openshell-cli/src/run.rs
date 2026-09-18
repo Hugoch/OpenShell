@@ -6155,10 +6155,10 @@ mod tests {
     use openshell_core::proto::{
         EndpointResult, EndpointStatus, GetSandboxConfigResponse, GpuResourceRequirements,
         PolicySource, PolicyStatus, ResourceRequirements, Sandbox, SandboxCondition, SandboxPhase,
-        SandboxPolicy, SandboxPolicyRevision, SandboxResources, SandboxStatus,
-        SandboxWorkloadConfig, SandboxWorkloadTemplate, SandboxWorkloadTemplateProvenance,
-        SandboxWorkloadTemplateSpec, ServiceEndpoint, ServiceEndpointResponse, WorkspaceMember,
-        WorkspaceRole, datamodel::v1::ObjectMeta,
+        SandboxPolicyRevision, SandboxResources, SandboxStatus, SandboxWorkloadConfig,
+        SandboxWorkloadTemplate, SandboxWorkloadTemplateProvenance, SandboxWorkloadTemplateSpec,
+        ServiceEndpoint, ServiceEndpointResponse, WorkspaceMember, WorkspaceRole,
+        datamodel::v1::ObjectMeta,
     };
 
     #[test]
@@ -6199,7 +6199,7 @@ mod tests {
             load_error: load_error.to_string(),
             created_time: openshell_core::time::timestamp_from_millis(100).ok(),
             loaded_time: openshell_core::time::timestamp_from_millis(200).ok(),
-            policy: Some(SandboxPolicy::default()),
+            policy: Some(openshell_core::proto::policy::SandboxPolicy::default()),
             provenance: std::collections::HashMap::from([(
                 "source".to_string(),
                 "provider-composition".to_string(),

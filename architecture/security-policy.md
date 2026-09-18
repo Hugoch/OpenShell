@@ -49,23 +49,22 @@ execution continue to use the internal representation. Runtime-derived fields
 such as advisor and provider provenance have no public field and their internal
 wire numbers are reserved in the authored endpoint message.
 
-This boundary is part of the new major-version storage contract. Existing
-policy revision rows remain internal and retain their current encoding, but
-persisted `SandboxSpec` and `StoredProviderProfile` records now embed public
-policy messages. The reshaped MCP, matcher, and JSON-RPC messages are not wire
-compatible with records written by earlier versions. Deployments must start
-with a clean gateway database unless a one-time database migration is added
-before release; mixed-version gateway rollouts are unsupported across this
-boundary.
+Existing policy revision rows, sandbox records, and provider-profile records
+remain internal and retain their current wire encoding. The gateway uses
+private storage envelopes whose field numbers mirror the historical records,
+then projects their policy fields to the public schema on read. No clean
+database or policy-data migration is required for this boundary. Mixed-version
+gateway rollouts remain unsupported because the public RPC contract changes.
 
-Policy YAML is a compatibility syntax over the public message, not protobuf
-JSON/YAML serialization. A thin schema-owned codec preserves YAML-only
-distinctions such as an absent value versus an explicitly empty message and
-shorthands such as scalar matchers and MCP `tool`. Canonical API round trips may
-normalize those spellings while preserving their authored meaning. Contextual
-validation remains explicit code because rules such as endpoint protocol,
-credential binding, and provider composition depend on more than one message;
-the public proto does not use generated field-validation annotations as an
+Policy YAML uses the public protobuf field shape directly. The schema crate
+performs bounded YAML decoding and descriptor-driven protobuf conversion; it
+does not rewrite legacy spellings. Scalar matchers, scalar MCP `tool` values,
+and other YAML-only shorthands are breaking changes and must be rewritten as
+their message or oneof forms. Protobuf cannot distinguish omitted repeated
+fields from empty lists, so both select the same default where the policy
+language defines one. Contextual validation remains explicit code because
+rules such as endpoint protocol, credential binding, and provider composition
+depend on more than one message; generated field validation is not an
 enforcement substitute.
 
 Before applying Landlock, the supervisor enriches baseline filesystem paths that

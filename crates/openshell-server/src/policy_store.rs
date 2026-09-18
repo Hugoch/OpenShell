@@ -69,7 +69,7 @@ pub fn project_policy_revision_onto_sandbox(
     }
 
     let payload = crate::persistence::migrate_legacy_time_fields("sandbox", payload)?;
-    let mut sandbox = Sandbox::decode(payload.as_slice())
+    let mut sandbox = crate::storage_proto::decode_sandbox(payload.as_slice())
         .map_err(|e| PersistenceError::Decode(format!("decode sandbox payload failed: {e}")))?;
     sandbox.set_resource_version(current_resource_version);
 

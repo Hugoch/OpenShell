@@ -545,7 +545,7 @@ fn profile_signature_rejects_missing_hash_algorithm() {
 fn policy_patch_uses_protobuf_json_names() {
     let service = service();
     let state = policy_state(&service);
-    assert!(state.policy.get("filesystem").is_some());
+    assert!(state.policy.get("filesystemPolicy").is_some());
     assert!(state.policy.get("networkPolicies").is_some());
     assert!(state.policy.get("filesystem_policy").is_none());
     assert!(state.policy.get("network_policies").is_none());

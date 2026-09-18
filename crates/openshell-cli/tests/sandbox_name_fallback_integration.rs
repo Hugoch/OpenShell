@@ -8,6 +8,7 @@ use openshell_bootstrap::{load_last_sandbox, save_last_sandbox};
 use openshell_cli::run;
 use openshell_cli::tls::TlsOptions;
 use openshell_core::proto::open_shell_server::{OpenShell, OpenShellServer};
+use openshell_core::proto::policy::{NetworkEndpoint, NetworkPolicyRule, SandboxPolicy};
 use openshell_core::proto::{
     AttachSandboxProviderRequest, AttachSandboxProviderResponse, CreateProviderRequest,
     CreateSandboxRequest, CreateSshSessionRequest, CreateSshSessionResponse, DeleteProviderRequest,
@@ -20,9 +21,9 @@ use openshell_core::proto::{
     GetSandboxProviderEnvironmentRequest, GetSandboxProviderEnvironmentResponse, GetSandboxRequest,
     HealthRequest, HealthResponse, ListProvidersRequest, ListProvidersResponse,
     ListSandboxProvidersRequest, ListSandboxProvidersResponse, ListSandboxesRequest,
-    ListSandboxesResponse, NetworkEndpoint, NetworkPolicyRule, PolicyStatus, ProviderResponse,
-    Sandbox, SandboxPolicy, SandboxPolicyRevision, SandboxResponse, SandboxStreamEvent,
-    ServiceStatus, SupervisorMessage, UpdateProviderRequest, WatchSandboxRequest,
+    ListSandboxesResponse, PolicyStatus, ProviderResponse, Sandbox, SandboxPolicyRevision,
+    SandboxResponse, SandboxStreamEvent, ServiceStatus, SupervisorMessage, UpdateProviderRequest,
+    WatchSandboxRequest,
 };
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -195,14 +196,14 @@ impl OpenShell for TestOpenShell {
             "GetSandboxConfig should pass the id from GetSandbox"
         );
         Ok(Response::new(GetSandboxConfigResponse {
-            policy: Some(SandboxPolicy {
+            policy: Some(openshell_core::proto::SandboxPolicy {
                 version: 1,
                 network_policies: [
                     (
                         "user_api".to_string(),
-                        NetworkPolicyRule {
+                        openshell_core::proto::NetworkPolicyRule {
                             name: "user_api".to_string(),
-                            endpoints: vec![NetworkEndpoint {
+                            endpoints: vec![openshell_core::proto::NetworkEndpoint {
                                 host: "api.user.example.com".to_string(),
                                 port: 443,
                                 protocol: "rest".to_string(),
@@ -215,9 +216,9 @@ impl OpenShell for TestOpenShell {
                     ),
                     (
                         "_provider_api".to_string(),
-                        NetworkPolicyRule {
+                        openshell_core::proto::NetworkPolicyRule {
                             name: "_provider_api".to_string(),
-                            endpoints: vec![NetworkEndpoint {
+                            endpoints: vec![openshell_core::proto::NetworkEndpoint {
                                 host: "api.provider.example.com".to_string(),
                                 port: 443,
                                 protocol: "rest".to_string(),

@@ -13,6 +13,7 @@ repository.workspace = true
 [dependencies]
 miette = { workspace = true }
 prost = { workspace = true }
+prost-reflect = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

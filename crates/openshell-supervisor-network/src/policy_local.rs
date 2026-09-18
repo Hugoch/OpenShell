@@ -1466,7 +1466,7 @@ mod tests {
         assert_eq!(rule.name, "github_api_repo_create");
         assert_eq!(rule.endpoints[0].host, "api.github.com");
         assert_eq!(rule.endpoints[0].port, 443);
-        assert_eq!(rule.endpoints[0].ports, vec![443]);
+        assert!(rule.endpoints[0].ports.is_empty());
         assert_eq!(rule.endpoints[0].protocol, "rest");
         assert!(openshell_policy::lower_authored_rule(&chunks[0].rule_name, rule.clone()).is_ok());
         assert_eq!(rule.binaries[0].path, "/usr/bin/gh");

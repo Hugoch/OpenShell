@@ -2749,7 +2749,9 @@ pub(super) async fn handle_import_provider_profiles(
                 stored.object_id(),
                 stored.object_name(),
                 &workspace,
-                &stored.encode_to_vec(),
+                &crate::storage_proto::encode_provider_profile(&stored).map_err(|error| {
+                    Status::internal(format!("encode provider profile failed: {error}"))
+                })?,
                 profile_labels_json.as_deref(),
                 WriteCondition::MustCreate,
             )
@@ -2882,7 +2884,9 @@ pub(super) async fn handle_update_provider_profiles(
             stored.object_id(),
             stored.object_name(),
             &workspace,
-            &stored.encode_to_vec(),
+            &crate::storage_proto::encode_provider_profile(&stored).map_err(|error| {
+                Status::internal(format!("encode provider profile failed: {error}"))
+            })?,
             labels_json.as_deref(),
             WriteCondition::MatchResourceVersion(expected_resource_version),
         )
@@ -5004,18 +5008,20 @@ mod tests {
     use crate::grpc::test_support::{authed_request, test_server_state};
     use crate::grpc::{MAX_MAP_KEY_LEN, MAX_PROVIDER_TYPE_LEN};
     use crate::persistence::test_store;
+    use openshell_core::proto::policy::{
+        L7Allow, L7Rule, NetworkBinary, NetworkEndpoint, NetworkPolicyRule,
+    };
     use openshell_core::proto::{
         AttachSandboxProviderRequest, ConfigureProviderRefreshRequest, CreateProviderRequest,
         CreateWorkspaceRequest, DeleteProviderProfileRequest, DeleteProviderRefreshRequest,
         DeleteProviderRequest, GetProviderProfileRequest, GetProviderRefreshStatusRequest,
-        GetProviderRequest, ImportProviderProfilesRequest, L7Allow, L7Rule,
-        LintProviderProfilesRequest, ListProviderProfilesRequest, ListProvidersRequest,
-        NetworkBinary, NetworkEndpoint, NetworkPolicyRule, ProviderCredentialRefresh,
+        GetProviderRequest, ImportProviderProfilesRequest, LintProviderProfilesRequest,
+        ListProviderProfilesRequest, ListProvidersRequest, ProviderCredentialRefresh,
         ProviderCredentialRefreshMaterial, ProviderCredentialTokenGrant,
         ProviderCredentialTokenGrantAudienceOverride, ProviderCredentialTokenGrantSubjectToken,
         ProviderCredentialTokenGrantType, ProviderProfile, ProviderProfileCategory,
         ProviderProfileCredential, ProviderProfileImportItem, RotateProviderCredentialRequest,
-        Sandbox, SandboxPolicy, SandboxSpec, UpdateProviderProfilesRequest, UpdateProviderRequest,
+        Sandbox, SandboxSpec, UpdateProviderProfilesRequest, UpdateProviderRequest,
     };
     use openshell_core::{ObjectId, ObjectName};
     use tonic::{Code, Request};
@@ -6304,7 +6310,8 @@ mod tests {
                 }),
                 spec: Some(SandboxSpec {
                     providers: vec!["fanout-provider".to_string()],
-                    policy: Some(SandboxPolicy {
+                    policy: Some(openshell_core::proto::policy::SandboxPolicy {
+                        version: 1,
                         network_policies: HashMap::from([(
                             "base".to_string(),
                             NetworkPolicyRule {
@@ -13917,8 +13924,6 @@ mod tests {
     #[tokio::test]
     async fn provider_with_global_profile_resolves_platform_scoped_profile() {
         use crate::persistence::{ObjectName, WriteCondition};
-        use prost::Message;
-
         let store = test_store().await;
 
         let stored = stored_provider_profile_for_workspace(custom_profile("global-custom"), "");
@@ -13928,7 +13933,7 @@ mod tests {
                 stored.object_id(),
                 stored.object_name(),
                 "",
-                &stored.encode_to_vec(),
+                &crate::storage_proto::encode_provider_profile(&stored).unwrap(),
                 None,
                 WriteCondition::MustCreate,
             )

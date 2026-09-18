@@ -4153,10 +4153,7 @@ binaries:
                 .mcp
                 .as_ref()
                 .expect("MCP options")
-                .versions
-                .as_ref()
-                .expect("MCP versions")
-                .values,
+                .versions,
             expected_versions
         );
         proto.endpoints[0]
@@ -4164,9 +4161,6 @@ binaries:
             .as_mut()
             .expect("MCP options")
             .versions
-            .as_mut()
-            .expect("MCP versions")
-            .values
             .reverse();
         assert_eq!(
             profile.network_policy_rule("provider").endpoints[0]
@@ -4193,10 +4187,7 @@ binaries:
                 .mcp
                 .as_ref()
                 .expect("MCP options")
-                .versions
-                .as_ref()
-                .expect("MCP versions")
-                .values,
+                .versions,
             expected_versions
         );
         assert_eq!(
@@ -4283,7 +4274,7 @@ endpoints:
     }
 
     #[test]
-    fn provider_boundaries_materialize_programmatic_but_reject_public_empty_versions() {
+    fn provider_boundaries_materialize_programmatic_and_public_empty_versions() {
         let mut profile = mcp_profile_for_serialization();
         profile.endpoints[0]
             .mcp
@@ -4331,10 +4322,7 @@ endpoints:
                 .mcp
                 .as_ref()
                 .expect("MCP options")
-                .versions
-                .as_ref()
-                .expect("MCP versions")
-                .values,
+                .versions,
             expected
         );
 
@@ -4344,11 +4332,17 @@ endpoints:
             .as_mut()
             .expect("MCP options")
             .versions
-            .as_mut()
-            .expect("MCP versions")
-            .values
             .clear();
-        assert!(ProviderTypeProfile::try_from_proto(&proto_with_empty_versions).is_err());
+        let from_proto = ProviderTypeProfile::try_from_proto(&proto_with_empty_versions)
+            .expect("empty protobuf list uses omission semantics");
+        assert_eq!(
+            from_proto.endpoints[0]
+                .mcp
+                .as_ref()
+                .expect("MCP options")
+                .versions,
+            expected
+        );
     }
 
     #[test]
@@ -4585,10 +4579,7 @@ endpoints:
                 .mcp
                 .as_ref()
                 .expect("materialized MCP options")
-                .versions
-                .as_ref()
-                .expect("MCP versions")
-                .values,
+                .versions,
             [DEFAULT_MCP_PROTOCOL_VERSION.as_str()]
         );
     }

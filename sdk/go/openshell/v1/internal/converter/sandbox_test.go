@@ -10,7 +10,7 @@ import (
 	v1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
-	sandboxpb "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
+	policyv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -642,7 +642,7 @@ func TestSandboxRoundTrip(t *testing.T) {
 }
 
 func TestMcpOptionsConversionCopiesVersions(t *testing.T) {
-	wire := &sandboxpb.McpOptions{
+	wire := &policyv1.McpConfig{
 		Versions: []string{"2025-03-26", "2025-11-25"},
 	}
 
@@ -660,7 +660,7 @@ func TestMcpOptionsConversionCopiesVersions(t *testing.T) {
 }
 
 func TestMcpOptionsConversionDoesNotMaterializeDefaultVersions(t *testing.T) {
-	wire := &sandboxpb.McpOptions{Versions: []string{}}
+	wire := &policyv1.McpConfig{Versions: []string{}}
 
 	sdk := mcpOptionsFromProto(wire)
 	require.NotNil(t, sdk)
@@ -711,8 +711,8 @@ func TestSandboxSpecToProto(t *testing.T) {
 	// Policy conversion
 	require.NotNil(t, p.Policy)
 	assert.Equal(t, uint32(2), p.Policy.Version)
-	require.NotNil(t, p.Policy.Filesystem)
-	assert.Equal(t, []string{"/etc"}, p.Policy.Filesystem.ReadOnly)
+	require.NotNil(t, p.Policy.FilesystemPolicy)
+	assert.Equal(t, []string{"/etc"}, p.Policy.FilesystemPolicy.ReadOnly)
 }
 
 func TestSandboxSpecToProto_Nil(t *testing.T) {

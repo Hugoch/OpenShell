@@ -8,7 +8,7 @@ import (
 
 	v1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
-	sbv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
+	policyv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -62,7 +62,7 @@ func TestProfileCategoryToProto(t *testing.T) {
 // --- NetworkEndpoint ---
 
 func TestNetworkEndpointFromProto(t *testing.T) {
-	proto := &sbv1.NetworkEndpoint{
+	proto := &policyv1.NetworkEndpoint{
 		Host:     "api.example.com",
 		Port:     443,
 		Protocol: "rest",
@@ -104,7 +104,7 @@ func TestNetworkEndpointToProto_Nil(t *testing.T) {
 // --- NetworkBinary ---
 
 func TestNetworkBinaryFromProto(t *testing.T) {
-	proto := &sbv1.NetworkBinary{
+	proto := &policyv1.NetworkBinary{
 		Path: "/usr/local/bin/tool",
 	}
 
@@ -470,10 +470,10 @@ func TestProviderProfileFromProto(t *testing.T) {
 		Credentials: []*pb.ProviderProfileCredential{
 			{Name: "API_KEY", Description: "key", Required: true},
 		},
-		Endpoints: []*sbv1.NetworkEndpoint{
+		Endpoints: []*policyv1.NetworkEndpoint{
 			{Host: "api.anthropic.com", Port: 443, Protocol: "rest"},
 		},
-		Binaries: []*sbv1.NetworkBinary{
+		Binaries: []*policyv1.NetworkBinary{
 			{Path: "/usr/bin/claude"},
 		},
 		InferenceCapable: true,

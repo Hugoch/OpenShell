@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::proto::{ProviderProfile, policy::McpConfig, policy::McpVersions};
+use crate::proto::{ProviderProfile, policy::McpConfig};
 
 pub use openshell_policy_schema::{
     DEFAULT_MCP_PROTOCOL_VERSION, MAX_MCP_LEGACY_BATCH_MESSAGES, McpProtocolVersion,
@@ -37,43 +37,33 @@ pub fn normalize_provider_profile_mcp_fields(profile: &mut ProviderProfile) {
 
         let Some(options) = endpoint.mcp.as_mut() else {
             endpoint.mcp = Some(McpConfig {
-                versions: Some(McpVersions {
-                    values: vec![DEFAULT_MCP_PROTOCOL_VERSION.as_str().to_string()],
-                }),
+                versions: vec![DEFAULT_MCP_PROTOCOL_VERSION.as_str().to_string()],
                 ..McpConfig::default()
             });
             continue;
         };
 
-        let Some(versions) = options.versions.as_mut() else {
-            options.versions = Some(McpVersions {
-                values: vec![DEFAULT_MCP_PROTOCOL_VERSION.as_str().to_string()],
-            });
-            continue;
-        };
-        if versions.values.is_empty() {
-            // Presence is meaningful in the authored contract: omitted selects
-            // the pinned default, while an explicitly empty list is invalid.
-            // Preserve the latter so the validation boundary can reject it.
+        if options.versions.is_empty() {
+            options.versions = vec![DEFAULT_MCP_PROTOCOL_VERSION.as_str().to_string()];
             continue;
         }
 
         // Parse into the shared version type before mutation. Comparing the
         // set size with the input length detects duplicates without erasing
         // the duplicate values that a fail-closed validator must report.
-        let Ok(canonical) = versions
-            .values
+        let Ok(canonical) = options
+            .versions
             .iter()
             .map(|version| version.parse::<McpProtocolVersion>())
             .collect::<Result<BTreeSet<_>, _>>()
         else {
             continue;
         };
-        if canonical.len() != versions.values.len() {
+        if canonical.len() != options.versions.len() {
             continue;
         }
 
-        versions.values = canonical
+        options.versions = canonical
             .into_iter()
             .map(|version| version.as_str().to_string())
             .collect();
@@ -135,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_profile_mcp_normalization_materializes_only_omitted_versions() {
+    fn provider_profile_mcp_normalization_materializes_empty_versions() {
         let mut omitted = provider_profile_with_mcp("McP", None);
         normalize_provider_profile_mcp_fields(&mut omitted);
         assert_eq!(
@@ -143,10 +133,7 @@ mod tests {
                 .mcp
                 .as_ref()
                 .expect("omitted MCP options must materialize")
-                .versions
-                .as_ref()
-                .expect("versions must materialize")
-                .values,
+                .versions,
             ["2025-11-25"]
         );
 
@@ -155,7 +142,7 @@ mod tests {
             Some(McpConfig {
                 strict_tool_names: Some(false),
                 allow_all_known_mcp_methods: Some(true),
-                versions: Some(McpVersions { values: Vec::new() }),
+                versions: Vec::new(),
                 ..McpConfig::default()
             }),
         );
@@ -168,7 +155,7 @@ mod tests {
             &McpConfig {
                 strict_tool_names: Some(false),
                 allow_all_known_mcp_methods: Some(true),
-                versions: Some(McpVersions { values: Vec::new() }),
+                versions: vec!["2025-11-25".to_string()],
                 ..McpConfig::default()
             }
         );
@@ -180,13 +167,11 @@ mod tests {
             "mcp",
             Some(McpConfig {
                 strict_tool_names: Some(true),
-                versions: Some(McpVersions {
-                    values: vec![
-                        "2025-11-25".to_string(),
-                        "2025-03-26".to_string(),
-                        "2025-06-18".to_string(),
-                    ],
-                }),
+                versions: vec![
+                    "2025-11-25".to_string(),
+                    "2025-03-26".to_string(),
+                    "2025-06-18".to_string(),
+                ],
                 ..McpConfig::default()
             }),
         );
@@ -210,13 +195,11 @@ mod tests {
                 .expect("valid MCP options"),
             &McpConfig {
                 strict_tool_names: Some(true),
-                versions: Some(McpVersions {
-                    values: vec![
-                        "2025-03-26".to_string(),
-                        "2025-06-18".to_string(),
-                        "2025-11-25".to_string(),
-                    ]
-                }),
+                versions: vec![
+                    "2025-03-26".to_string(),
+                    "2025-06-18".to_string(),
+                    "2025-11-25".to_string(),
+                ],
                 ..McpConfig::default()
             }
         );
@@ -235,9 +218,7 @@ mod tests {
             let mut profile = provider_profile_with_mcp(
                 "mcp",
                 Some(McpConfig {
-                    versions: Some(McpVersions {
-                        values: versions.into_iter().map(ToString::to_string).collect(),
-                    }),
+                    versions: versions.into_iter().map(ToString::to_string).collect(),
                     ..McpConfig::default()
                 }),
             );
@@ -254,9 +235,7 @@ mod tests {
         let mut profile = provider_profile_with_mcp(
             "rest",
             Some(McpConfig {
-                versions: Some(McpVersions {
-                    values: vec!["latest".to_string()],
-                }),
+                versions: vec!["latest".to_string()],
                 ..McpConfig::default()
             }),
         );

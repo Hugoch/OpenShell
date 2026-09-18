@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
-	sbv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
+	policyv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -201,10 +201,10 @@ func seedProfile(mock *mockProfileServer, id, displayName string, category pb.Pr
 		Credentials: []*pb.ProviderProfileCredential{
 			{Name: "api-key", Description: "API Key", Required: true, Refresh: &pb.ProviderCredentialRefresh{}},
 		},
-		Endpoints: []*sbv1.NetworkEndpoint{
+		Endpoints: []*policyv1.NetworkEndpoint{
 			{Host: "localhost", Port: 8080, Protocol: "http"},
 		},
-		Binaries: []*sbv1.NetworkBinary{
+		Binaries: []*policyv1.NetworkBinary{
 			{Path: "/usr/bin/provider"},
 		},
 	}

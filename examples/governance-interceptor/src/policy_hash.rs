@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use openshell_core::proto::{ProviderProfile, SandboxPolicy};
+use openshell_core::proto::{ProviderProfile, policy::SandboxPolicy};
 use prost::Message;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -10,7 +10,7 @@ use crate::proto_json::decode_message_to_json;
 
 pub(crate) const HASH_ALGORITHM: &str = "openshell-governance-protojson-sha256-v2";
 const HASH_PREFIX: &str = "sha256:v2:";
-const SANDBOX_POLICY_TYPE: &str = "openshell.sandbox.v1.SandboxPolicy";
+const SANDBOX_POLICY_TYPE: &str = "openshell.policy.v1.SandboxPolicy";
 const PROVIDER_PROFILE_TYPE: &str = "openshell.v1.ProviderProfile";
 const POLICY_DOMAIN: &str = "openshell-governance-policy";
 const PROFILE_DOMAIN: &str = "openshell-governance-provider-profile";
@@ -141,9 +141,9 @@ fn hex_encode(bytes: &[u8]) -> String {
 mod tests {
     use std::collections::HashMap;
 
-    use openshell_core::proto::{
-        GraphqlOperation, L7Allow, L7DenyRule, L7QueryMatcher, L7Rule, NetworkEndpoint,
-        NetworkPolicyRule,
+    use openshell_core::proto::policy::{
+        GraphqlOperation, L7Allow, L7DenyRule, L7Rule, Matcher, NetworkEndpoint, NetworkPolicyRule,
+        ParameterMatcher, matcher, parameter_matcher,
     };
 
     use super::*;
@@ -287,11 +287,20 @@ mod tests {
         }
     }
 
-    impl MapValue for L7QueryMatcher {
+    impl MapValue for Matcher {
         fn from_test_value(value: &str) -> Self {
             Self {
-                glob: value.to_string(),
-                ..Self::default()
+                kind: Some(matcher::Kind::Glob(value.to_string())),
+            }
+        }
+    }
+
+    impl MapValue for ParameterMatcher {
+        fn from_test_value(value: &str) -> Self {
+            Self {
+                kind: Some(parameter_matcher::Kind::Matcher(Matcher::from_test_value(
+                    value,
+                ))),
             }
         }
     }

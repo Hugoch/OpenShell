@@ -463,8 +463,8 @@ func TestConfigUpdate_WithPolicy(t *testing.T) {
 
 	require.NotNil(t, req.GetPolicy())
 	assert.Equal(t, uint32(5), req.GetPolicy().GetVersion())
-	require.NotNil(t, req.GetPolicy().GetFilesystem())
-	assert.Equal(t, []string{"/usr"}, req.GetPolicy().GetFilesystem().GetReadOnly())
+	require.NotNil(t, req.GetPolicy().GetFilesystemPolicy())
+	assert.Equal(t, []string{"/usr"}, req.GetPolicy().GetFilesystemPolicy().GetReadOnly())
 }
 
 func TestConfigUpdate_RejectsUnrepresentableMiddlewareConfigBeforeRPC(t *testing.T) {

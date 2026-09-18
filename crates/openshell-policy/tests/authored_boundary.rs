@@ -22,7 +22,8 @@ network_policies:
         rules:
           - allow:
               method: tools/call
-              tool: search_*
+              tool:
+                glob: search_*
     binaries:
       - path: /usr/bin/agent
 ",
@@ -41,7 +42,7 @@ network_policies:
 
     let projected = project_base_policy(&internal).unwrap();
     let canonical = serialize_authored_policy(&projected).unwrap();
-    assert!(canonical.contains("tool: search_*"));
+    assert!(canonical.contains("glob: search_*"));
     assert!(!canonical.contains("advisor_proposed"));
     assert!(!canonical.contains("provider_credentialed"));
     assert_eq!(lower_authored_policy(projected).unwrap(), internal);

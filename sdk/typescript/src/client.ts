@@ -28,8 +28,14 @@ import {
   ServiceStatus,
   type TcpForwardFrameSchema,
 } from './gen/openshell_pb.js';
-import type { EffectiveSetting, GetSandboxConfigResponse, SandboxPolicy, SettingValue } from './gen/sandbox_pb.js';
-import { PolicySource, type SandboxPolicySchema, SettingScope, type SettingValueSchema } from './gen/sandbox_pb.js';
+import type { SandboxPolicySchema } from './gen/policy_pb.js';
+import type {
+  EffectiveSetting,
+  GetSandboxConfigResponse,
+  SandboxPolicy as RuntimeSandboxPolicy,
+  SettingValue,
+} from './gen/sandbox_pb.js';
+import { PolicySource, SettingScope, type SettingValueSchema } from './gen/sandbox_pb.js';
 import { validateSshResponse } from './ssh-validate.js';
 import { buildTransport, type ConnectOptions } from './transport.js';
 
@@ -56,7 +62,8 @@ export type {
   SandboxWorkloadTemplate,
   SandboxWorkloadTemplateSpec,
 } from './gen/openshell_pb.js';
-export type { SandboxPolicy, SettingValue } from './gen/sandbox_pb.js';
+export type { SandboxPolicy } from './gen/policy_pb.js';
+export type { SettingValue } from './gen/sandbox_pb.js';
 export type { ConnectOptions };
 export { errorCode };
 
@@ -373,7 +380,7 @@ export interface EffectiveSettingView {
 }
 
 export interface SandboxConfig {
-  policy?: SandboxPolicy;
+  policy?: RuntimeSandboxPolicy;
   version: number;
   policyHash: string;
   settings: Record<string, EffectiveSettingView>;

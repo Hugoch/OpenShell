@@ -93,14 +93,10 @@ message JsonRpcConfig {
   uint32 max_body_bytes = 1;
 }
 
-// Presence-bearing MCP version allowlist. An absent message selects the pinned
-// default. A present message with no values is invalid.
-message McpVersions {
-  repeated string values = 1;
-}
-
 message McpConfig {
-  McpVersions versions = 1;
+  // Empty and omitted are equivalent in protobuf and select the pinned
+  // default revision. Nonempty values form an exact allowlist.
+  repeated string versions = 1;
   uint32 max_body_bytes = 2;
   optional bool strict_tool_names = 3;
   optional bool allow_all_known_mcp_methods = 4;

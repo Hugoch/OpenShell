@@ -21,10 +21,10 @@ use openshell_core::proto::gateway_interceptor::v1::{
     interceptor_evaluation,
 };
 use openshell_core::proto::{
-    ListSandboxesRequest, ProviderProfile, Sandbox, SandboxPhase, SandboxPolicy,
-    UpdateConfigRequest, open_shell_client::OpenShellClient,
+    ListSandboxesRequest, ProviderProfile, Sandbox, SandboxPhase, UpdateConfigRequest,
+    open_shell_client::OpenShellClient, policy::SandboxPolicy,
 };
-use openshell_policy::parse_sandbox_policy;
+use openshell_policy::parse_authored_policy;
 use openshell_providers::{ProviderTypeProfile, normalize_profile_id};
 use policy_hash::{
     HASH_ALGORITHM, canonical_policy_hash, canonical_profile_hash,
@@ -58,7 +58,7 @@ const PROFILE_JWT_SUBJECT_PREFIX: &str = "provider-profile:";
 const CREATE_SANDBOX_CORRELATION_PREFIX: &str = "governance:create-sandbox";
 const RELOAD_CORRELATION_PREFIX: &str = "governance:reload-policy";
 const SERVICE: &str = "openshell.v1.OpenShell";
-const SANDBOX_POLICY_TYPE: &str = "openshell.sandbox.v1.SandboxPolicy";
+const SANDBOX_POLICY_TYPE: &str = "openshell.policy.v1.SandboxPolicy";
 const DEFAULT_POLICY_WATCH_INTERVAL_MS: u64 = 1_000;
 
 #[derive(Clone)]
@@ -788,7 +788,7 @@ fn load_policy_state(
     policy_yaml: &str,
     policy_signer: &PolicySigner,
 ) -> Result<PolicyState, String> {
-    let policy_proto = parse_sandbox_policy(policy_yaml)
+    let policy_proto = parse_authored_policy(policy_yaml)
         .map_err(|err| format!("failed to parse policy YAML: {err}"))?;
     let policy = sandbox_policy_to_proto_json(&policy_proto)?;
     let policy = normalize_for_struct(policy)?;

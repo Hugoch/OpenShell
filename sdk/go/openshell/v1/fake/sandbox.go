@@ -130,7 +130,12 @@ func copyPolicyNetworkEndpoint(ep types.PolicyNetworkEndpoint) types.PolicyNetwo
 				a := *r.Allow
 				a.Query = copyL7QueryMap(r.Allow.Query)
 				a.Fields = copyStringSlice(r.Allow.Fields)
-				a.Params = copyL7QueryMap(r.Allow.Params)
+				a.Params = copyParameterMap(r.Allow.Params)
+				if r.Allow.Tool != nil {
+					tool := *r.Allow.Tool
+					tool.Any = copyStringSlice(tool.Any)
+					a.Tool = &tool
+				}
 				rules[i].Allow = &a
 			}
 		}
@@ -142,7 +147,12 @@ func copyPolicyNetworkEndpoint(ep types.PolicyNetworkEndpoint) types.PolicyNetwo
 		for i, dr := range ep.DenyRules {
 			dr.Query = copyL7QueryMap(dr.Query)
 			dr.Fields = copyStringSlice(dr.Fields)
-			dr.Params = copyL7QueryMap(dr.Params)
+			dr.Params = copyParameterMap(dr.Params)
+			if dr.Tool != nil {
+				tool := *dr.Tool
+				tool.Any = copyStringSlice(tool.Any)
+				dr.Tool = &tool
+			}
 			drs[i] = dr
 		}
 		ep.DenyRules = drs
@@ -166,6 +176,23 @@ func copyPolicyNetworkEndpoint(ep types.PolicyNetworkEndpoint) types.PolicyNetwo
 		ep.Mcp = &mcp
 	}
 	return ep
+}
+
+func copyParameterMap(src map[string]types.ParameterMatcher) map[string]types.ParameterMatcher {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]types.ParameterMatcher, len(src))
+	for key, value := range src {
+		if value.Matcher != nil {
+			matcher := *value.Matcher
+			matcher.Any = copyStringSlice(matcher.Any)
+			value.Matcher = &matcher
+		}
+		value.Object = copyParameterMap(value.Object)
+		dst[key] = value
+	}
+	return dst
 }
 
 func copyBoolPtr(p *bool) *bool {

@@ -8,6 +8,7 @@ import (
 
 	v1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
+	policyv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1"
 	sbv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
 )
 
@@ -133,7 +134,7 @@ func SandboxConfigFromProto(resp *sbv1.GetSandboxConfigResponse) *v1.SandboxConf
 	}
 
 	// Convert proto SandboxPolicy to typed SDK SandboxPolicy.
-	sc.Policy = SandboxPolicyFromProto(resp.GetPolicy())
+	sc.Policy = SandboxPolicyFromInternalProto(resp.GetPolicy())
 
 	// Deep-copy settings map.
 	if m := resp.GetSettings(); len(m) > 0 {
@@ -249,9 +250,9 @@ func PolicyMergeOperationToProto(op *v1.PolicyMergeOperation) (*pb.PolicyMergeOp
 			},
 		}
 	case op.AddDenyRules != nil:
-		var denyRules []*sbv1.L7DenyRule
+		var denyRules []*policyv1.L7DenyRule
 		if len(op.AddDenyRules.DenyRules) > 0 {
-			denyRules = make([]*sbv1.L7DenyRule, len(op.AddDenyRules.DenyRules))
+			denyRules = make([]*policyv1.L7DenyRule, len(op.AddDenyRules.DenyRules))
 			for i := range op.AddDenyRules.DenyRules {
 				denyRules[i] = l7DenyRuleToProto(&op.AddDenyRules.DenyRules[i])
 			}
@@ -264,9 +265,9 @@ func PolicyMergeOperationToProto(op *v1.PolicyMergeOperation) (*pb.PolicyMergeOp
 			},
 		}
 	case op.AddAllowRules != nil:
-		var rules []*sbv1.L7Rule
+		var rules []*policyv1.L7Rule
 		if len(op.AddAllowRules.Rules) > 0 {
-			rules = make([]*sbv1.L7Rule, len(op.AddAllowRules.Rules))
+			rules = make([]*policyv1.L7Rule, len(op.AddAllowRules.Rules))
 			for i := range op.AddAllowRules.Rules {
 				rules[i] = l7RuleToProto(&op.AddAllowRules.Rules[i])
 			}

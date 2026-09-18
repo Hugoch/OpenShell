@@ -4461,6 +4461,7 @@ dependencies = [
  "miette",
  "noyalib",
  "prost",
+ "prost-reflect",
  "prost-types",
  "protoc-bin-vendored",
  "serde",

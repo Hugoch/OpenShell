@@ -10,6 +10,10 @@ position: 6
 
 Use this page to apply and iterate policy changes on running sandboxes. For a full field-by-field YAML definition, use the [Policy Schema Reference](/reference/policy-schema).
 
+Policy files use the public protobuf field shape directly. Legacy scalar
+matcher shorthands are not accepted. Write matchers as messages, for example
+`tool: { glob: read_status }` or `tool: { any: { values: [a, b] } }`.
+
 ## Policy Structure
 
 A policy has static sections `filesystem_policy`, `landlock`, and `process` that are locked at sandbox creation, and dynamic `network_policies` and `network_middlewares` sections that are hot-reloadable on a running sandbox.
@@ -753,9 +757,10 @@ REST rules can also constrain query parameter values:
               method: GET
               path: "/api/v1/download"
               query:
-                slug: "skill-*"
+                slug: { glob: "skill-*" }
                 version:
-                  any: ["1.*", "2.*"]
+                  any:
+                    values: ["1.*", "2.*"]
     binaries:
       - { path: /usr/bin/curl }
 ```
@@ -764,7 +769,7 @@ REST rules can also constrain query parameter values:
 
 ### MCP and JSON-RPC matching
 
-MCP endpoints use `protocol: mcp`. The proxy parses sandbox-to-server MCP Streamable HTTP request bodies, validates known MCP request and notification params, can evaluate the MCP method against rule `method`, and can match tool calls with the `tool` alias. Unknown extension methods stay addressable as literal method strings. You may omit the entire `mcp` stanza when using its defaults, or omit only `mcp.versions` when setting another MCP option. OpenShell immediately resolves either form to the exact `["2025-11-25"]` allowlist and stores the materialized list in canonical policy data. Adding another supported revision therefore never widens a normalized policy. Defaulting requires the `mcp` or `mcp.versions` key to be absent; explicit `mcp: null`, `versions: null`, and `versions: []` values are invalid. Use an explicit nonempty allowlist only for intentional compatibility or downgrade control. Supported revisions are `2025-03-26`, `2025-06-18`, and `2025-11-25`; the exact support floor is `2025-03-26`, and this is a closed set rather than a date range. Explicit values must be unique and contain no extra whitespace; OpenShell stores them in semantic order. Moving aliases such as `draft` or `latest` are rejected because they could change policy meaning without a policy edit; omission never means all known versions. The sessionless `2026-07-28` revision is not accepted until OpenShell supports its distinct per-request contract. A version identifies a core MCP revision only; there is no policy syntax for separately named SEP overlays. For every MCP HTTP request except a valid standalone `initialize`, OpenShell selects the revision from one `MCP-Protocol-Version` header or, when the header is absent, the MCP specification's `2025-03-26` compatibility fallback. The selected revision must appear in the allowlist. Duplicate, empty, and unsupported header values receive `400 Bad Request`; a supported revision outside the allowlist receives `403 Forbidden`. OpenShell checks the request again after middleware changes it and before forwarding. Generic JSON-RPC endpoints do not use this header and continue to evaluate only `method`. `mcp.allow_all_known_mcp_methods` defaults to `false`, so endpoints require explicit MCP method rules. Set it to `true` to enable the endpoint method profile; in that mode, rules can omit `method`, and tool selectors are normalized to `tools/call` internally. By default, MCP `tools/call` tool names must match `^[A-Za-z0-9_.-]{1,128}$`; set `mcp.strict_tool_names: false` on that endpoint only when a server intentionally uses names outside the MCP-recommended pattern. Wildcard `tool` matchers require `mcp.strict_tool_names` to remain enabled.
+MCP endpoints use `protocol: mcp`. The proxy parses sandbox-to-server MCP Streamable HTTP request bodies, validates known MCP request and notification params, evaluates `method`, and can match `tools/call` names with `tool`. Omitted, `null`, and empty `mcp.versions` values resolve to the exact `["2025-11-25"]` allowlist because policy YAML follows protobuf presence semantics. Use a nonempty list only for intentional compatibility or downgrade control. Supported revisions are `2025-03-26`, `2025-06-18`, and `2025-11-25`; values must be unique and contain no extra whitespace. For every MCP HTTP request except a valid standalone `initialize`, OpenShell selects the revision from one `MCP-Protocol-Version` header or the MCP specification's `2025-03-26` compatibility fallback. The selected revision must appear in the allowlist. `mcp.allow_all_known_mcp_methods` defaults to `false`, and `mcp.strict_tool_names` defaults to `true`.
 
 The current registry declares these profile facts for later runtime enforcement:
 
@@ -800,14 +805,15 @@ An MCP client first sends `initialize`. After the server returns a successful re
               method: notifications/initialized
           - allow:
               method: tools/call
-              tool: read_status
+              tool: { glob: read_status }
           - allow:
               method: tools/call
               tool:
-                any: [submit_report, list_reports]
+                any:
+                  values: [submit_report, list_reports]
         deny_rules:
           - method: tools/call
-            tool: delete_resource
+            tool: { glob: delete_resource }
     binaries:
       - { path: /usr/bin/python3 }
 ```
@@ -825,7 +831,7 @@ Use `protocol: json-rpc` and `method` when you need generic JSON-RPC 2.0 matchin
 
 Generic JSON-RPC policy `params` matchers are not supported. Generic JSON-RPC policy rules match only the JSON-RPC method. For batch requests, OpenShell evaluates each JSON-RPC call independently and denies the whole batch if any call is denied.
 
-For MCP, `tool` accepts a string glob or `{ any: [...] }` matcher for `tools/call` `params.name`. Rules that use `tool` or lower-level `params.name` must set `method: tools/call` unless `mcp.allow_all_known_mcp_methods: true` enables the endpoint method profile. MCP method globs are accepted only for the `tools/` method family, such as `tools/*`; omit `method` instead of writing `method: "*"` only when the endpoint method profile should allow all MCP methods. Omit `tool` to allow all tools for a `tools/call` method rule. OpenShell does not support MCP tool argument matching yet; allowed tools accept all argument payloads by default. Other MCP `params` keys are rejected. For batch requests, OpenShell evaluates each JSON-RPC call independently and denies the whole batch if any call is denied.
+For MCP, `tool` uses the protobuf matcher shape: `{ glob: "name" }` or `{ any: { values: [...] } }`. Rules that use `tool` or `params.name` must set `method: tools/call` unless `mcp.allow_all_known_mcp_methods: true` enables the endpoint method profile. Omit `tool` to allow all tools for a `tools/call` method rule. For batch requests, OpenShell evaluates each JSON-RPC call independently and denies the whole batch if any call is denied.
 
 ### GraphQL matching
 

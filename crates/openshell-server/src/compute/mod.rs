@@ -1000,7 +1000,9 @@ impl ComputeRuntime {
                 &sandbox_id,
                 sandbox.object_name(),
                 sandbox.object_workspace(),
-                &sandbox.encode_to_vec(),
+                &crate::storage_proto::encode_sandbox(&sandbox).map_err(|error| {
+                    Status::internal(format!("encode sandbox for persistence failed: {error}"))
+                })?,
                 labels_json.as_deref(),
                 WriteCondition::MustCreate,
             )
@@ -2166,7 +2168,11 @@ impl ComputeRuntime {
                 &id,
                 &name,
                 sandbox.object_workspace(),
-                &sandbox.encode_to_vec(),
+                &crate::storage_proto::encode_sandbox(&sandbox).map_err(|error| {
+                    crate::persistence::PersistenceError::Encode(format!(
+                        "encode sandbox for persistence failed: {error}"
+                    ))
+                })?,
                 labels_json.as_deref(),
                 WriteCondition::MatchResourceVersion(expected_resource_version),
             )
@@ -2945,7 +2951,7 @@ impl ComputeRuntime {
         let grace_ms = grace_period.as_millis().try_into().unwrap_or(i64::MAX);
 
         for record in records {
-            let sandbox = match Sandbox::decode(record.payload.as_slice()) {
+            let sandbox = match crate::storage_proto::decode_sandbox(record.payload.as_slice()) {
                 Ok(sandbox) => sandbox,
                 Err(err) => {
                     warn!(error = %err, "Failed to decode sandbox record during reconciliation");
@@ -4490,7 +4496,7 @@ fn compute_error_from_status(status: Status) -> ComputeError {
 }
 
 fn decode_sandbox_record(record: &ObjectRecord) -> Result<Sandbox, String> {
-    Sandbox::decode(record.payload.as_slice()).map_err(|e| e.to_string())
+    crate::storage_proto::decode_sandbox(record.payload.as_slice())
 }
 
 fn sandbox_resource_version(sandbox: &Sandbox) -> u64 {
@@ -5297,13 +5303,16 @@ mod tests {
     #[test]
     fn driver_sandbox_spec_carries_admitted_identity_selectors() {
         let public = SandboxSpec {
-            policy: Some(openshell_core::proto::sandbox::v1::SandboxPolicy {
-                process: Some(openshell_core::proto::sandbox::v1::ProcessPolicy {
-                    run_as_user: "10001".to_string(),
-                    run_as_group: "10002".to_string(),
-                }),
-                ..Default::default()
-            }),
+            policy: Some(
+                openshell_policy::project_base_policy(&openshell_core::proto::SandboxPolicy {
+                    process: Some(openshell_core::proto::sandbox::v1::ProcessPolicy {
+                        run_as_user: "10001".to_string(),
+                        run_as_group: "10002".to_string(),
+                    }),
+                    ..Default::default()
+                })
+                .unwrap(),
+            ),
             ..Default::default()
         };
 
@@ -11721,10 +11730,13 @@ mod tests {
         let mut sandbox = sandbox_record("sb-uds", "uds-sandbox", SandboxPhase::Provisioning);
         sandbox.spec = Some(SandboxSpec {
             log_level: "debug".to_string(),
-            policy: Some(openshell_core::proto::SandboxPolicy {
-                version: 42,
-                ..Default::default()
-            }),
+            policy: Some(
+                openshell_policy::project_base_policy(&openshell_core::proto::SandboxPolicy {
+                    version: 1,
+                    ..Default::default()
+                })
+                .unwrap(),
+            ),
             template: Some(SandboxTemplate {
                 image: "ghcr.io/nvidia/openshell-community/sandboxes/base:latest".to_string(),
                 driver_config: Some(prost_types::Struct {
@@ -11770,13 +11782,13 @@ mod tests {
                 .as_ref()
                 .and_then(|spec| spec.policy.as_ref())
                 .map(|policy| policy.version),
-            Some(42)
+            Some(1)
         );
         assert!(matches!(
             &calls[3],
             FakeComputeDriverCall::CreateSandbox { sandbox: Some(sandbox) }
                 if sandbox.spec.as_ref().and_then(|spec| spec.policy.as_ref())
-                    .is_some_and(|policy| policy.version == 42)
+                    .is_some_and(|policy| policy.version == 1)
         ));
 
         driver.clear_calls();

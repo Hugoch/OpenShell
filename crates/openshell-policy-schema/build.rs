@@ -23,6 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_server(false)
         .build_client(false)
+        .file_descriptor_set_path(PathBuf::from(env::var("OUT_DIR")?).join("policy_descriptor.bin"))
         .compile_protos(&[policy_proto], &[proto_root])?;
 
     Ok(())

@@ -18,10 +18,153 @@ include!(concat!(env!("OUT_DIR"), "/openshell.storage.v1.rs"));
 pub(crate) const STORAGE_FILE_DESCRIPTOR_SET: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/storage_descriptor.bin"));
 
+use openshell_core::proto::{
+    ProviderProfile, ProviderProfileCredential, ProviderProfileDiscovery, ResourceRequirements,
+    Sandbox, SandboxSpec, SandboxStatus, SandboxTemplate, SandboxWorkloadTemplateProvenance,
+};
 use openshell_core::{
     GetResourceVersion, ObjectId, ObjectLabels, ObjectName, ObjectWorkspace, SetResourceVersion,
 };
+use prost::Message;
 use std::collections::HashMap;
+
+pub(crate) fn encode_sandbox(sandbox: &Sandbox) -> Result<Vec<u8>, String> {
+    let spec = sandbox
+        .spec
+        .as_ref()
+        .map(|spec| -> Result<StoredSandboxSpec, String> {
+            Ok(StoredSandboxSpec {
+                log_level: spec.log_level.clone(),
+                environment: spec.environment.clone(),
+                template: spec.template.clone(),
+                policy: spec
+                    .policy
+                    .clone()
+                    .map(openshell_policy::lower_authored_policy)
+                    .transpose()
+                    .map_err(|error| error.to_string())?,
+                providers: spec.providers.clone(),
+                resource_requirements: spec.resource_requirements.clone(),
+                command: spec.command.clone(),
+                tty: spec.tty,
+            })
+        })
+        .transpose()?;
+
+    Ok(StoredSandbox {
+        metadata: sandbox.metadata.clone(),
+        spec,
+        status: sandbox.status.clone(),
+        created_from_workload_template: sandbox.created_from_workload_template.clone(),
+    }
+    .encode_to_vec())
+}
+
+pub(crate) fn decode_sandbox(payload: &[u8]) -> Result<Sandbox, String> {
+    let stored = StoredSandbox::decode(payload).map_err(|error| error.to_string())?;
+    let spec = stored
+        .spec
+        .map(|spec| -> Result<SandboxSpec, String> {
+            Ok(SandboxSpec {
+                log_level: spec.log_level,
+                environment: spec.environment,
+                template: spec.template,
+                policy: spec
+                    .policy
+                    .as_ref()
+                    .map(openshell_policy::project_base_policy)
+                    .transpose()
+                    .map_err(|error| error.to_string())?,
+                providers: spec.providers,
+                resource_requirements: spec.resource_requirements,
+                command: spec.command,
+                tty: spec.tty,
+            })
+        })
+        .transpose()?;
+
+    Ok(Sandbox {
+        metadata: stored.metadata,
+        spec,
+        status: stored.status,
+        created_from_workload_template: stored.created_from_workload_template,
+    })
+}
+
+pub(crate) fn encode_provider_profile(stored: &StoredProviderProfile) -> Result<Vec<u8>, String> {
+    let profile = stored
+        .profile
+        .as_ref()
+        .map(|profile| -> Result<StoredProviderProfileData, String> {
+            let rule = openshell_policy::lower_authored_rule(
+                "provider-profile",
+                openshell_core::proto::policy::NetworkPolicyRule {
+                    name: "provider-profile".to_string(),
+                    endpoints: profile.endpoints.clone(),
+                    binaries: profile.binaries.clone(),
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(StoredProviderProfileData {
+                id: profile.id.clone(),
+                display_name: profile.display_name.clone(),
+                description: profile.description.clone(),
+                category: profile.category,
+                credentials: profile.credentials.clone(),
+                endpoints: rule.endpoints,
+                binaries: rule.binaries,
+                inference_capable: profile.inference_capable,
+                discovery: profile.discovery.clone(),
+                resource_version: profile.resource_version,
+                annotations: profile.annotations.clone(),
+                source: profile.source.clone(),
+                scope: profile.scope.clone(),
+            })
+        })
+        .transpose()?;
+    Ok(StoredProviderProfileWire {
+        metadata: stored.metadata.clone(),
+        profile,
+    }
+    .encode_to_vec())
+}
+
+pub(crate) fn decode_provider_profile(payload: &[u8]) -> Result<StoredProviderProfile, String> {
+    let stored = StoredProviderProfileWire::decode(payload).map_err(|error| error.to_string())?;
+    let profile = stored
+        .profile
+        .map(|profile| -> Result<ProviderProfile, String> {
+            let rule = openshell_policy::project_authored_rule(
+                "provider-profile",
+                &openshell_core::proto::NetworkPolicyRule {
+                    name: "provider-profile".to_string(),
+                    endpoints: profile.endpoints,
+                    binaries: profile.binaries,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(ProviderProfile {
+                id: profile.id,
+                display_name: profile.display_name,
+                description: profile.description,
+                category: profile.category,
+                credentials: profile.credentials,
+                endpoints: rule.endpoints,
+                binaries: rule.binaries,
+                inference_capable: profile.inference_capable,
+                discovery: profile.discovery,
+                resource_version: profile.resource_version,
+                annotations: profile.annotations,
+                source: profile.source,
+                scope: profile.scope,
+            })
+        })
+        .transpose()?;
+    Ok(StoredProviderProfile {
+        metadata: stored.metadata,
+        profile,
+    })
+}
 
 impl ObjectId for StoredProviderProfile {
     fn object_id(&self) -> &str {
@@ -116,13 +259,13 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
     const STORAGE_V1_SCHEMA_SHA256: &str =
-        "574bf5fcff731bd6e3fd84ed3f124161035bd236ef0fb7e32b4d8a8c55ceba5e";
+        "e414ab3eaa6fece515212188b76f24a199e907b4d8c60f39a95303a8235bf662";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "d323fdd0c989049950ed3bf9cc2cbae9f05e1ae83b13fa2a65a2f5db1ebab95f";
+        "33854d7b13ca7a43669beaca3fbcf744b0e43919da464fbac34846e659002a53";
     const DURABLE_SCHEMA_SHA256: &str =
-        "65066c0b0eef57a4c708f20fcbbb8e8f47376da9f4bf73dfc3bca0b3df174ba8";
+        "d1b6602680c3336ea0c9d3500fe154012132111eadd712cb3a07b67e1e958dbf";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
-        "39e8aaf0d1fbc86906c49a9e7f60641a3ce203d3130799c8065e09acf9d53ddf";
+        "d51c0f38d9fd062b419672c9140d691b6f8ca1267201c6b9a3e9bd99af5b371d";
     // A persisted Sandbox without endpoint status retains its lifecycle fields;
     // the absent repeated field decodes empty and needs no database rewrite.
     const SANDBOX_WITHOUT_ENDPOINT_STATUS: &str = "0a1e0a0a73616e64626f782d6964120773616e64626f783a0764656661756c741a2b0a0773616e64626f782a0d0a05526561647912045472756530023807420d73757065727669736f722d6964";
@@ -138,7 +281,7 @@ mod tests {
         "0a0472756c651a07666978747572652d0000403f3a0b6578616d706c652e636f6d40bb035002";
     const V0_0_116_POLICY_RECORD: &str = "0a09706f6c6963792d6964120a73616e64626f782d6964180222030102032a0673686132353632066c6f616465643a046e6f6e6540fa0148ac0252110a06736f75726365120766697874757265";
     const V0_0_116_DRAFT_RECORD: &str = "0a086368756e6b2d6964120a73616e64626f782d69641802220770656e64696e672a0472756c65320204053a076669787475726549000000000000e83f50de02589003620b6578616d706c652e636f6d68bb037801";
-    const STORAGE_MESSAGE_NAMES: [&str; 8] = [
+    const STORAGE_MESSAGE_NAMES: [&str; 12] = [
         "DraftChunkPayload",
         "PolicyRevisionPayload",
         "StoredDraftChunk",
@@ -146,7 +289,11 @@ mod tests {
         "StoredProviderCredentialRefreshState",
         "StoredProviderCredentialRefreshStateV2",
         "StoredProviderProfile",
+        "StoredProviderProfileData",
+        "StoredProviderProfileWire",
         "StoredRefreshMaterialDeletion",
+        "StoredSandbox",
+        "StoredSandboxSpec",
     ];
     const DURABLE_ROOTS: [&str; 12] = [
         ".openshell.datamodel.v1.Provider",
@@ -155,8 +302,8 @@ mod tests {
         ".openshell.storage.v1.DraftChunkPayload",
         ".openshell.storage.v1.PolicyRevisionPayload",
         ".openshell.storage.v1.StoredProviderCredentialRefreshStateV2",
-        ".openshell.storage.v1.StoredProviderProfile",
-        ".openshell.v1.Sandbox",
+        ".openshell.storage.v1.StoredProviderProfileWire",
+        ".openshell.storage.v1.StoredSandbox",
         ".openshell.v1.SandboxWorkloadTemplate",
         ".openshell.v1.ServiceEndpoint",
         ".openshell.v1.SshSession",
@@ -535,13 +682,13 @@ mod tests {
 
         assert_eq!(
             (public_closure.messages.len(), public_closure.enums.len()),
-            (283, 14)
+            (311, 14)
         );
         assert_eq!(
             (durable_closure.messages.len(), durable_closure.enums.len()),
             (83, 9)
         );
-        assert_eq!((overlap_messages.len(), overlap_enums.len()), (73, 9));
+        assert_eq!((overlap_messages.len(), overlap_enums.len()), (68, 9));
 
         assert_eq!(
             public_inventory_hash, PUBLIC_RPC_SCHEMA_SHA256,
@@ -584,6 +731,99 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_storage_keeps_policy_internal_and_projects_on_read() {
+        let policy = openshell_policy::parse_authored_policy(
+            r#"
+version: 1
+network_policies:
+  mcp:
+    name: mcp
+    endpoints:
+      - host: mcp.example.com
+        port: 443
+        protocol: mcp
+        rules:
+          - allow:
+              method: tools/call
+              tool: { glob: read_status }
+    binaries:
+      - path: /usr/bin/python3
+"#,
+        )
+        .unwrap();
+        let sandbox = Sandbox {
+            spec: Some(SandboxSpec {
+                policy: Some(policy.clone()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let payload = encode_sandbox(&sandbox).unwrap();
+        let stored = StoredSandbox::decode(payload.as_slice()).unwrap();
+        let internal = stored.spec.unwrap().policy.unwrap();
+        assert!(internal.network_policies["mcp"].endpoints[0].mcp.is_some());
+
+        let decoded = decode_sandbox(&payload).unwrap();
+        let decoded_policy = decoded.spec.unwrap().policy.unwrap();
+        assert_eq!(
+            openshell_policy::lower_authored_policy(decoded_policy).unwrap(),
+            openshell_policy::lower_authored_policy(policy).unwrap()
+        );
+    }
+
+    #[test]
+    fn provider_profile_storage_keeps_policy_internal_and_projects_on_read() {
+        let policy = openshell_policy::parse_authored_policy(
+            r#"
+version: 1
+network_policies:
+  profile:
+    name: profile
+    endpoints:
+      - host: mcp.example.com
+        port: 443
+        protocol: mcp
+        rules:
+          - allow:
+              method: tools/call
+              tool: { glob: read_status }
+    binaries:
+      - path: /usr/bin/python3
+"#,
+        )
+        .unwrap();
+        let authored_rule = policy.network_policies["profile"].clone();
+        let stored = StoredProviderProfile {
+            profile: Some(ProviderProfile {
+                id: "profile".to_string(),
+                display_name: "Profile".to_string(),
+                endpoints: authored_rule.endpoints.clone(),
+                binaries: authored_rule.binaries.clone(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let payload = encode_provider_profile(&stored).unwrap();
+        let wire = StoredProviderProfileWire::decode(payload.as_slice()).unwrap();
+        let internal = wire.profile.unwrap();
+        assert!(internal.endpoints[0].mcp.is_some());
+
+        let decoded = decode_provider_profile(&payload).unwrap();
+        let profile = decoded.profile.unwrap();
+        let decoded_rule = openshell_core::proto::policy::NetworkPolicyRule {
+            name: authored_rule.name.clone(),
+            endpoints: profile.endpoints,
+            binaries: profile.binaries,
+        };
+        assert_eq!(
+            openshell_policy::lower_authored_rule("profile", decoded_rule).unwrap(),
+            openshell_policy::lower_authored_rule("profile", authored_rule).unwrap()
+        );
+    }
+
+    #[test]
     fn pre_move_storage_payloads_decode_after_package_relocation() {
         let refresh = StoredProviderCredentialRefreshState::decode(
             legacy_bytes(V0_0_116_REFRESH_STATE).as_slice(),
@@ -610,7 +850,7 @@ mod tests {
         assert_eq!(deletion.material_key, "old");
         assert_eq!(deletion.handle.expect("handle").driver, "test");
 
-        let profile = StoredProviderProfile::decode(legacy_bytes(V0_0_116_PROFILE).as_slice())
+        let profile = decode_provider_profile(legacy_bytes(V0_0_116_PROFILE).as_slice())
             .expect("legacy provider profile must decode");
         let profile = profile.profile.expect("profile");
         assert_eq!(profile.id, "profile");

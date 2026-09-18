@@ -461,8 +461,8 @@ func TestConfigUpdateToProto_WithPolicy(t *testing.T) {
 	require.NotNil(t, req)
 	require.NotNil(t, req.Policy, "typed SandboxPolicy must be converted to proto")
 	assert.Equal(t, uint32(3), req.Policy.GetVersion())
-	require.NotNil(t, req.Policy.GetFilesystem())
-	assert.Equal(t, []string{"/etc"}, req.Policy.GetFilesystem().GetReadOnly())
+	require.NotNil(t, req.Policy.GetFilesystemPolicy())
+	assert.Equal(t, []string{"/etc"}, req.Policy.GetFilesystemPolicy().GetReadOnly())
 }
 
 func TestConfigUpdateToProto_WithDeleteSetting(t *testing.T) {

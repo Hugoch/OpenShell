@@ -957,17 +957,12 @@ pub fn authored_policy_to_json_value(
 // actionable MCP diagnostics the top-level user-facing error.
 /// Parse a sandbox policy from a YAML string.
 pub fn parse_sandbox_policy(yaml: &str) -> Result<SandboxPolicy> {
-    let raw = openshell_policy_schema::parse_policy(yaml)?;
-    to_proto(raw)
+    lower_authored_policy(parse_authored_policy(yaml)?)
 }
 
 /// Parse a sandbox policy from a regular file using the shared bounded reader.
 pub fn parse_sandbox_policy_file(path: &Path) -> Result<SandboxPolicy> {
-    let raw = openshell_policy_schema::parse_policy_file(
-        path,
-        openshell_policy_schema::ParseLimits::default(),
-    )?;
-    to_proto(raw)
+    lower_authored_policy(parse_authored_policy_file(path)?)
 }
 
 /// Serialize a proto sandbox policy to a YAML string.
@@ -976,11 +971,7 @@ pub fn parse_sandbox_policy_file(path: &Path) -> Result<SandboxPolicy> {
 /// canonical YAML field names (e.g. `filesystem_policy`, not `filesystem`)
 /// and is round-trippable through `parse_sandbox_policy`.
 pub fn serialize_sandbox_policy(policy: &SandboxPolicy) -> Result<String> {
-    validate_proto_version_for_authored_serialization(policy)?;
-    let canonical = validate_and_canonicalize_mcp_policy_schema(policy.clone())
-        .map_err(|error| miette::miette!("cannot serialize invalid sandbox policy: {error}"))?;
-    let yaml_repr = from_proto(&canonical)?;
-    openshell_policy_schema::serialize_policy(&yaml_repr)
+    serialize_authored_policy(&project_base_policy(policy)?)
 }
 
 /// Convert a proto sandbox policy into the canonical policy JSON representation.
@@ -988,11 +979,7 @@ pub fn serialize_sandbox_policy(policy: &SandboxPolicy) -> Result<String> {
 /// The shape mirrors the YAML schema used by [`serialize_sandbox_policy`], so
 /// automation can use the same documented field names in either format.
 pub fn sandbox_policy_to_json_value(policy: &SandboxPolicy) -> Result<serde_json::Value> {
-    validate_proto_version_for_authored_serialization(policy)?;
-    let canonical = validate_and_canonicalize_mcp_policy_schema(policy.clone())
-        .map_err(|error| miette::miette!("cannot serialize invalid sandbox policy: {error}"))?;
-    let json_repr = from_proto(&canonical)?;
-    openshell_policy_schema::policy_to_json_value(&json_repr)
+    authored_policy_to_json_value(&project_base_policy(policy)?)
 }
 
 fn validate_proto_version_for_authored_serialization(policy: &SandboxPolicy) -> Result<()> {
@@ -1953,11 +1940,27 @@ pub fn validate_and_canonicalize_sandbox_policy(
         .map_err(|violations| PolicyValidationError { violations })?;
     materialize_default_mcp_versions(&mut policy);
     canonicalize_mcp_version_allowlists(&mut policy);
+    canonicalize_endpoint_ports(&mut policy);
     debug_assert!(
         validate_sandbox_policy(&policy).is_ok(),
         "validated MCP canonicalization must preserve every policy invariant"
     );
     Ok(policy)
+}
+
+/// Materialize the effective port list while retaining the legacy scalar field.
+/// This gives policies authored with `port` and `ports` one internal identity.
+fn canonicalize_endpoint_ports(policy: &mut SandboxPolicy) {
+    for rule in policy.network_policies.values_mut() {
+        for endpoint in &mut rule.endpoints {
+            if endpoint.ports.is_empty() && endpoint.port != 0 {
+                endpoint.ports.push(endpoint.port);
+            }
+            if let Some(first) = endpoint.ports.first().copied() {
+                endpoint.port = first;
+            }
+        }
+    }
 }
 
 /// Replace absent protobuf MCP options and empty revision lists with the
@@ -2395,9 +2398,11 @@ network_policies:
               method: GET
               path: /download
               query:
-                slug: "my-*"
+                slug:
+                  glob: "my-*"
                 tag:
-                  any: ["foo-*", "bar-*"]
+                  any:
+                    values: ["foo-*", "bar-*"]
     binaries:
       - path: /usr/bin/curl
 "#;
@@ -2639,10 +2644,8 @@ network_policies:
     }
 
     #[test]
-    fn mcp_version_yaml_rejects_explicit_empty_duplicate_unknown_and_misplaced_values() {
+    fn mcp_version_yaml_uses_protobuf_empty_semantics_and_rejects_invalid_values() {
         let cases = [
-            ("null allowlist", "mcp", Some("          versions: null\n")),
-            ("empty allowlist", "mcp", Some("          versions: []\n")),
             (
                 "empty identifier",
                 "mcp",
@@ -2690,11 +2693,34 @@ network_policies:
             assert!(parse_sandbox_policy(&yaml).is_err(), "{case} must fail");
         }
 
+        for body in [
+            Some("          versions: null\n"),
+            Some("          versions: []\n"),
+        ] {
+            let policy = parse_sandbox_policy(&mcp_version_endpoint_yaml("mcp", body))
+                .expect("null and empty repeated fields use protobuf omission semantics");
+            assert_eq!(
+                policy.network_policies["versioned"].endpoints[0]
+                    .mcp
+                    .as_ref()
+                    .expect("MCP defaults")
+                    .versions,
+                default_mcp_versions()
+            );
+        }
+
         let mut null_mcp = mcp_version_endpoint_yaml("mcp", None);
         null_mcp.push_str("        mcp: null\n");
-        assert!(
-            parse_sandbox_policy(&null_mcp).is_err(),
-            "an explicit null MCP stanza must fail"
+        assert_eq!(
+            parse_sandbox_policy(&null_mcp)
+                .expect("null message uses protobuf omission semantics")
+                .network_policies["versioned"]
+                .endpoints[0]
+                .mcp
+                .as_ref()
+                .expect("MCP defaults")
+                .versions,
+            default_mcp_versions()
         );
     }
 
@@ -2748,12 +2774,13 @@ network_policies:
     fn protobuf_missing_and_empty_mcp_options_materialize_the_same_default() {
         let missing = mcp_version_policy("mcp", None);
         let empty = mcp_version_policy("mcp", Some(McpOptions::default()));
-        let explicit = mcp_version_policy(
+        let explicit = validate_and_canonicalize_sandbox_policy(mcp_version_policy(
             "mcp",
             Some(mcp_version_options(
                 &[DEFAULT_MCP_PROTOCOL_VERSION.as_str()],
             )),
-        );
+        ))
+        .expect("explicit default must canonicalize");
 
         for raw in [&missing, &empty] {
             assert!(matches!(
@@ -4504,7 +4531,8 @@ network_policies:
           - method: DELETE
             path: "/repos/*/branches/*/protection"
             query:
-              force: "true"
+              force:
+                glob: "true"
     binaries:
       - path: /usr/bin/curl
 "#;
@@ -4538,7 +4566,8 @@ network_policies:
             path: /action
             query:
               type:
-                any: ["admin-*", "root-*"]
+                any:
+                  values: ["admin-*", "root-*"]
     binaries:
       - path: /usr/bin/curl
 "#;
@@ -4652,10 +4681,12 @@ network_policies:
           - allow:
               method: tools/call
               tool:
-                any: [search_web, list_tools]
+                any:
+                  values: [search_web, list_tools]
         deny_rules:
           - method: tools/call
-            tool: send_email
+            tool:
+              glob: send_email
     binaries:
       - path: /usr/bin/curl
 ";
@@ -4699,11 +4730,13 @@ network_policies:
         rules:
           - allow:
               method: tools/call
-              tool: search_web
+              tool:
+                glob: search_web
         deny_rules:
           - method: tools/call
             tool:
-              any: [send_email, delete_resource]
+              any:
+                values: [send_email, delete_resource]
     binaries:
       - path: /usr/bin/curl
 ";
@@ -4713,7 +4746,7 @@ network_policies:
 
         assert!(yaml_out.contains("protocol: mcp"));
         assert!(yaml_out.contains("method: tools/call"));
-        assert!(yaml_out.contains("tool: search_web"));
+        assert!(yaml_out.contains("glob: search_web"));
         assert!(yaml_out.contains("any:"));
         assert!(yaml_out.contains("- send_email"));
         assert!(yaml_out.contains("- delete_resource"));
@@ -4740,8 +4773,14 @@ network_policies:
               method: tools/call
               params:
                 arguments:
-                  any: "first"
-                  other: "second"
+                  object:
+                    fields:
+                      any:
+                        matcher:
+                          glob: "first"
+                      other:
+                        matcher:
+                          glob: "second"
 "#;
 
         let proto = parse_sandbox_policy(yaml).expect("authored policy must parse");
@@ -4755,8 +4794,8 @@ network_policies:
 
         let serialized = serialize_sandbox_policy(&proto).expect("protobuf policy must serialize");
         assert!(serialized.contains("arguments:"));
-        assert!(serialized.contains("any: first"));
-        assert!(serialized.contains("other: second"));
+        assert!(serialized.contains("glob: first"));
+        assert!(serialized.contains("glob: second"));
 
         let reparsed =
             parse_sandbox_policy(&serialized).expect("serialized protobuf policy must parse again");
@@ -4924,7 +4963,7 @@ network_policies:
         let error = parse_sandbox_policy(yaml).expect_err("removed harness field must be rejected");
         let error_debug = format!("{error:?}");
         assert!(
-            error_debug.contains("unknown field") && error_debug.contains("harness"),
+            error_debug.contains("unrecognized field") && error_debug.contains("harness"),
             "unexpected error: {error_debug}"
         );
     }

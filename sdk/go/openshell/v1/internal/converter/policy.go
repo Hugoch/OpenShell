@@ -8,7 +8,9 @@ import (
 
 	"github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
+	policyv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1"
 	sbv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -108,13 +110,13 @@ func DraftPolicyFromProto(r *pb.GetDraftPolicyResponse) *types.DraftPolicy {
 
 // SandboxPolicyFromProto converts a proto SandboxPolicy to an SDK SandboxPolicy.
 // Returns nil for nil input. All slice and map fields are deep-copied.
-func SandboxPolicyFromProto(p *sbv1.SandboxPolicy) *types.SandboxPolicy {
+func SandboxPolicyFromProto(p *policyv1.SandboxPolicy) *types.SandboxPolicy {
 	if p == nil {
 		return nil
 	}
 	result := &types.SandboxPolicy{
 		Version:    p.GetVersion(),
-		Filesystem: filesystemPolicyFromProto(p.GetFilesystem()),
+		Filesystem: filesystemPolicyFromProto(p.GetFilesystemPolicy()),
 		Landlock:   landlockPolicyFromProto(p.GetLandlock()),
 		Process:    processPolicyFromProto(p.GetProcess()),
 	}
@@ -137,26 +139,44 @@ func SandboxPolicyFromProto(p *sbv1.SandboxPolicy) *types.SandboxPolicy {
 	return result
 }
 
-// SandboxPolicyToProto converts an SDK SandboxPolicy to a proto SandboxPolicy.
-// Returns nil for nil input. All slice and map fields are deep-copied.
-func SandboxPolicyToProto(p *types.SandboxPolicy) *sbv1.SandboxPolicy {
+// SandboxPolicyFromInternalProto converts the supervisor's internal policy
+// response through the wire-compatible authored schema. Runtime-only fields
+// are discarded at this SDK boundary.
+func SandboxPolicyFromInternalProto(p *sbv1.SandboxPolicy) *types.SandboxPolicy {
 	if p == nil {
 		return nil
 	}
-	result := &sbv1.SandboxPolicy{
-		Version:    p.Version,
-		Filesystem: filesystemPolicyToProto(p.Filesystem),
-		Landlock:   landlockPolicyToProto(p.Landlock),
-		Process:    processPolicyToProto(p.Process),
+	payload, err := proto.Marshal(p)
+	if err != nil {
+		return nil
+	}
+	public := &policyv1.SandboxPolicy{}
+	if err := proto.Unmarshal(payload, public); err != nil {
+		return nil
+	}
+	return SandboxPolicyFromProto(public)
+}
+
+// SandboxPolicyToProto converts an SDK SandboxPolicy to a proto SandboxPolicy.
+// Returns nil for nil input. All slice and map fields are deep-copied.
+func SandboxPolicyToProto(p *types.SandboxPolicy) *policyv1.SandboxPolicy {
+	if p == nil {
+		return nil
+	}
+	result := &policyv1.SandboxPolicy{
+		Version:          p.Version,
+		FilesystemPolicy: filesystemPolicyToProto(p.Filesystem),
+		Landlock:         landlockPolicyToProto(p.Landlock),
+		Process:          processPolicyToProto(p.Process),
 	}
 	if p.NetworkPolicies != nil {
-		result.NetworkPolicies = make(map[string]*sbv1.NetworkPolicyRule, len(p.NetworkPolicies))
+		result.NetworkPolicies = make(map[string]*policyv1.NetworkPolicyRule, len(p.NetworkPolicies))
 		for k, v := range p.NetworkPolicies {
 			result.NetworkPolicies[k] = NetworkPolicyRuleToProto(&v)
 		}
 	}
 	if p.NetworkMiddlewares != nil {
-		result.NetworkMiddlewares = make(map[string]*sbv1.NetworkMiddlewareConfig, len(p.NetworkMiddlewares))
+		result.NetworkMiddlewares = make(map[string]*policyv1.NetworkMiddleware, len(p.NetworkMiddlewares))
 		for k, v := range p.NetworkMiddlewares {
 			result.NetworkMiddlewares[k] = middlewareConfigToProto(&v)
 		}
@@ -166,7 +186,7 @@ func SandboxPolicyToProto(p *types.SandboxPolicy) *sbv1.SandboxPolicy {
 
 // SandboxPolicyToProtoChecked converts middleware configuration without
 // silently discarding values unsupported by protobuf Struct.
-func SandboxPolicyToProtoChecked(p *types.SandboxPolicy) (*sbv1.SandboxPolicy, error) {
+func SandboxPolicyToProtoChecked(p *types.SandboxPolicy) (*policyv1.SandboxPolicy, error) {
 	result := SandboxPolicyToProto(p)
 	if p == nil {
 		return result, nil
@@ -184,7 +204,7 @@ func SandboxPolicyToProtoChecked(p *types.SandboxPolicy) (*sbv1.SandboxPolicy, e
 	return result, nil
 }
 
-func middlewareConfigFromProto(m *sbv1.NetworkMiddlewareConfig) types.NetworkMiddlewareConfig {
+func middlewareConfigFromProto(m *policyv1.NetworkMiddleware) types.NetworkMiddlewareConfig {
 	result := types.NetworkMiddlewareConfig{
 		Name:       m.GetName(),
 		Middleware: m.GetMiddleware(),
@@ -203,8 +223,8 @@ func middlewareConfigFromProto(m *sbv1.NetworkMiddlewareConfig) types.NetworkMid
 	return result
 }
 
-func middlewareConfigToProto(m *types.NetworkMiddlewareConfig) *sbv1.NetworkMiddlewareConfig {
-	result := &sbv1.NetworkMiddlewareConfig{
+func middlewareConfigToProto(m *types.NetworkMiddlewareConfig) *policyv1.NetworkMiddleware {
+	result := &policyv1.NetworkMiddleware{
 		Name:       m.Name,
 		Middleware: m.Middleware,
 		OnError:    m.OnError,
@@ -219,7 +239,7 @@ func middlewareConfigToProto(m *types.NetworkMiddlewareConfig) *sbv1.NetworkMidd
 		}
 	}
 	if m.Endpoints != nil {
-		result.Endpoints = &sbv1.MiddlewareEndpointSelector{
+		result.Endpoints = &policyv1.MiddlewareEndpointSelector{
 			Include: CopyStringSlice(m.Endpoints.Include),
 			Exclude: CopyStringSlice(m.Endpoints.Exclude),
 		}
@@ -227,7 +247,7 @@ func middlewareConfigToProto(m *types.NetworkMiddlewareConfig) *sbv1.NetworkMidd
 	return result
 }
 
-func filesystemPolicyFromProto(f *sbv1.FilesystemPolicy) *types.FilesystemPolicy {
+func filesystemPolicyFromProto(f *policyv1.FilesystemPolicy) *types.FilesystemPolicy {
 	if f == nil {
 		return nil
 	}
@@ -238,18 +258,18 @@ func filesystemPolicyFromProto(f *sbv1.FilesystemPolicy) *types.FilesystemPolicy
 	}
 }
 
-func filesystemPolicyToProto(f *types.FilesystemPolicy) *sbv1.FilesystemPolicy {
+func filesystemPolicyToProto(f *types.FilesystemPolicy) *policyv1.FilesystemPolicy {
 	if f == nil {
 		return nil
 	}
-	return &sbv1.FilesystemPolicy{
+	return &policyv1.FilesystemPolicy{
 		IncludeWorkdir: f.IncludeWorkdir,
 		ReadOnly:       CopyStringSlice(f.ReadOnly),
 		ReadWrite:      CopyStringSlice(f.ReadWrite),
 	}
 }
 
-func landlockPolicyFromProto(l *sbv1.LandlockPolicy) *types.LandlockPolicy {
+func landlockPolicyFromProto(l *policyv1.LandlockPolicy) *types.LandlockPolicy {
 	if l == nil {
 		return nil
 	}
@@ -258,16 +278,16 @@ func landlockPolicyFromProto(l *sbv1.LandlockPolicy) *types.LandlockPolicy {
 	}
 }
 
-func landlockPolicyToProto(l *types.LandlockPolicy) *sbv1.LandlockPolicy {
+func landlockPolicyToProto(l *types.LandlockPolicy) *policyv1.LandlockPolicy {
 	if l == nil {
 		return nil
 	}
-	return &sbv1.LandlockPolicy{
+	return &policyv1.LandlockPolicy{
 		Compatibility: l.Compatibility,
 	}
 }
 
-func processPolicyFromProto(p *sbv1.ProcessPolicy) *types.ProcessPolicy {
+func processPolicyFromProto(p *policyv1.ProcessPolicy) *types.ProcessPolicy {
 	if p == nil {
 		return nil
 	}
@@ -277,11 +297,11 @@ func processPolicyFromProto(p *sbv1.ProcessPolicy) *types.ProcessPolicy {
 	}
 }
 
-func processPolicyToProto(p *types.ProcessPolicy) *sbv1.ProcessPolicy {
+func processPolicyToProto(p *types.ProcessPolicy) *policyv1.ProcessPolicy {
 	if p == nil {
 		return nil
 	}
-	return &sbv1.ProcessPolicy{
+	return &policyv1.ProcessPolicy{
 		RunAsUser:  p.RunAsUser,
 		RunAsGroup: p.RunAsGroup,
 	}

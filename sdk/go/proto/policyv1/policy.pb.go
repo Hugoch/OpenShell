@@ -656,65 +656,21 @@ func (x *JsonRpcConfig) GetMaxBodyBytes() uint32 {
 	return 0
 }
 
-// Presence-bearing MCP version allowlist. An absent message selects the pinned
-// default. A present message with no values is invalid.
-type McpVersions struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Values        []string               `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *McpVersions) Reset() {
-	*x = McpVersions{}
-	mi := &file_policy_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *McpVersions) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*McpVersions) ProtoMessage() {}
-
-func (x *McpVersions) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use McpVersions.ProtoReflect.Descriptor instead.
-func (*McpVersions) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *McpVersions) GetValues() []string {
-	if x != nil {
-		return x.Values
-	}
-	return nil
-}
-
 type McpConfig struct {
-	state                   protoimpl.MessageState `protogen:"open.v1"`
-	Versions                *McpVersions           `protobuf:"bytes,1,opt,name=versions,proto3" json:"versions,omitempty"`
-	MaxBodyBytes            uint32                 `protobuf:"varint,2,opt,name=max_body_bytes,json=maxBodyBytes,proto3" json:"max_body_bytes,omitempty"`
-	StrictToolNames         *bool                  `protobuf:"varint,3,opt,name=strict_tool_names,json=strictToolNames,proto3,oneof" json:"strict_tool_names,omitempty"`
-	AllowAllKnownMcpMethods *bool                  `protobuf:"varint,4,opt,name=allow_all_known_mcp_methods,json=allowAllKnownMcpMethods,proto3,oneof" json:"allow_all_known_mcp_methods,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Empty and omitted are equivalent in protobuf and select the pinned
+	// default revision. Nonempty values form an exact allowlist.
+	Versions                []string `protobuf:"bytes,1,rep,name=versions,proto3" json:"versions,omitempty"`
+	MaxBodyBytes            uint32   `protobuf:"varint,2,opt,name=max_body_bytes,json=maxBodyBytes,proto3" json:"max_body_bytes,omitempty"`
+	StrictToolNames         *bool    `protobuf:"varint,3,opt,name=strict_tool_names,json=strictToolNames,proto3,oneof" json:"strict_tool_names,omitempty"`
+	AllowAllKnownMcpMethods *bool    `protobuf:"varint,4,opt,name=allow_all_known_mcp_methods,json=allowAllKnownMcpMethods,proto3,oneof" json:"allow_all_known_mcp_methods,omitempty"`
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
 
 func (x *McpConfig) Reset() {
 	*x = McpConfig{}
-	mi := &file_policy_proto_msgTypes[9]
+	mi := &file_policy_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -726,7 +682,7 @@ func (x *McpConfig) String() string {
 func (*McpConfig) ProtoMessage() {}
 
 func (x *McpConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[9]
+	mi := &file_policy_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -739,10 +695,10 @@ func (x *McpConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use McpConfig.ProtoReflect.Descriptor instead.
 func (*McpConfig) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{9}
+	return file_policy_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *McpConfig) GetVersions() *McpVersions {
+func (x *McpConfig) GetVersions() []string {
 	if x != nil {
 		return x.Versions
 	}
@@ -781,7 +737,7 @@ type GraphqlOperation struct {
 
 func (x *GraphqlOperation) Reset() {
 	*x = GraphqlOperation{}
-	mi := &file_policy_proto_msgTypes[10]
+	mi := &file_policy_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -793,7 +749,7 @@ func (x *GraphqlOperation) String() string {
 func (*GraphqlOperation) ProtoMessage() {}
 
 func (x *GraphqlOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[10]
+	mi := &file_policy_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -806,7 +762,7 @@ func (x *GraphqlOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GraphqlOperation.ProtoReflect.Descriptor instead.
 func (*GraphqlOperation) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{10}
+	return file_policy_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GraphqlOperation) GetOperationType() string {
@@ -839,7 +795,7 @@ type L7Rule struct {
 
 func (x *L7Rule) Reset() {
 	*x = L7Rule{}
-	mi := &file_policy_proto_msgTypes[11]
+	mi := &file_policy_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -851,7 +807,7 @@ func (x *L7Rule) String() string {
 func (*L7Rule) ProtoMessage() {}
 
 func (x *L7Rule) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[11]
+	mi := &file_policy_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -864,7 +820,7 @@ func (x *L7Rule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use L7Rule.ProtoReflect.Descriptor instead.
 func (*L7Rule) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{11}
+	return file_policy_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *L7Rule) GetAllow() *L7Allow {
@@ -891,7 +847,7 @@ type L7Allow struct {
 
 func (x *L7Allow) Reset() {
 	*x = L7Allow{}
-	mi := &file_policy_proto_msgTypes[12]
+	mi := &file_policy_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -903,7 +859,7 @@ func (x *L7Allow) String() string {
 func (*L7Allow) ProtoMessage() {}
 
 func (x *L7Allow) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[12]
+	mi := &file_policy_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -916,7 +872,7 @@ func (x *L7Allow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use L7Allow.ProtoReflect.Descriptor instead.
 func (*L7Allow) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{12}
+	return file_policy_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *L7Allow) GetMethod() string {
@@ -999,7 +955,7 @@ type L7DenyRule struct {
 
 func (x *L7DenyRule) Reset() {
 	*x = L7DenyRule{}
-	mi := &file_policy_proto_msgTypes[13]
+	mi := &file_policy_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1011,7 +967,7 @@ func (x *L7DenyRule) String() string {
 func (*L7DenyRule) ProtoMessage() {}
 
 func (x *L7DenyRule) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[13]
+	mi := &file_policy_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1024,7 +980,7 @@ func (x *L7DenyRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use L7DenyRule.ProtoReflect.Descriptor instead.
 func (*L7DenyRule) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{13}
+	return file_policy_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *L7DenyRule) GetMethod() string {
@@ -1103,7 +1059,7 @@ type Matcher struct {
 
 func (x *Matcher) Reset() {
 	*x = Matcher{}
-	mi := &file_policy_proto_msgTypes[14]
+	mi := &file_policy_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1115,7 +1071,7 @@ func (x *Matcher) String() string {
 func (*Matcher) ProtoMessage() {}
 
 func (x *Matcher) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[14]
+	mi := &file_policy_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1128,7 +1084,7 @@ func (x *Matcher) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Matcher.ProtoReflect.Descriptor instead.
 func (*Matcher) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{14}
+	return file_policy_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Matcher) GetKind() isMatcher_Kind {
@@ -1181,7 +1137,7 @@ type AnyMatcher struct {
 
 func (x *AnyMatcher) Reset() {
 	*x = AnyMatcher{}
-	mi := &file_policy_proto_msgTypes[15]
+	mi := &file_policy_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1193,7 +1149,7 @@ func (x *AnyMatcher) String() string {
 func (*AnyMatcher) ProtoMessage() {}
 
 func (x *AnyMatcher) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[15]
+	mi := &file_policy_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1206,7 +1162,7 @@ func (x *AnyMatcher) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnyMatcher.ProtoReflect.Descriptor instead.
 func (*AnyMatcher) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{15}
+	return file_policy_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *AnyMatcher) GetValues() []string {
@@ -1229,7 +1185,7 @@ type ParameterMatcher struct {
 
 func (x *ParameterMatcher) Reset() {
 	*x = ParameterMatcher{}
-	mi := &file_policy_proto_msgTypes[16]
+	mi := &file_policy_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1241,7 +1197,7 @@ func (x *ParameterMatcher) String() string {
 func (*ParameterMatcher) ProtoMessage() {}
 
 func (x *ParameterMatcher) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[16]
+	mi := &file_policy_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1254,7 +1210,7 @@ func (x *ParameterMatcher) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ParameterMatcher.ProtoReflect.Descriptor instead.
 func (*ParameterMatcher) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{16}
+	return file_policy_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ParameterMatcher) GetKind() isParameterMatcher_Kind {
@@ -1307,7 +1263,7 @@ type ParameterObject struct {
 
 func (x *ParameterObject) Reset() {
 	*x = ParameterObject{}
-	mi := &file_policy_proto_msgTypes[17]
+	mi := &file_policy_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1319,7 +1275,7 @@ func (x *ParameterObject) String() string {
 func (*ParameterObject) ProtoMessage() {}
 
 func (x *ParameterObject) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[17]
+	mi := &file_policy_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1332,7 +1288,7 @@ func (x *ParameterObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ParameterObject.ProtoReflect.Descriptor instead.
 func (*ParameterObject) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{17}
+	return file_policy_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ParameterObject) GetFields() map[string]*ParameterMatcher {
@@ -1351,7 +1307,7 @@ type NetworkBinary struct {
 
 func (x *NetworkBinary) Reset() {
 	*x = NetworkBinary{}
-	mi := &file_policy_proto_msgTypes[18]
+	mi := &file_policy_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1363,7 +1319,7 @@ func (x *NetworkBinary) String() string {
 func (*NetworkBinary) ProtoMessage() {}
 
 func (x *NetworkBinary) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[18]
+	mi := &file_policy_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1376,7 +1332,7 @@ func (x *NetworkBinary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkBinary.ProtoReflect.Descriptor instead.
 func (*NetworkBinary) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{18}
+	return file_policy_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *NetworkBinary) GetPath() string {
@@ -1401,7 +1357,7 @@ type NetworkMiddleware struct {
 
 func (x *NetworkMiddleware) Reset() {
 	*x = NetworkMiddleware{}
-	mi := &file_policy_proto_msgTypes[19]
+	mi := &file_policy_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1413,7 +1369,7 @@ func (x *NetworkMiddleware) String() string {
 func (*NetworkMiddleware) ProtoMessage() {}
 
 func (x *NetworkMiddleware) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[19]
+	mi := &file_policy_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1426,7 +1382,7 @@ func (x *NetworkMiddleware) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkMiddleware.ProtoReflect.Descriptor instead.
 func (*NetworkMiddleware) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{19}
+	return file_policy_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *NetworkMiddleware) GetName() string {
@@ -1481,7 +1437,7 @@ type MiddlewareEndpointSelector struct {
 
 func (x *MiddlewareEndpointSelector) Reset() {
 	*x = MiddlewareEndpointSelector{}
-	mi := &file_policy_proto_msgTypes[20]
+	mi := &file_policy_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1493,7 +1449,7 @@ func (x *MiddlewareEndpointSelector) String() string {
 func (*MiddlewareEndpointSelector) ProtoMessage() {}
 
 func (x *MiddlewareEndpointSelector) ProtoReflect() protoreflect.Message {
-	mi := &file_policy_proto_msgTypes[20]
+	mi := &file_policy_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1506,7 +1462,7 @@ func (x *MiddlewareEndpointSelector) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MiddlewareEndpointSelector.ProtoReflect.Descriptor instead.
 func (*MiddlewareEndpointSelector) Descriptor() ([]byte, []int) {
-	return file_policy_proto_rawDescGZIP(), []int{20}
+	return file_policy_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *MiddlewareEndpointSelector) GetInclude() []string {
@@ -1591,11 +1547,9 @@ const file_policy_proto_rawDesc = "" +
 	"\x18NetworkCredentialBinding\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\"5\n" +
 	"\rJsonRpcConfig\x12$\n" +
-	"\x0emax_body_bytes\x18\x01 \x01(\rR\fmaxBodyBytes\"%\n" +
-	"\vMcpVersions\x12\x16\n" +
-	"\x06values\x18\x01 \x03(\tR\x06values\"\x99\x02\n" +
-	"\tMcpConfig\x12<\n" +
-	"\bversions\x18\x01 \x01(\v2 .openshell.policy.v1.McpVersionsR\bversions\x12$\n" +
+	"\x0emax_body_bytes\x18\x01 \x01(\rR\fmaxBodyBytes\"\xf7\x01\n" +
+	"\tMcpConfig\x12\x1a\n" +
+	"\bversions\x18\x01 \x03(\tR\bversions\x12$\n" +
 	"\x0emax_body_bytes\x18\x02 \x01(\rR\fmaxBodyBytes\x12/\n" +
 	"\x11strict_tool_names\x18\x03 \x01(\bH\x00R\x0fstrictToolNames\x88\x01\x01\x12A\n" +
 	"\x1ballow_all_known_mcp_methods\x18\x04 \x01(\bH\x01R\x17allowAllKnownMcpMethods\x88\x01\x01B\x14\n" +
@@ -1685,7 +1639,7 @@ func file_policy_proto_rawDescGZIP() []byte {
 	return file_policy_proto_rawDescData
 }
 
-var file_policy_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_policy_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_policy_proto_goTypes = []any{
 	(*SandboxPolicy)(nil),              // 0: openshell.policy.v1.SandboxPolicy
 	(*FilesystemPolicy)(nil),           // 1: openshell.policy.v1.FilesystemPolicy
@@ -1695,70 +1649,68 @@ var file_policy_proto_goTypes = []any{
 	(*NetworkEndpoint)(nil),            // 5: openshell.policy.v1.NetworkEndpoint
 	(*NetworkCredentialBinding)(nil),   // 6: openshell.policy.v1.NetworkCredentialBinding
 	(*JsonRpcConfig)(nil),              // 7: openshell.policy.v1.JsonRpcConfig
-	(*McpVersions)(nil),                // 8: openshell.policy.v1.McpVersions
-	(*McpConfig)(nil),                  // 9: openshell.policy.v1.McpConfig
-	(*GraphqlOperation)(nil),           // 10: openshell.policy.v1.GraphqlOperation
-	(*L7Rule)(nil),                     // 11: openshell.policy.v1.L7Rule
-	(*L7Allow)(nil),                    // 12: openshell.policy.v1.L7Allow
-	(*L7DenyRule)(nil),                 // 13: openshell.policy.v1.L7DenyRule
-	(*Matcher)(nil),                    // 14: openshell.policy.v1.Matcher
-	(*AnyMatcher)(nil),                 // 15: openshell.policy.v1.AnyMatcher
-	(*ParameterMatcher)(nil),           // 16: openshell.policy.v1.ParameterMatcher
-	(*ParameterObject)(nil),            // 17: openshell.policy.v1.ParameterObject
-	(*NetworkBinary)(nil),              // 18: openshell.policy.v1.NetworkBinary
-	(*NetworkMiddleware)(nil),          // 19: openshell.policy.v1.NetworkMiddleware
-	(*MiddlewareEndpointSelector)(nil), // 20: openshell.policy.v1.MiddlewareEndpointSelector
-	nil,                                // 21: openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntry
-	nil,                                // 22: openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntry
-	nil,                                // 23: openshell.policy.v1.NetworkEndpoint.GraphqlPersistedQueriesEntry
-	nil,                                // 24: openshell.policy.v1.L7Allow.QueryEntry
-	nil,                                // 25: openshell.policy.v1.L7Allow.ParamsEntry
-	nil,                                // 26: openshell.policy.v1.L7DenyRule.QueryEntry
-	nil,                                // 27: openshell.policy.v1.L7DenyRule.ParamsEntry
-	nil,                                // 28: openshell.policy.v1.ParameterObject.FieldsEntry
-	(*structpb.Struct)(nil),            // 29: google.protobuf.Struct
+	(*McpConfig)(nil),                  // 8: openshell.policy.v1.McpConfig
+	(*GraphqlOperation)(nil),           // 9: openshell.policy.v1.GraphqlOperation
+	(*L7Rule)(nil),                     // 10: openshell.policy.v1.L7Rule
+	(*L7Allow)(nil),                    // 11: openshell.policy.v1.L7Allow
+	(*L7DenyRule)(nil),                 // 12: openshell.policy.v1.L7DenyRule
+	(*Matcher)(nil),                    // 13: openshell.policy.v1.Matcher
+	(*AnyMatcher)(nil),                 // 14: openshell.policy.v1.AnyMatcher
+	(*ParameterMatcher)(nil),           // 15: openshell.policy.v1.ParameterMatcher
+	(*ParameterObject)(nil),            // 16: openshell.policy.v1.ParameterObject
+	(*NetworkBinary)(nil),              // 17: openshell.policy.v1.NetworkBinary
+	(*NetworkMiddleware)(nil),          // 18: openshell.policy.v1.NetworkMiddleware
+	(*MiddlewareEndpointSelector)(nil), // 19: openshell.policy.v1.MiddlewareEndpointSelector
+	nil,                                // 20: openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntry
+	nil,                                // 21: openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntry
+	nil,                                // 22: openshell.policy.v1.NetworkEndpoint.GraphqlPersistedQueriesEntry
+	nil,                                // 23: openshell.policy.v1.L7Allow.QueryEntry
+	nil,                                // 24: openshell.policy.v1.L7Allow.ParamsEntry
+	nil,                                // 25: openshell.policy.v1.L7DenyRule.QueryEntry
+	nil,                                // 26: openshell.policy.v1.L7DenyRule.ParamsEntry
+	nil,                                // 27: openshell.policy.v1.ParameterObject.FieldsEntry
+	(*structpb.Struct)(nil),            // 28: google.protobuf.Struct
 }
 var file_policy_proto_depIdxs = []int32{
 	1,  // 0: openshell.policy.v1.SandboxPolicy.filesystem_policy:type_name -> openshell.policy.v1.FilesystemPolicy
 	2,  // 1: openshell.policy.v1.SandboxPolicy.landlock:type_name -> openshell.policy.v1.LandlockPolicy
 	3,  // 2: openshell.policy.v1.SandboxPolicy.process:type_name -> openshell.policy.v1.ProcessPolicy
-	21, // 3: openshell.policy.v1.SandboxPolicy.network_policies:type_name -> openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntry
-	22, // 4: openshell.policy.v1.SandboxPolicy.network_middlewares:type_name -> openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntry
+	20, // 3: openshell.policy.v1.SandboxPolicy.network_policies:type_name -> openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntry
+	21, // 4: openshell.policy.v1.SandboxPolicy.network_middlewares:type_name -> openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntry
 	5,  // 5: openshell.policy.v1.NetworkPolicyRule.endpoints:type_name -> openshell.policy.v1.NetworkEndpoint
-	18, // 6: openshell.policy.v1.NetworkPolicyRule.binaries:type_name -> openshell.policy.v1.NetworkBinary
-	11, // 7: openshell.policy.v1.NetworkEndpoint.rules:type_name -> openshell.policy.v1.L7Rule
-	13, // 8: openshell.policy.v1.NetworkEndpoint.deny_rules:type_name -> openshell.policy.v1.L7DenyRule
-	23, // 9: openshell.policy.v1.NetworkEndpoint.graphql_persisted_queries:type_name -> openshell.policy.v1.NetworkEndpoint.GraphqlPersistedQueriesEntry
+	17, // 6: openshell.policy.v1.NetworkPolicyRule.binaries:type_name -> openshell.policy.v1.NetworkBinary
+	10, // 7: openshell.policy.v1.NetworkEndpoint.rules:type_name -> openshell.policy.v1.L7Rule
+	12, // 8: openshell.policy.v1.NetworkEndpoint.deny_rules:type_name -> openshell.policy.v1.L7DenyRule
+	22, // 9: openshell.policy.v1.NetworkEndpoint.graphql_persisted_queries:type_name -> openshell.policy.v1.NetworkEndpoint.GraphqlPersistedQueriesEntry
 	7,  // 10: openshell.policy.v1.NetworkEndpoint.json_rpc:type_name -> openshell.policy.v1.JsonRpcConfig
-	9,  // 11: openshell.policy.v1.NetworkEndpoint.mcp:type_name -> openshell.policy.v1.McpConfig
+	8,  // 11: openshell.policy.v1.NetworkEndpoint.mcp:type_name -> openshell.policy.v1.McpConfig
 	6,  // 12: openshell.policy.v1.NetworkEndpoint.credential_binding:type_name -> openshell.policy.v1.NetworkCredentialBinding
-	8,  // 13: openshell.policy.v1.McpConfig.versions:type_name -> openshell.policy.v1.McpVersions
-	12, // 14: openshell.policy.v1.L7Rule.allow:type_name -> openshell.policy.v1.L7Allow
-	24, // 15: openshell.policy.v1.L7Allow.query:type_name -> openshell.policy.v1.L7Allow.QueryEntry
-	14, // 16: openshell.policy.v1.L7Allow.tool:type_name -> openshell.policy.v1.Matcher
-	25, // 17: openshell.policy.v1.L7Allow.params:type_name -> openshell.policy.v1.L7Allow.ParamsEntry
-	26, // 18: openshell.policy.v1.L7DenyRule.query:type_name -> openshell.policy.v1.L7DenyRule.QueryEntry
-	14, // 19: openshell.policy.v1.L7DenyRule.tool:type_name -> openshell.policy.v1.Matcher
-	27, // 20: openshell.policy.v1.L7DenyRule.params:type_name -> openshell.policy.v1.L7DenyRule.ParamsEntry
-	15, // 21: openshell.policy.v1.Matcher.any:type_name -> openshell.policy.v1.AnyMatcher
-	14, // 22: openshell.policy.v1.ParameterMatcher.matcher:type_name -> openshell.policy.v1.Matcher
-	17, // 23: openshell.policy.v1.ParameterMatcher.object:type_name -> openshell.policy.v1.ParameterObject
-	28, // 24: openshell.policy.v1.ParameterObject.fields:type_name -> openshell.policy.v1.ParameterObject.FieldsEntry
-	29, // 25: openshell.policy.v1.NetworkMiddleware.config:type_name -> google.protobuf.Struct
-	20, // 26: openshell.policy.v1.NetworkMiddleware.endpoints:type_name -> openshell.policy.v1.MiddlewareEndpointSelector
-	4,  // 27: openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntry.value:type_name -> openshell.policy.v1.NetworkPolicyRule
-	19, // 28: openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntry.value:type_name -> openshell.policy.v1.NetworkMiddleware
-	10, // 29: openshell.policy.v1.NetworkEndpoint.GraphqlPersistedQueriesEntry.value:type_name -> openshell.policy.v1.GraphqlOperation
-	14, // 30: openshell.policy.v1.L7Allow.QueryEntry.value:type_name -> openshell.policy.v1.Matcher
-	16, // 31: openshell.policy.v1.L7Allow.ParamsEntry.value:type_name -> openshell.policy.v1.ParameterMatcher
-	14, // 32: openshell.policy.v1.L7DenyRule.QueryEntry.value:type_name -> openshell.policy.v1.Matcher
-	16, // 33: openshell.policy.v1.L7DenyRule.ParamsEntry.value:type_name -> openshell.policy.v1.ParameterMatcher
-	16, // 34: openshell.policy.v1.ParameterObject.FieldsEntry.value:type_name -> openshell.policy.v1.ParameterMatcher
-	35, // [35:35] is the sub-list for method output_type
-	35, // [35:35] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	11, // 13: openshell.policy.v1.L7Rule.allow:type_name -> openshell.policy.v1.L7Allow
+	23, // 14: openshell.policy.v1.L7Allow.query:type_name -> openshell.policy.v1.L7Allow.QueryEntry
+	13, // 15: openshell.policy.v1.L7Allow.tool:type_name -> openshell.policy.v1.Matcher
+	24, // 16: openshell.policy.v1.L7Allow.params:type_name -> openshell.policy.v1.L7Allow.ParamsEntry
+	25, // 17: openshell.policy.v1.L7DenyRule.query:type_name -> openshell.policy.v1.L7DenyRule.QueryEntry
+	13, // 18: openshell.policy.v1.L7DenyRule.tool:type_name -> openshell.policy.v1.Matcher
+	26, // 19: openshell.policy.v1.L7DenyRule.params:type_name -> openshell.policy.v1.L7DenyRule.ParamsEntry
+	14, // 20: openshell.policy.v1.Matcher.any:type_name -> openshell.policy.v1.AnyMatcher
+	13, // 21: openshell.policy.v1.ParameterMatcher.matcher:type_name -> openshell.policy.v1.Matcher
+	16, // 22: openshell.policy.v1.ParameterMatcher.object:type_name -> openshell.policy.v1.ParameterObject
+	27, // 23: openshell.policy.v1.ParameterObject.fields:type_name -> openshell.policy.v1.ParameterObject.FieldsEntry
+	28, // 24: openshell.policy.v1.NetworkMiddleware.config:type_name -> google.protobuf.Struct
+	19, // 25: openshell.policy.v1.NetworkMiddleware.endpoints:type_name -> openshell.policy.v1.MiddlewareEndpointSelector
+	4,  // 26: openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntry.value:type_name -> openshell.policy.v1.NetworkPolicyRule
+	18, // 27: openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntry.value:type_name -> openshell.policy.v1.NetworkMiddleware
+	9,  // 28: openshell.policy.v1.NetworkEndpoint.GraphqlPersistedQueriesEntry.value:type_name -> openshell.policy.v1.GraphqlOperation
+	13, // 29: openshell.policy.v1.L7Allow.QueryEntry.value:type_name -> openshell.policy.v1.Matcher
+	15, // 30: openshell.policy.v1.L7Allow.ParamsEntry.value:type_name -> openshell.policy.v1.ParameterMatcher
+	13, // 31: openshell.policy.v1.L7DenyRule.QueryEntry.value:type_name -> openshell.policy.v1.Matcher
+	15, // 32: openshell.policy.v1.L7DenyRule.ParamsEntry.value:type_name -> openshell.policy.v1.ParameterMatcher
+	15, // 33: openshell.policy.v1.ParameterObject.FieldsEntry.value:type_name -> openshell.policy.v1.ParameterMatcher
+	34, // [34:34] is the sub-list for method output_type
+	34, // [34:34] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_policy_proto_init() }
@@ -1766,12 +1718,12 @@ func file_policy_proto_init() {
 	if File_policy_proto != nil {
 		return
 	}
-	file_policy_proto_msgTypes[9].OneofWrappers = []any{}
-	file_policy_proto_msgTypes[14].OneofWrappers = []any{
+	file_policy_proto_msgTypes[8].OneofWrappers = []any{}
+	file_policy_proto_msgTypes[13].OneofWrappers = []any{
 		(*Matcher_Glob)(nil),
 		(*Matcher_Any)(nil),
 	}
-	file_policy_proto_msgTypes[16].OneofWrappers = []any{
+	file_policy_proto_msgTypes[15].OneofWrappers = []any{
 		(*ParameterMatcher_Matcher)(nil),
 		(*ParameterMatcher_Object)(nil),
 	}
@@ -1781,7 +1733,7 @@ func file_policy_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_policy_proto_rawDesc), len(file_policy_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   29,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

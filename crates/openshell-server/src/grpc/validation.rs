@@ -251,7 +251,11 @@ fn validate_sandbox_provider_count(spec: &SandboxSpec) -> Result<(), Status> {
 
 fn validate_sandbox_policy_size(spec: &SandboxSpec) -> Result<(), Status> {
     if let Some(ref policy) = spec.policy {
-        let size = policy.encoded_len();
+        let size = openshell_policy::lower_authored_policy(policy.clone())
+            .map_err(|error| {
+                invalid_argument("spec.policy", format!("invalid authored policy: {error}"))
+            })?
+            .encoded_len();
         if size > MAX_POLICY_SIZE {
             return Err(invalid_argument(
                 "spec.policy",
@@ -1399,8 +1403,8 @@ mod tests {
 
     #[test]
     fn validate_sandbox_spec_rejects_oversized_policy() {
-        use openshell_core::proto::NetworkPolicyRule;
-        use openshell_core::proto::SandboxPolicy as ProtoSandboxPolicy;
+        use openshell_core::proto::policy::NetworkPolicyRule;
+        use openshell_core::proto::policy::SandboxPolicy as ProtoSandboxPolicy;
 
         let mut policy = ProtoSandboxPolicy::default();
         let big_name = "x".repeat(MAX_POLICY_SIZE);

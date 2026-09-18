@@ -8,7 +8,7 @@ import (
 
 	v1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
-	sbv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
+	policyv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -85,9 +85,9 @@ func TestPolicyChunkFromProto(t *testing.T) {
 		Binary:            "/usr/bin/curl",
 		ValidationResult:  "valid",
 		RejectionReason:   "",
-		ProposedRule: &sbv1.NetworkPolicyRule{
+		ProposedRule: &policyv1.NetworkPolicyRule{
 			Name: "web-api",
-			Endpoints: []*sbv1.NetworkEndpoint{
+			Endpoints: []*policyv1.NetworkEndpoint{
 				{Host: "api.example.com", Port: 443, Protocol: "rest"},
 			},
 		},
@@ -254,17 +254,17 @@ func TestSandboxPolicyRoundTrip(t *testing.T) {
 
 func TestSandboxPolicyDeepCopy(t *testing.T) {
 	// Build a proto, convert to SDK, mutate proto, verify SDK is isolated.
-	proto := &sbv1.SandboxPolicy{
+	proto := &policyv1.SandboxPolicy{
 		Version: 1,
-		Filesystem: &sbv1.FilesystemPolicy{
+		FilesystemPolicy: &policyv1.FilesystemPolicy{
 			IncludeWorkdir: true,
 			ReadOnly:       []string{"/original"},
 			ReadWrite:      []string{"/tmp"},
 		},
-		NetworkPolicies: map[string]*sbv1.NetworkPolicyRule{
+		NetworkPolicies: map[string]*policyv1.NetworkPolicyRule{
 			"rule1": {
 				Name: "rule1",
-				Endpoints: []*sbv1.NetworkEndpoint{
+				Endpoints: []*policyv1.NetworkEndpoint{
 					{Host: "original.host", Port: 80},
 				},
 			},
@@ -276,8 +276,8 @@ func TestSandboxPolicyDeepCopy(t *testing.T) {
 
 	// Mutate proto source after conversion.
 	proto.Version = 99
-	proto.Filesystem.ReadOnly[0] = "mutated"
-	proto.Filesystem.ReadWrite[0] = "mutated"
+	proto.FilesystemPolicy.ReadOnly[0] = "mutated"
+	proto.FilesystemPolicy.ReadWrite[0] = "mutated"
 	proto.NetworkPolicies["rule1"].Name = "mutated"
 	proto.NetworkPolicies["rule1"].Endpoints[0].Host = "mutated.host"
 
@@ -296,7 +296,7 @@ func TestSandboxPolicyDeepCopy(t *testing.T) {
 	sdk.Filesystem.ReadOnly[0] = "sdk-mutated"
 
 	// Proto output must be unaffected.
-	assert.Equal(t, "/original", protoOut.Filesystem.ReadOnly[0])
+	assert.Equal(t, "/original", protoOut.FilesystemPolicy.ReadOnly[0])
 }
 
 func TestSandboxPolicyPartialSubPolicies(t *testing.T) {
@@ -360,8 +360,8 @@ func TestSandboxPolicyPartialSubPolicies(t *testing.T) {
 	})
 
 	t.Run("empty network policies map preserved", func(t *testing.T) {
-		proto := &sbv1.SandboxPolicy{
-			NetworkPolicies: map[string]*sbv1.NetworkPolicyRule{},
+		proto := &policyv1.SandboxPolicy{
+			NetworkPolicies: map[string]*policyv1.NetworkPolicyRule{},
 		}
 		// Proto empty map is non-nil, so converter creates an empty SDK map.
 		sdk := SandboxPolicyFromProto(proto)
@@ -471,9 +471,9 @@ func TestSandboxPolicyRevisionFromProto_WithPolicy(t *testing.T) {
 		Version:    1,
 		PolicyHash: "sha256:def",
 		Status:     pb.PolicyStatus_POLICY_STATUS_LOADED,
-		Policy: &sbv1.SandboxPolicy{
+		Policy: &policyv1.SandboxPolicy{
 			Version: 2,
-			Filesystem: &sbv1.FilesystemPolicy{
+			FilesystemPolicy: &policyv1.FilesystemPolicy{
 				ReadOnly: []string{"/etc"},
 			},
 		},
@@ -616,9 +616,9 @@ func TestDraftHistoryEntryFromProto_Nil(t *testing.T) {
 // --- NetworkMiddleware ---
 
 func TestSandboxPolicyFromProto_WithMiddleware(t *testing.T) {
-	proto := &sbv1.SandboxPolicy{
+	proto := &policyv1.SandboxPolicy{
 		Version: 3,
-		NetworkMiddlewares: map[string]*sbv1.NetworkMiddlewareConfig{
+		NetworkMiddlewares: map[string]*policyv1.NetworkMiddleware{
 			"sigv4-rewriter": {
 				Name:       "sigv4-rewriter",
 				Middleware: "aws-sigv4",
@@ -631,7 +631,7 @@ func TestSandboxPolicyFromProto_WithMiddleware(t *testing.T) {
 					})
 					return s
 				}(),
-				Endpoints: &sbv1.MiddlewareEndpointSelector{
+				Endpoints: &policyv1.MiddlewareEndpointSelector{
 					Include: []string{"*.bedrock.amazonaws.com"},
 					Exclude: []string{"sts.amazonaws.com"},
 				},
@@ -692,10 +692,10 @@ func TestSandboxPolicyMiddlewareRoundTrip(t *testing.T) {
 }
 
 func TestSandboxPolicyMiddlewareDeepCopy(t *testing.T) {
-	proto := &sbv1.SandboxPolicy{
-		NetworkMiddlewares: map[string]*sbv1.NetworkMiddlewareConfig{
+	proto := &policyv1.SandboxPolicy{
+		NetworkMiddlewares: map[string]*policyv1.NetworkMiddleware{
 			"test": {
-				Endpoints: &sbv1.MiddlewareEndpointSelector{
+				Endpoints: &policyv1.MiddlewareEndpointSelector{
 					Include: []string{"original.com"},
 				},
 			},

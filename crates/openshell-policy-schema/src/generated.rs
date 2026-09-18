@@ -2,10 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeMap, HashMap};
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use miette::{IntoDiagnostic, Result, WrapErr};
+use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
 use prost_types::{ListValue, Struct, Value, value};
+use serde::Serialize;
 
 use crate::proto;
 use crate::{
@@ -15,14 +20,123 @@ use crate::{
     ParameterMatcher, ParseLimits, PolicyDocument, ProcessPolicy, QueryMatcher,
 };
 
-/// Parse compatible policy YAML into the generated public message.
-pub fn parse_policy_proto(source: &str) -> Result<proto::SandboxPolicy> {
-    crate::parse_policy(source)?.try_into()
+const POLICY_MESSAGE_NAME: &str = "openshell.policy.v1.SandboxPolicy";
+
+fn policy_descriptor() -> prost_reflect::MessageDescriptor {
+    static POOL: OnceLock<DescriptorPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        DescriptorPool::decode(
+            include_bytes!(concat!(env!("OUT_DIR"), "/policy_descriptor.bin")).as_slice(),
+        )
+        .expect("compiled policy descriptor set must decode")
+    })
+    .get_message_by_name(POLICY_MESSAGE_NAME)
+    .expect("compiled descriptor set must contain SandboxPolicy")
 }
 
-/// Parse a compatible policy YAML file into the generated public message.
+fn validate_exact_yaml_numbers(value: &serde_yml::Value) -> Result<()> {
+    match value {
+        serde_yml::Value::Sequence(values) => {
+            for value in values {
+                validate_exact_yaml_numbers(value)?;
+            }
+        }
+        serde_yml::Value::Mapping(entries) => {
+            for value in entries.values() {
+                validate_exact_yaml_numbers(value)?;
+            }
+        }
+        serde_yml::Value::Number(number) => {
+            let exact = number.as_i64().map_or_else(
+                || {
+                    number
+                        .as_u64()
+                        .map_or_else(|| number.as_f64().is_finite(), integer_is_exact_in_f64)
+                },
+                |value| integer_is_exact_in_f64(value.unsigned_abs()),
+            );
+            if !exact {
+                miette::bail!(
+                    "policy YAML number {number} cannot be represented exactly by protobuf JSON"
+                );
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Parse strict proto-shaped policy YAML into the generated public message.
+pub fn parse_policy_proto(source: &str) -> Result<proto::SandboxPolicy> {
+    let value: serde_yml::Value =
+        serde_yml::from_str_with_config(source, &crate::parser_config(ParseLimits::default()))
+            .into_diagnostic()
+            .wrap_err("failed to parse sandbox policy YAML")?;
+    validate_exact_yaml_numbers(&value)?;
+    let json_value = serde_json::to_value(value)
+        .into_diagnostic()
+        .wrap_err("policy YAML must use the JSON-compatible protobuf data model")?;
+    let dynamic = DynamicMessage::deserialize(policy_descriptor(), json_value)
+        .into_diagnostic()
+        .wrap_err("failed to decode proto-shaped sandbox policy YAML")?;
+    let policy = dynamic
+        .transcode_to::<proto::SandboxPolicy>()
+        .into_diagnostic()
+        .wrap_err("failed to decode generated sandbox policy")?;
+    validate_authored_policy(&policy)?;
+    Ok(policy)
+}
+
+/// Parse a strict proto-shaped policy YAML file into the generated message.
 pub fn parse_policy_proto_file(path: &Path, limits: ParseLimits) -> Result<proto::SandboxPolicy> {
-    crate::parse_policy_file(path, limits)?.try_into()
+    let metadata = path
+        .metadata()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("failed to inspect sandbox policy {}", path.display()))?;
+    if !metadata.is_file() {
+        miette::bail!(
+            "sandbox policy source is not a regular file: {}",
+            path.display()
+        );
+    }
+    if metadata.len() > u64::try_from(limits.max_bytes).unwrap_or(u64::MAX) {
+        miette::bail!("policy exceeds the {}-byte input limit", limits.max_bytes);
+    }
+    let mut bytes = Vec::new();
+    File::open(path)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("failed to read sandbox policy from {}", path.display()))?
+        .take(
+            u64::try_from(limits.max_bytes)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
+        .read_to_end(&mut bytes)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("failed to read sandbox policy from {}", path.display()))?;
+    if bytes.len() > limits.max_bytes {
+        miette::bail!("policy exceeds the {}-byte input limit", limits.max_bytes);
+    }
+    let source = std::str::from_utf8(&bytes)
+        .into_diagnostic()
+        .wrap_err("sandbox policy is not valid UTF-8")?;
+    let value: serde_yml::Value =
+        serde_yml::from_str_with_config(source, &crate::parser_config(limits))
+            .into_diagnostic()
+            .wrap_err("failed to parse sandbox policy YAML")?;
+    validate_exact_yaml_numbers(&value)?;
+    let json_value = serde_json::to_value(value)
+        .into_diagnostic()
+        .wrap_err("policy YAML must use the JSON-compatible protobuf data model")?;
+    let dynamic = DynamicMessage::deserialize(policy_descriptor(), json_value)
+        .into_diagnostic()
+        .wrap_err("failed to decode proto-shaped sandbox policy YAML")?;
+    let policy = dynamic
+        .transcode_to::<proto::SandboxPolicy>()
+        .into_diagnostic()
+        .wrap_err("failed to decode generated sandbox policy")?;
+    validate_authored_policy(&policy)?;
+    Ok(policy)
 }
 
 /// Validate a generated public policy with the schema-owned intrinsic checks.
@@ -31,18 +145,47 @@ pub fn validate_authored_policy(policy: &proto::SandboxPolicy) -> Result<()> {
     crate::validate_policy(&document)
 }
 
-/// Serialize a generated public policy using the canonical authored YAML form.
-pub fn serialize_policy_proto(policy: &proto::SandboxPolicy) -> Result<String> {
-    let document = PolicyDocument::try_from(policy.clone())?;
-    crate::validate_policy(&document)?;
-    crate::serialize_policy(&document)
+struct ProtoYaml<'a> {
+    message: &'a DynamicMessage,
 }
 
-/// Convert a generated public policy to canonical authored JSON.
+impl Serialize for ProtoYaml<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.message.serialize_with_options(
+            serializer,
+            &SerializeOptions::new().use_proto_field_name(true),
+        )
+    }
+}
+
+fn dynamic_policy(policy: &proto::SandboxPolicy) -> Result<DynamicMessage> {
+    let mut dynamic = DynamicMessage::new(policy_descriptor());
+    dynamic
+        .transcode_from(policy)
+        .into_diagnostic()
+        .wrap_err("failed to encode generated sandbox policy")?;
+    Ok(dynamic)
+}
+
+/// Serialize a generated public policy using canonical proto-shaped YAML.
+pub fn serialize_policy_proto(policy: &proto::SandboxPolicy) -> Result<String> {
+    validate_authored_policy(policy)?;
+    let dynamic = dynamic_policy(policy)?;
+    serde_yml::to_string(&ProtoYaml { message: &dynamic })
+        .into_diagnostic()
+        .wrap_err("failed to serialize proto-shaped sandbox policy YAML")
+}
+
+/// Convert a generated public policy to canonical proto-shaped JSON.
 pub fn policy_proto_to_json_value(policy: &proto::SandboxPolicy) -> Result<serde_json::Value> {
-    let document = PolicyDocument::try_from(policy.clone())?;
-    crate::validate_policy(&document)?;
-    crate::policy_to_json_value(&document)
+    validate_authored_policy(policy)?;
+    let dynamic = dynamic_policy(policy)?;
+    serde_json::to_value(ProtoYaml { message: &dynamic })
+        .into_diagnostic()
+        .wrap_err("failed to serialize proto-shaped sandbox policy JSON")
 }
 
 impl TryFrom<PolicyDocument> for proto::SandboxPolicy {
@@ -326,7 +469,7 @@ impl From<proto::JsonRpcConfig> for JsonRpcConfig {
 impl From<McpConfig> for proto::McpConfig {
     fn from(config: McpConfig) -> Self {
         Self {
-            versions: config.versions.map(|values| proto::McpVersions { values }),
+            versions: config.versions.unwrap_or_default(),
             max_body_bytes: config.max_body_bytes,
             strict_tool_names: config.strict_tool_names,
             allow_all_known_mcp_methods: config.allow_all_known_mcp_methods,
@@ -337,7 +480,7 @@ impl From<McpConfig> for proto::McpConfig {
 impl From<proto::McpConfig> for McpConfig {
     fn from(config: proto::McpConfig) -> Self {
         Self {
-            versions: config.versions.map(|versions| versions.values),
+            versions: (!config.versions.is_empty()).then_some(config.versions),
             max_body_bytes: config.max_body_bytes,
             strict_tool_names: config.strict_tool_names,
             allow_all_known_mcp_methods: config.allow_all_known_mcp_methods,
@@ -729,10 +872,15 @@ network_policies:
         rules:
           - allow:
               method: tools/call
-              tool: search_*
+              tool:
+                glob: search_*
               params:
                 arguments:
-                  query: "public-*"
+                  object:
+                    fields:
+                      query:
+                        matcher:
+                          glob: "public-*"
     binaries:
       - path: /usr/bin/agent
 network_middlewares:
@@ -758,7 +906,7 @@ network_middlewares:
     }
 
     #[test]
-    fn generated_policy_preserves_absent_and_empty_mcp_versions() {
+    fn generated_policy_uses_protobuf_empty_list_semantics_for_mcp_versions() {
         let absent = parse_policy_proto(
             "version: 1\nnetwork_policies:\n  mcp:\n    endpoints:\n      - { host: x, port: 443, protocol: mcp, mcp: {} }\n",
         )
@@ -769,16 +917,9 @@ network_middlewares:
                 .as_ref()
                 .unwrap()
                 .versions
-                .is_none()
+                .is_empty()
         );
-
-        let mut invalid = absent;
-        invalid.network_policies.get_mut("mcp").unwrap().endpoints[0]
-            .mcp
-            .as_mut()
-            .unwrap()
-            .versions = Some(proto::McpVersions { values: Vec::new() });
-        assert!(validate_authored_policy(&invalid).is_err());
+        assert!(validate_authored_policy(&absent).is_ok());
     }
 
     #[test]
@@ -800,6 +941,24 @@ network_middlewares:
       request_id: 9007199254740993
 ";
         let error = parse_policy_proto(source).expect_err("integer must not be rounded");
-        assert!(error.to_string().contains("not representable exactly"));
+        assert!(error.to_string().contains("cannot be represented exactly"));
+    }
+
+    #[test]
+    fn generated_policy_rejects_legacy_scalar_matchers() {
+        let source = r"
+version: 1
+network_policies:
+  mcp:
+    endpoints:
+      - host: mcp.example.com
+        port: 443
+        protocol: mcp
+        rules:
+          - allow:
+              tool: search_*
+";
+        let error = parse_policy_proto(source).expect_err("scalar matcher must be rejected");
+        assert!(error.to_string().contains("proto-shaped"));
     }
 }

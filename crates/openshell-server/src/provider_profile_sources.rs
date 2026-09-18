@@ -599,12 +599,15 @@ fn build_effective_profiles(
                 .iter()
                 .filter(|sp| sp.scope == ProfileScope::Platform)
                 .map(|sp| {
-                    (
-                        source_id.to_string(),
-                        ProviderTypeProfile::from_proto(&sp.profile),
-                    )
+                    ProviderTypeProfile::try_from_proto(&sp.profile)
+                        .map(|profile| (source_id.to_string(), profile))
                 })
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|error| {
+                    Status::failed_precondition(format!(
+                        "provider profile source '{source_id}' is invalid: {error}"
+                    ))
+                })?;
             if !platform.is_empty() {
                 validate_source_profiles(source_id, &platform)?;
             }
@@ -613,12 +616,15 @@ fn build_effective_profiles(
                 .iter()
                 .filter(|sp| sp.scope == ProfileScope::Workspace)
                 .map(|sp| {
-                    (
-                        source_id.to_string(),
-                        ProviderTypeProfile::from_proto(&sp.profile),
-                    )
+                    ProviderTypeProfile::try_from_proto(&sp.profile)
+                        .map(|profile| (source_id.to_string(), profile))
                 })
-                .collect();
+                .collect::<Result<_, _>>()
+                .map_err(|error| {
+                    Status::failed_precondition(format!(
+                        "provider profile source '{source_id}' is invalid: {error}"
+                    ))
+                })?;
             if !workspace.is_empty() {
                 validate_source_profiles(source_id, &workspace)?;
             }
@@ -627,12 +633,15 @@ fn build_effective_profiles(
                 .profiles
                 .iter()
                 .map(|sp| {
-                    (
-                        source_id.to_string(),
-                        ProviderTypeProfile::from_proto(&sp.profile),
-                    )
+                    ProviderTypeProfile::try_from_proto(&sp.profile)
+                        .map(|profile| (source_id.to_string(), profile))
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| {
+                    Status::failed_precondition(format!(
+                        "provider profile source '{source_id}' is invalid: {error}"
+                    ))
+                })?;
             validate_source_profiles(source_id, &source_profiles)?;
         }
 
@@ -974,19 +983,19 @@ mod tests {
         let mut profile = profile(id);
         profile
             .endpoints
-            .push(openshell_core::proto::NetworkEndpoint {
+            .push(openshell_core::proto::policy::NetworkEndpoint {
                 host: "mcp.example.com".to_string(),
                 port: 443,
                 protocol: "mcp".to_string(),
-                mcp: Some(openshell_core::proto::McpOptions {
+                mcp: Some(openshell_core::proto::policy::McpConfig {
                     versions: versions
                         .iter()
                         .map(|version| (*version).to_string())
                         .collect(),
                     ..Default::default()
                 }),
-                rules: vec![openshell_core::proto::L7Rule {
-                    allow: Some(openshell_core::proto::L7Allow {
+                rules: vec![openshell_core::proto::policy::L7Rule {
+                    allow: Some(openshell_core::proto::policy::L7Allow {
                         method: "tools/list".to_string(),
                         ..Default::default()
                     }),
@@ -1000,13 +1009,13 @@ mod tests {
         let mut profile = profile(id);
         profile
             .endpoints
-            .push(openshell_core::proto::NetworkEndpoint {
+            .push(openshell_core::proto::policy::NetworkEndpoint {
                 host: "mcp.example.com".to_string(),
                 port: 443,
                 protocol: "mcp".to_string(),
                 mcp: None,
-                rules: vec![openshell_core::proto::L7Rule {
-                    allow: Some(openshell_core::proto::L7Allow {
+                rules: vec![openshell_core::proto::policy::L7Rule {
+                    allow: Some(openshell_core::proto::policy::L7Allow {
                         method: "tools/list".to_string(),
                         ..Default::default()
                     }),
@@ -1121,7 +1130,7 @@ mod tests {
     fn mcp_profile_normalization_preserves_malformed_explicit_evidence() {
         let mut malformed = profile_with_mcp_versions(
             "malformed-version-profile",
-            &["latest", "2025-11-25", "2025-11-25"],
+            &["2025-11-25", "2025-11-25", "latest"],
         );
         malformed.description = "unrelated source-owned field".to_string();
         let original = malformed.clone();
@@ -1150,7 +1159,7 @@ mod tests {
         assert!(
             error
                 .message()
-                .contains("duplicate MCP protocol version '2025-11-25'"),
+                .contains("duplicate protocol version '2025-11-25'"),
             "validation must reject the preserved duplicate before the later unsupported alias: {error}"
         );
     }
