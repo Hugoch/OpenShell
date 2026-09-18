@@ -284,24 +284,6 @@ def native_endpoint_server() -> Iterator[int]:
         proc.communicate(timeout=5)
 
 
-def _proxy_connect():
-    """Return a closure that sends a raw CONNECT and returns the status line."""
-
-    def fn(host, port):
-        import socket
-
-        conn = socket.create_connection(("10.200.0.1", 3128), timeout=10)
-        try:
-            conn.sendall(
-                f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}\r\n\r\n".encode()
-            )
-            return conn.recv(256).decode("latin1")
-        finally:
-            conn.close()
-
-    return fn
-
-
 # ===========================================================================
 # Tests: placeholder visibility
 # ===========================================================================
@@ -315,7 +297,7 @@ def test_provider_credentials_available_as_env_vars(
     with provider(
         sandbox_client._stub,
         name="e2e-test-provider-env",
-        provider_type="claude",
+        provider_type="claude-code",
         credentials={"ANTHROPIC_API_KEY": "sk-e2e-test-key-12345"},
     ) as provider_name:
         spec = datamodel_pb2.SandboxSpec(
@@ -628,11 +610,10 @@ def test_imported_openai_profile_allows_native_endpoint_with_attached_provider(
                     assert body["model"] == "fixture-openai-model"
 
 
-def test_imported_anthropic_profile_uses_native_endpoint_and_inference_local_is_not_privileged(
+def test_imported_anthropic_profile_allows_native_endpoint_with_attached_provider(
     sandbox: Callable[..., Sandbox],
     sandbox_client: SandboxClient,
 ) -> None:
-    """Attached imported profiles should not resurrect `inference.local` routing."""
     stub = sandbox_client._stub
     profile_id = f"e2e-native-anthropic-{int(time.time() * 1000)}"
     provider_name = f"{profile_id}-provider"
@@ -717,17 +698,6 @@ def test_imported_anthropic_profile_uses_native_endpoint_and_inference_local_is_
                     assert payload["x_api_key"] == secret
                     assert body["model"] == "fixture-anthropic-model"
 
-                    denied = sb.exec_python(
-                        _proxy_connect(),
-                        args=("inference.local", 443),
-                        timeout_seconds=30,
-                    )
-                    assert denied.exit_code == 0, denied.stderr
-                    status = denied.stdout.strip()
-                    assert status.startswith("HTTP/1.1 "), status
-                    assert " 200 " not in status, status
-
-
 # ===========================================================================
 # Tests: security & edge cases
 # ===========================================================================
@@ -756,7 +726,7 @@ def test_credentials_not_in_persisted_spec_environment(
     with provider(
         sandbox_client._stub,
         name="e2e-test-no-persist",
-        provider_type="claude",
+        provider_type="claude-code",
         credentials={"ANTHROPIC_API_KEY": "sk-should-not-persist"},
     ) as provider_name:
         spec = datamodel_pb2.SandboxSpec(

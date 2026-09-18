@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use super::provider_readiness::{
+    ProviderMutationExpectation, ProviderWaitOptions, finish_provider_mutation,
+};
 use crate::color::Colorize;
 use crate::commands::common::{
     format_epoch_ms, format_optional_epoch_ms, parse_credential_expiry_pairs,
@@ -19,20 +22,50 @@ use openshell_core::proto::{
     LintProviderProfilesRequest, ListProviderProfilesRequest, ListProvidersRequest,
     ListSandboxProvidersRequest, Provider, ProviderCredentialRefreshRecoveryAction,
     ProviderCredentialRefreshStatus, ProviderCredentialRefreshStrategy,
-    ProviderCredentialTokenGrantType, ProviderProfile, ProviderProfileDiagnostic,
-    ProviderProfileImportItem, RotateProviderCredentialRequest, UpdateProviderProfilesRequest,
-    UpdateProviderRequest,
+    ProviderCredentialTokenGrantType, ProviderMutationKind, ProviderProfile,
+    ProviderProfileDiagnostic, ProviderProfileImportItem, RotateProviderCredentialRequest,
+    UpdateProviderProfilesRequest, UpdateProviderRequest,
 };
+use openshell_core::rpc_error::{ERROR_DOMAIN, decode_details};
 use openshell_core::{ObjectId, ObjectName, ObjectWorkspace};
 use openshell_providers::{
-    ProviderTypeProfile, RealDiscoveryContext, detect_provider_from_command, discover_from_profile,
-    normalize_profile_id, normalize_provider_type, parse_profile_json, parse_profile_yaml,
-    profile_to_json, profile_to_yaml, profiles_to_json, profiles_to_yaml,
+    ProviderTypeProfile, RealDiscoveryContext, discover_from_profile, parse_profile_json,
+    parse_profile_yaml, profile_to_json, profile_to_yaml, profiles_to_json, profiles_to_yaml,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tonic::{Code, Status};
+
+fn provider_mutation_is_uncertain(status: &Status) -> bool {
+    // Only a validated gateway ErrorInfo identifies a possibly saved mutation.
+    // Message text, metadata, foreign domains, and malformed details are untrusted.
+    decode_details(status).is_some_and(|details| {
+        details.error_info().is_some_and(|info| {
+            info.domain == ERROR_DOMAIN && info.reason == "CONFIG_OPERATION_STORAGE_UNCERTAIN"
+        })
+    })
+}
+
+fn provider_mutation_error(status: &Status, operation: &str) -> miette::Report {
+    if provider_mutation_is_uncertain(status) {
+        // Emit fixed guidance without chaining the server's potentially sensitive
+        // message or metadata. An error does not establish that the write rolled back.
+        miette!(
+            "provider change may already be saved (CONFIG_OPERATION_STORAGE_UNCERTAIN); \
+             readiness receipt could not be recorded. Do not blindly retry the mutation; \
+             check provider and sandbox status and reconcile the saved change first."
+        )
+    } else {
+        miette!("provider {operation} failed ({})", status.code())
+    }
+}
+
+fn proto_timestamp_ms(timestamp: Option<&prost_types::Timestamp>) -> i64 {
+    timestamp
+        .and_then(|value| openshell_core::time::timestamp_to_millis(value).ok())
+        .unwrap_or_default()
+}
 
 fn aggregate_delete_failures(resource: &str, failures: &[String]) -> Result<()> {
     if failures.is_empty() {
@@ -78,13 +111,16 @@ pub async fn sandbox_provider_list(
     Ok(())
 }
 
+/// Save a provider attachment and optionally wait for its installed authority.
 pub async fn sandbox_provider_attach(
     server: &str,
     name: &str,
     provider: &str,
     workspace: &str,
     tls: &TlsOptions,
+    readiness: ProviderWaitOptions<'_>,
 ) -> Result<()> {
+    readiness.validate()?;
     let mut client = grpc_client(server, tls).await?;
 
     // Fetch current sandbox to get resource_version for CAS
@@ -94,7 +130,7 @@ pub async fn sandbox_provider_attach(
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
         })
         .await
-        .into_diagnostic()?
+        .map_err(|status| miette!("provider attachment lookup failed ({})", status.code()))?
         .into_inner()
         .sandbox
         .ok_or_else(|| miette::miette!("sandbox not found"))?;
@@ -103,6 +139,7 @@ pub async fn sandbox_provider_attach(
 
     let response = match client
         .attach_sandbox_provider(AttachSandboxProviderRequest {
+            request_id: String::new(),
             sandbox_name: name.to_string(),
             provider_name: provider.to_string(),
             expected_resource_version: resource_version,
@@ -111,36 +148,50 @@ pub async fn sandbox_provider_attach(
         .await
     {
         Ok(response) => response.into_inner(),
-        Err(status) if status.code() == Code::Aborted => {
+        // Explicit post-save uncertainty takes precedence over a generic retry hint.
+        Err(status)
+            if status.code() == Code::Aborted && !provider_mutation_is_uncertain(&status) =>
+        {
             return Err(miette::miette!(
                 "Failed to attach provider: sandbox was modified by another operation.\n\
                  Please retry the command."
-            )
-            .with_source_code(status.message().to_string()));
+            ));
         }
-        Err(e) => return Err(e).into_diagnostic(),
+        Err(error) => return Err(provider_mutation_error(&error, "attachment")),
     };
 
-    if response.attached {
-        println!(
-            "{} Attached provider {} to sandbox {}",
-            "✓".green().bold(),
-            provider,
-            name
-        );
-    } else {
-        println!("Provider {provider} is already attached to sandbox {name}.");
-    }
-    Ok(())
+    let receipt = response.receipt.ok_or_else(|| {
+        miette!(
+            "gateway did not return a provider receipt; saved attachment cannot establish readiness"
+        )
+    })?;
+    let mutation_id = receipt.mutation_id.clone();
+    finish_provider_mutation(
+        &client,
+        &mutation_id,
+        vec![receipt],
+        ProviderMutationExpectation {
+            workspace,
+            provider_name: provider,
+            kind: ProviderMutationKind::Attach,
+            sandbox: Some((name, sandbox.object_id())),
+            provider: None,
+        },
+        readiness,
+    )
+    .await
 }
 
+/// Save a provider detachment and optionally wait for future authority revocation.
 pub async fn sandbox_provider_detach(
     server: &str,
     name: &str,
     provider: &str,
     workspace: &str,
     tls: &TlsOptions,
+    readiness: ProviderWaitOptions<'_>,
 ) -> Result<()> {
+    readiness.validate()?;
     let mut client = grpc_client(server, tls).await?;
 
     // Fetch current sandbox to get resource_version for CAS
@@ -150,7 +201,7 @@ pub async fn sandbox_provider_detach(
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
         })
         .await
-        .into_diagnostic()?
+        .map_err(|status| miette!("provider detachment lookup failed ({})", status.code()))?
         .into_inner()
         .sandbox
         .ok_or_else(|| miette::miette!("sandbox not found"))?;
@@ -159,6 +210,7 @@ pub async fn sandbox_provider_detach(
 
     let response = match client
         .detach_sandbox_provider(DetachSandboxProviderRequest {
+            request_id: String::new(),
             sandbox_name: name.to_string(),
             provider_name: provider.to_string(),
             expected_resource_version: resource_version,
@@ -167,27 +219,34 @@ pub async fn sandbox_provider_detach(
         .await
     {
         Ok(response) => response.into_inner(),
-        Err(status) if status.code() == Code::Aborted => {
+        // Explicit post-save uncertainty takes precedence over a generic retry hint.
+        Err(status)
+            if status.code() == Code::Aborted && !provider_mutation_is_uncertain(&status) =>
+        {
             return Err(miette::miette!(
                 "Failed to detach provider: sandbox was modified by another operation.\n\
                  Please retry the command."
-            )
-            .with_source_code(status.message().to_string()));
+            ));
         }
-        Err(e) => return Err(e).into_diagnostic(),
+        Err(error) => return Err(provider_mutation_error(&error, "detachment")),
     };
 
-    if response.detached {
-        println!(
-            "{} Detached provider {} from sandbox {}",
-            "✓".green().bold(),
-            provider,
-            name
-        );
-    } else {
-        println!("Provider {provider} was not attached to sandbox {name}.");
-    }
-    Ok(())
+    let receipt = response.receipt.ok_or_else(|| miette!("gateway did not return a provider receipt; saved detachment cannot establish revocation"))?;
+    let mutation_id = receipt.mutation_id.clone();
+    finish_provider_mutation(
+        &client,
+        &mutation_id,
+        vec![receipt],
+        ProviderMutationExpectation {
+            workspace,
+            provider_name: provider,
+            kind: ProviderMutationKind::Detach,
+            sandbox: Some((name, sandbox.object_id())),
+            provider: None,
+        },
+        readiness,
+    )
+    .await
 }
 
 fn print_provider_attachment_table(providers: &[Provider]) {
@@ -262,30 +321,25 @@ fn format_provider_attachment_table(providers: &[Provider], color: bool) -> Stri
     output
 }
 
-/// Return the provider type inferred from the trailing command, if any.
-pub fn inferred_provider_type(command: &[String]) -> Option<String> {
-    detect_provider_from_command(command).map(str::to_string)
-}
-
 /// Ensure all required providers exist.
 ///
 /// `explicit_names` are provider **names** supplied via `--provider`. They are
 /// passed through directly; the server validates they exist at sandbox creation.
 ///
-/// `inferred_types` are provider **types** inferred from the trailing command
-/// (e.g. `claude` -> type `"claude-code"`). These are resolved to provider names via
-/// a type→name lookup, and missing types may be auto-created interactively.
+/// A provider is attached only when the user names it. Nothing is derived from
+/// the trailing command: a profile's `binaries` list authorizes a binary to
+/// reach its endpoints, which is not a statement that running that binary asks
+/// for the provider.
 ///
 /// Returns a deduplicated list of provider **names** suitable for
 /// `SandboxSpec.providers`.
 pub async fn ensure_required_providers(
     client: &mut crate::tls::GrpcClient,
     explicit_names: &[String],
-    inferred_types: &[String],
     auto_providers_override: Option<bool>,
     workspace: &str,
 ) -> Result<Vec<String>> {
-    if explicit_names.is_empty() && inferred_types.is_empty() {
+    if explicit_names.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -331,6 +385,12 @@ pub async fn ensure_required_providers(
     // name matches a known provider type, auto-create a provider of that
     // type with the requested name.
     for name in explicit_names {
+        // --provider may repeat a name. Without this guard a repeated name that
+        // does not exist yet is auto-created twice, and the second attempt
+        // fails with "provider already exists".
+        if seen_names.contains(name) {
+            continue;
+        }
         if known_names.contains(name) {
             if seen_names.insert(name.clone()) {
                 configured_names.push(name.clone());
@@ -356,42 +416,9 @@ pub async fn ensure_required_providers(
                 workspace,
             )
             .await?;
-            // Record the type mapping so the inferred-types pass below
-            // doesn't attempt to create a duplicate provider.
             type_to_name
                 .entry(provider_type.to_ascii_lowercase())
                 .or_insert_with(|| name.clone());
-        }
-    }
-
-    // ── Resolve inferred provider types ──────────────────────────────────
-    if !inferred_types.is_empty() {
-        // Collect resolved names for types that already have a provider.
-        for t in inferred_types {
-            if let Some(name) = type_to_name.get(&t.to_ascii_lowercase())
-                && seen_names.insert(name.clone())
-            {
-                configured_names.push(name.clone());
-            }
-        }
-
-        let missing = inferred_types
-            .iter()
-            .filter(|t| !type_to_name.contains_key(&t.to_ascii_lowercase()))
-            .cloned()
-            .collect::<Vec<_>>();
-
-        for provider_type in missing {
-            auto_create_provider(
-                client,
-                &provider_type,
-                None,
-                auto_providers_override,
-                &mut seen_names,
-                &mut configured_names,
-                workspace,
-            )
-            .await?;
         }
     }
 
@@ -471,21 +498,22 @@ async fn auto_create_provider(
     if let Some(exact_name) = preferred_name {
         // Explicit name: create with exactly that name, no retries.
         let request = CreateProviderRequest {
+            request_id: String::new(),
             provider: Some(Provider {
                 metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                     id: String::new(),
                     name: exact_name.to_string(),
-                    created_at_ms: 0,
+                    created_time: None,
                     labels: HashMap::new(),
                     resource_version: 0,
                     annotations: HashMap::new(),
                     workspace: workspace.to_string(),
-                    deletion_timestamp_ms: 0,
+                    deletion_time: None,
                 }),
                 r#type: provider_type.to_string(),
                 credentials: discovered.credentials.clone(),
                 config: discovered.config.clone(),
-                credential_expires_at_ms: HashMap::new(),
+                credential_expiration_times: HashMap::new(),
                 profile_workspace: workspace.to_string(),
                 credential_handles: HashMap::new(),
             }),
@@ -519,21 +547,22 @@ async fn auto_create_provider(
             };
 
             let request = CreateProviderRequest {
+                request_id: String::new(),
                 provider: Some(Provider {
                     metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                         id: String::new(),
                         name: name.clone(),
-                        created_at_ms: 0,
+                        created_time: None,
                         labels: HashMap::new(),
                         resource_version: 0,
                         annotations: HashMap::new(),
                         workspace: workspace.to_string(),
-                        deletion_timestamp_ms: 0,
+                        deletion_time: None,
                     }),
                     r#type: provider_type.to_string(),
                     credentials: discovered.credentials.clone(),
                     config: discovered.config.clone(),
-                    credential_expires_at_ms: HashMap::new(),
+                    credential_expiration_times: HashMap::new(),
                     profile_workspace: workspace.to_string(),
                     credential_handles: HashMap::new(),
                 }),
@@ -670,6 +699,8 @@ async fn rollback_provider_create_after_gcloud_adc_failure(
 ) -> Result<()> {
     match client
         .delete_provider(DeleteProviderRequest {
+            request_id: String::new(),
+            allow_missing: true,
             name: provider_name.to_string(),
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
         })
@@ -698,38 +729,73 @@ async fn rollback_provider_create_after_gcloud_adc_failure(
     }
 }
 
+fn provider_profile_lookup_error(status: &Status) -> miette::Report {
+    // A permission code supports recovery guidance, but cannot distinguish a
+    // missing membership from an insufficient role. Never expose backend text.
+    if status.code() == Code::PermissionDenied {
+        miette!(
+            "provider profile lookup denied (PERMISSION_DENIED): \
+             verify workspace membership and required permissions"
+        )
+    } else {
+        miette!("provider profile lookup failed ({})", status.code())
+    }
+}
+
+/// Fetch the gateway's active provider profile catalog.
+///
+/// Nothing about provider profiles is compiled into the CLI: the catalog is
+/// whatever the connected gateway publishes, so anything that reasons about
+/// available profiles has to ask for it.
+pub async fn fetch_provider_profile_catalog(
+    client: &mut crate::tls::GrpcClient,
+    workspace: &str,
+) -> Result<Vec<ProviderTypeProfile>> {
+    let mut page_token = String::new();
+    let mut profiles = Vec::new();
+    loop {
+        let response = client
+            .list_provider_profiles(ListProviderProfilesRequest {
+                page_size: 100,
+                page_token,
+                workspace: workspace.to_string(),
+            })
+            .await
+            .into_diagnostic()?
+            .into_inner();
+        profiles.extend(response.profiles);
+        if response.next_page_token.is_empty() {
+            break;
+        }
+        page_token = response.next_page_token;
+    }
+    Ok(profiles
+        .iter()
+        .map(ProviderTypeProfile::from_proto)
+        .collect())
+}
+
+/// Fetch one provider profile from the gateway by its exact ID.
+///
+/// Profiles are import-only, so an ID the gateway does not serve is absent
+/// rather than an alias for something else.
 async fn fetch_provider_profile(
     client: &mut crate::tls::GrpcClient,
     provider_type: &str,
     workspace: &str,
 ) -> Result<ProviderProfile> {
     let requested = provider_type.trim();
-    let response = match fetch_provider_profile_exact(client, requested, workspace).await {
-        Ok(response) => response,
-        Err(status) if status.code() == Code::NotFound => {
-            let Some(alias) = normalize_provider_type(requested)
-                .filter(|alias| normalize_profile_id(requested).as_deref() != Some(*alias))
-            else {
-                return Err(miette::miette!(
+    fetch_provider_profile_exact(client, requested, workspace)
+        .await
+        .map_err(|status| {
+            if status.code() == Code::NotFound {
+                miette::miette!(
                     "provider profile '{requested}' not found; import a matching profile before using this provider type"
-                ));
-            };
-            fetch_provider_profile_exact(client, alias, workspace)
-                .await
-                .map_err(|fallback_status| {
-                    if fallback_status.code() == Code::NotFound {
-                        miette::miette!(
-                            "provider profile '{requested}' not found; import a matching profile before using this provider type"
-                        )
-                    } else {
-                        miette::miette!(fallback_status.to_string())
-                    }
-                })?
-        }
-        Err(status) => return Err(miette::miette!(status.to_string())),
-    };
-
-    Ok(response)
+                )
+            } else {
+                provider_profile_lookup_error(&status)
+            }
+        })
 }
 
 async fn fetch_provider_profile_exact(
@@ -1013,11 +1079,10 @@ pub async fn provider_create_with_options(options: ProviderCreateOptions<'_>) ->
     if profile_id.is_empty() {
         return Err(miette::miette!("provider type is required"));
     }
-    let provider_profile = fetch_provider_profile(&mut client, profile_id, profile_workspace)
-        .await
-        .map_err(|err| {
-            miette::miette!("unsupported provider type or profile: {profile_id} ({err})")
-        })?;
+    // Lookup already distinguishes absent profiles from permission and transport
+    // failures; those failures do not establish that the profile is unsupported.
+    let provider_profile =
+        fetch_provider_profile(&mut client, profile_id, profile_workspace).await?;
     let provider_type = provider_profile.id.clone();
 
     let adc_credential_key = if from_gcloud_adc {
@@ -1100,21 +1165,29 @@ pub async fn provider_create_with_options(options: ProviderCreateOptions<'_>) ->
 
     let response = client
         .create_provider(CreateProviderRequest {
+            request_id: String::new(),
             provider: Some(Provider {
                 metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                     id: String::new(),
                     name: name.to_string(),
-                    created_at_ms: 0,
+                    created_time: None,
                     labels: HashMap::new(),
                     resource_version: 0,
                     annotations: HashMap::new(),
                     workspace: workspace.to_string(),
-                    deletion_timestamp_ms: 0,
+                    deletion_time: None,
                 }),
                 r#type: provider_type.clone(),
                 credentials: credential_map,
                 config: config_map,
-                credential_expires_at_ms: oidc_credential_expires_at_ms,
+                credential_expiration_times: oidc_credential_expires_at_ms
+                    .into_iter()
+                    .map(|(key, value)| {
+                        openshell_core::time::timestamp_from_millis(value)
+                            .map(|timestamp| (key, timestamp))
+                    })
+                    .collect::<Result<HashMap<_, _>, _>>()
+                    .into_diagnostic()?,
                 profile_workspace: profile_workspace.to_string(),
                 credential_handles: HashMap::new(),
             }),
@@ -1139,6 +1212,7 @@ pub async fn provider_create_with_options(options: ProviderCreateOptions<'_>) ->
 
         if let Err(configure_err) = client
             .configure_provider_refresh(ConfigureProviderRefreshRequest {
+                request_id: String::new(),
                 provider: provider_name.clone(),
                 credential_key: adc_credential_key.clone(),
                 strategy: ProviderCredentialRefreshStrategy::Oauth2RefreshToken as i32,
@@ -1147,7 +1221,7 @@ pub async fn provider_create_with_options(options: ProviderCreateOptions<'_>) ->
                     "client_secret".to_string(),
                     "refresh_token".to_string(),
                 ],
-                expires_at_ms: None,
+                expiration_time: None,
                 workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
             })
             .await
@@ -1164,6 +1238,7 @@ pub async fn provider_create_with_options(options: ProviderCreateOptions<'_>) ->
 
         if let Err(rotate_err) = client
             .rotate_provider_credential(RotateProviderCredentialRequest {
+                request_id: String::new(),
                 provider: provider_name.clone(),
                 credential_key: adc_credential_key,
                 workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
@@ -1291,19 +1366,26 @@ fn provider_to_json(provider: &Provider) -> serde_json::Value {
                 serde_json::json!(meta.resource_version),
             );
         }
-        if meta.created_at_ms != 0 {
+        if meta.created_time.is_some() {
             obj.insert(
                 "created_at".to_string(),
-                serde_json::json!(format_epoch_ms(meta.created_at_ms)),
+                serde_json::json!(format_epoch_ms(proto_timestamp_ms(
+                    meta.created_time.as_ref()
+                ))),
             );
         }
     }
 
     // Credential expiration times (only if present)
-    if !provider.credential_expires_at_ms.is_empty() {
+    if !provider.credential_expiration_times.is_empty() {
+        let expirations: HashMap<_, _> = provider
+            .credential_expiration_times
+            .iter()
+            .map(|(key, value)| (key, proto_timestamp_ms(Some(value))))
+            .collect();
         obj.insert(
             "credential_expires_at_ms".to_string(),
-            serde_json::json!(provider.credential_expires_at_ms),
+            serde_json::json!(expirations),
         );
     }
 
@@ -1453,32 +1535,15 @@ pub async fn provider_list_profiles(
     tls: &TlsOptions,
 ) -> Result<()> {
     let mut client = grpc_client(server, tls).await?;
-    let mut page_token = String::new();
-    let mut profiles = Vec::new();
-    loop {
-        let response = client
-            .list_provider_profiles(ListProviderProfilesRequest {
-                page_size: 100,
-                page_token,
-                workspace: workspace.to_string(),
-            })
-            .await
-            .into_diagnostic()?
-            .into_inner();
-        profiles.extend(response.profiles);
-        if response.next_page_token.is_empty() {
-            break;
-        }
-        page_token = response.next_page_token;
-    }
-    profiles.sort_by(|left, right| {
+    let mut dto_profiles = fetch_provider_profile_catalog(&mut client, workspace).await?;
+    dto_profiles.sort_by(|left, right| {
         left.category
             .cmp(&right.category)
             .then_with(|| left.id.cmp(&right.id))
     });
-    let dto_profiles = profiles
+    let profiles = dto_profiles
         .iter()
-        .map(ProviderTypeProfile::from_proto)
+        .map(ProviderTypeProfile::to_proto)
         .collect::<Vec<_>>();
 
     if crate::output::print_output_direct(
@@ -1580,6 +1645,7 @@ pub async fn provider_profile_import(
     if !items.is_empty() {
         let response = client
             .import_provider_profiles(ImportProviderProfilesRequest {
+                request_id: String::new(),
                 profiles: items,
                 workspace: workspace.to_string(),
             })
@@ -1629,6 +1695,7 @@ pub async fn provider_profile_update(
             .map_or(0, |profile| profile.resource_version);
         let response = client
             .update_provider_profiles(UpdateProviderProfilesRequest {
+                request_id: String::new(),
                 profile: Some(item),
                 expected_resource_version,
                 id: id.to_string(),
@@ -1693,6 +1760,8 @@ pub async fn provider_profile_delete(
     for id in ids {
         let response = match client
             .delete_provider_profile(DeleteProviderProfileRequest {
+                request_id: String::new(),
+                allow_missing: true,
                 id: id.clone(),
                 workspace: workspace.to_string(),
             })
@@ -1708,7 +1777,7 @@ pub async fn provider_profile_delete(
                 continue;
             }
         };
-        if response.deleted {
+        if crate::run::deletion_completed(response.outcome)? {
             println!("{} Deleted provider profile {id}", "✓".green().bold());
         } else {
             println!("{} Provider profile {id} not found", "!".yellow());
@@ -1804,12 +1873,17 @@ pub async fn provider_refresh_config(
     let mut client = grpc_client(server, tls).await?;
     let status = client
         .configure_provider_refresh(ConfigureProviderRefreshRequest {
+            request_id: String::new(),
             provider: input.name.to_string(),
             credential_key: input.credential_key.to_string(),
             strategy: strategy as i32,
             material,
             secret_material_keys,
-            expires_at_ms: input.credential_expires_at_ms,
+            expiration_time: input
+                .credential_expires_at_ms
+                .map(openshell_core::time::timestamp_from_millis)
+                .transpose()
+                .into_diagnostic()?,
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
         })
         .await
@@ -1837,6 +1911,7 @@ pub async fn provider_rotate(
     let mut client = grpc_client(server, tls).await?;
     let status = client
         .rotate_provider_credential(RotateProviderCredentialRequest {
+            request_id: String::new(),
             provider: name.to_string(),
             credential_key: credential_key.to_string(),
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
@@ -1874,6 +1949,8 @@ pub async fn provider_refresh_delete(
     let mut client = grpc_client(server, tls).await?;
     let response = client
         .delete_provider_refresh(DeleteProviderRefreshRequest {
+            request_id: String::new(),
+            allow_missing: true,
             provider: name.to_string(),
             credential_key: credential_key.to_string(),
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
@@ -1882,7 +1959,7 @@ pub async fn provider_refresh_delete(
         .into_diagnostic()?
         .into_inner();
 
-    if response.deleted {
+    if crate::run::deletion_completed(response.outcome)? {
         println!(
             "{} Deleted refresh config for {} {}",
             "✓".green().bold(),
@@ -1925,20 +2002,15 @@ fn refresh_status_row(status: &ProviderCredentialRefreshStatus) -> String {
         provider_refresh_strategy_name(strategy),
         status.status,
         provider_refresh_recovery_action_name(recovery_action),
-        format_optional_epoch_ms(status.expires_at_ms),
-        format_refresh_next_at_ms(status.next_refresh_at_ms),
-        format_optional_epoch_ms(status.last_refresh_at_ms),
+        format_optional_epoch_ms(proto_timestamp_ms(status.expiration_time.as_ref())),
+        status.next_refresh_time.as_ref().map_or_else(
+            || "manual".to_string(),
+            |value| format_optional_epoch_ms(proto_timestamp_ms(Some(value))),
+        ),
+        format_optional_epoch_ms(proto_timestamp_ms(status.last_refresh_time.as_ref())),
         status.failure_code,
         truncate_status_field(&status.last_error, 72),
     )
-}
-
-fn format_refresh_next_at_ms(next_refresh_at_ms: i64) -> String {
-    if next_refresh_at_ms == i64::MAX {
-        "-".to_string()
-    } else {
-        format_optional_epoch_ms(next_refresh_at_ms)
-    }
 }
 
 fn provider_refresh_recovery_action_name(
@@ -2201,6 +2273,7 @@ fn print_provider_type_row(
     );
 }
 
+/// Credential update inputs and observation choices for all attached sandboxes.
 pub struct ProviderUpdateOptions<'a> {
     pub server: &'a str,
     pub name: &'a str,
@@ -2211,8 +2284,11 @@ pub struct ProviderUpdateOptions<'a> {
     pub credential_expires_at: &'a [String],
     pub workspace: &'a str,
     pub tls: &'a TlsOptions,
+    /// Bound observation of the sandbox target set selected by the update.
+    pub readiness: ProviderWaitOptions<'a>,
 }
 
+/// Update provider credentials and report each selected sandbox independently.
 pub async fn provider_update(options: ProviderUpdateOptions<'_>) -> Result<()> {
     let ProviderUpdateOptions {
         server,
@@ -2224,7 +2300,9 @@ pub async fn provider_update(options: ProviderUpdateOptions<'_>) -> Result<()> {
         credential_expires_at,
         workspace,
         tls,
+        readiness,
     } = options;
+    readiness.validate()?;
 
     if from_existing && !credentials.is_empty() {
         return Err(miette::miette!(
@@ -2262,7 +2340,7 @@ pub async fn provider_update(options: ProviderUpdateOptions<'_>) -> Result<()> {
         {
             None
         }
-        Err(status) => return Err(status).into_diagnostic(),
+        Err(status) => return Err(miette!("provider update lookup failed ({})", status.code())),
     };
 
     if existing.is_none() && (from_existing || from_oidc_token) {
@@ -2287,6 +2365,11 @@ pub async fn provider_update(options: ProviderUpdateOptions<'_>) -> Result<()> {
     let mut config_map = parse_key_value_pairs(config, "--config")?;
     let mut credential_expires_at_ms = parse_credential_expiry_pairs(credential_expires_at)?;
     credential_expires_at_ms.extend(oidc_credential_expires_at_ms);
+    let clear_credential_expiration_keys = credential_expires_at_ms
+        .iter()
+        .filter_map(|(key, expires_at_ms)| (*expires_at_ms == 0).then_some(key.clone()))
+        .collect::<Vec<_>>();
+    credential_expires_at_ms.retain(|_, expires_at_ms| *expires_at_ms != 0);
 
     if from_existing {
         let stored = existing.as_ref().expect("checked above");
@@ -2310,16 +2393,17 @@ pub async fn provider_update(options: ProviderUpdateOptions<'_>) -> Result<()> {
 
     let response = client
         .update_provider(UpdateProviderRequest {
+            request_id: String::new(),
             provider: Some(Provider {
                 metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                     id: String::new(),
                     name: name.to_string(),
-                    created_at_ms: 0,
+                    created_time: openshell_core::time::timestamp_from_millis(0).ok(),
                     labels: HashMap::new(),
                     resource_version: 0,
                     annotations: HashMap::new(),
                     workspace: workspace.to_string(),
-                    deletion_timestamp_ms: 0,
+                    deletion_time: None,
                 }),
                 r#type: existing
                     .as_ref()
@@ -2327,30 +2411,47 @@ pub async fn provider_update(options: ProviderUpdateOptions<'_>) -> Result<()> {
                     .unwrap_or_default(),
                 credentials: credential_map,
                 config: config_map,
-                credential_expires_at_ms: HashMap::new(),
+                credential_expiration_times: HashMap::new(),
                 profile_workspace: existing
                     .as_ref()
                     .map(|provider| provider.profile_workspace.clone())
                     .unwrap_or_default(),
                 credential_handles: HashMap::new(),
             }),
-            credential_expires_at_ms,
+            credential_expiration_times: credential_expires_at_ms
+                .into_iter()
+                .map(|(key, value)| {
+                    openshell_core::time::timestamp_from_millis(value)
+                        .map(|timestamp| (key, timestamp))
+                })
+                .collect::<Result<HashMap<_, _>, _>>()
+                .into_diagnostic()?,
             workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
+            clear_credential_expiration_keys,
         })
         .await
-        .into_diagnostic()?;
+        .map_err(|error| provider_mutation_error(&error, "update"))?;
 
-    let provider = response
-        .into_inner()
-        .provider
-        .ok_or_else(|| miette::miette!("provider missing from response"))?;
-
-    println!(
-        "{} Updated provider {}",
-        "✓".green().bold(),
-        provider.object_name()
-    );
-    Ok(())
+    let response = response.into_inner();
+    if response.mutation_id.is_empty() {
+        return Err(miette!(
+            "gateway did not return a provider mutation receipt; saved credentials cannot establish readiness"
+        ));
+    }
+    finish_provider_mutation(
+        &client,
+        &response.mutation_id,
+        response.target_receipts,
+        ProviderMutationExpectation {
+            workspace,
+            provider_name: name,
+            kind: ProviderMutationKind::Update,
+            sandbox: None,
+            provider: response.provider.as_ref(),
+        },
+        readiness,
+    )
+    .await
 }
 
 pub async fn provider_delete(
@@ -2364,6 +2465,8 @@ pub async fn provider_delete(
     for name in names {
         let response = match client
             .delete_provider(DeleteProviderRequest {
+                request_id: String::new(),
+                allow_missing: true,
                 name: name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
             })
@@ -2379,7 +2482,7 @@ pub async fn provider_delete(
                 continue;
             }
         };
-        if response.into_inner().deleted {
+        if crate::run::deletion_completed(response.into_inner().outcome)? {
             println!("{} Deleted provider {name}", "✓".green().bold());
         } else {
             println!("{} Provider {name} not found", "!".yellow());
@@ -2419,7 +2522,10 @@ mod tests {
                 ("Z_URL".to_string(), "https://secret.example".to_string()),
                 ("A_MODE".to_string(), "sensitive-config".to_string()),
             ]),
-            credential_expires_at_ms: HashMap::from([("Z_TOKEN".to_string(), 123)]),
+            credential_expiration_times: HashMap::from([(
+                "Z_TOKEN".to_string(),
+                openshell_core::time::timestamp_from_millis(123).unwrap(),
+            )]),
             profile_workspace: "internal".to_string(),
             credential_handles: HashMap::from([
                 (
@@ -2482,7 +2588,7 @@ mod tests {
                     "https://api.custom.example".to_string(),
                 ))
                 .collect(),
-                credential_expires_at_ms: HashMap::new(),
+                credential_expiration_times: HashMap::new(),
                 profile_workspace: String::new(),
                 credential_handles: HashMap::new(),
             }],
@@ -2514,15 +2620,15 @@ mod tests {
             credential_key: "MS_GRAPH_ACCESS_TOKEN".to_string(),
             strategy: ProviderCredentialRefreshStrategy::Oauth2ClientCredentials as i32,
             status: "error".to_string(),
-            expires_at_ms: 1_767_225_600_000,
-            next_refresh_at_ms: i64::MAX,
-            last_refresh_at_ms: 1_767_225_000_000,
+            expiration_time: openshell_core::time::timestamp_from_millis(1_767_225_600_000).ok(),
+            next_refresh_time: None,
+            last_refresh_time: openshell_core::time::timestamp_from_millis(1_767_225_000_000).ok(),
             last_error: "token endpoint returned a very long error message that should be truncated for table readability"
                 .to_string(),
             recovery_action: ProviderCredentialRefreshRecoveryAction::Reauthorize as i32,
             failure_code: "oauth_rotated_refresh_token_handle_missing".to_string(),
             provider_error_subtype: "invalid_rapt".to_string(),
-            last_error_at_ms: 1_767_225_000_000,
+            last_error_time: openshell_core::time::timestamp_from_millis(1_767_225_000_000).ok(),
         });
 
         assert!(row.contains("my-graph"));
@@ -2609,42 +2715,6 @@ mod tests {
         assert!(provider_profile_allows_empty_credentials(
             &optional_refresh_profile
         ));
-    }
-
-    #[test]
-    fn inferred_provider_type_returns_type_for_known_command() {
-        let result = inferred_provider_type(&["claude".to_string(), "--help".to_string()]);
-        assert_eq!(result, Some("claude-code".to_string()));
-    }
-
-    #[test]
-    fn inferred_provider_type_returns_none_for_unknown_command() {
-        let result = inferred_provider_type(&["bash".to_string()]);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn inferred_provider_type_returns_none_for_empty_command() {
-        let result = inferred_provider_type(&[]);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn inferred_provider_type_normalizes_aliases() {
-        // Retired legacy types are not inferred, even when a custom profile
-        // with the same ID could be imported and attached explicitly.
-        let result = inferred_provider_type(&["glab".to_string()]);
-        assert_eq!(result, None);
-
-        // `gh` should resolve to `github`
-        let result = inferred_provider_type(&["gh".to_string()]);
-        assert_eq!(result, Some("github".to_string()));
-    }
-
-    #[test]
-    fn inferred_provider_type_handles_full_path() {
-        let result = inferred_provider_type(&["/usr/local/bin/claude".to_string()]);
-        assert_eq!(result, Some("claude-code".to_string()));
     }
 
     #[test]
@@ -2806,7 +2876,7 @@ mod tests {
             r#type: "anthropic".to_string(),
             credentials: HashMap::new(),
             config: HashMap::new(),
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             profile_workspace: String::new(),
             credential_handles: HashMap::new(),
         };
@@ -2830,7 +2900,7 @@ mod tests {
             r#type: "anthropic".to_string(),
             credentials,
             config: HashMap::new(),
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             profile_workspace: String::new(),
             credential_handles: HashMap::new(),
         };
@@ -2869,7 +2939,7 @@ mod tests {
             r#type: "custom".to_string(),
             credentials: HashMap::new(),
             config,
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             profile_workspace: String::new(),
             credential_handles: HashMap::new(),
         };
@@ -2901,7 +2971,7 @@ mod tests {
             r#type: "anthropic".to_string(),
             credentials: HashMap::new(),
             config: HashMap::new(), // Empty config
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             profile_workspace: String::new(),
             credential_handles: HashMap::new(),
         };
@@ -2923,11 +2993,11 @@ mod tests {
             id: "prov-123".to_string(),
             name: "test-provider".to_string(),
             resource_version: 42,
-            created_at_ms: 1_234_567_890_000,
+            created_time: openshell_core::time::timestamp_from_millis(1_234_567_890_000).ok(),
             labels,
             annotations: HashMap::new(),
             workspace: String::new(),
-            deletion_timestamp_ms: 0,
+            deletion_time: None,
         };
 
         let provider = Provider {
@@ -2935,7 +3005,7 @@ mod tests {
             r#type: "anthropic".to_string(),
             credentials: HashMap::new(),
             config: HashMap::new(),
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             profile_workspace: String::new(),
             credential_handles: HashMap::new(),
         };
@@ -2962,7 +3032,7 @@ mod tests {
             r#type: "anthropic".to_string(),
             credentials: HashMap::new(),
             config: HashMap::new(),
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             profile_workspace: String::new(),
             credential_handles: HashMap::new(),
         };
@@ -2993,7 +3063,15 @@ mod tests {
             r#type: "oauth".to_string(),
             credentials: HashMap::new(),
             config: HashMap::new(),
-            credential_expires_at_ms,
+            credential_expiration_times: credential_expires_at_ms
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        key,
+                        openshell_core::time::timestamp_from_millis(value).unwrap(),
+                    )
+                })
+                .collect(),
             profile_workspace: String::new(),
             credential_handles: HashMap::new(),
         };
@@ -3011,7 +3089,7 @@ mod tests {
         let metadata = ObjectMeta {
             id: "prov-123".to_string(),
             name: "test-provider".to_string(),
-            created_at_ms: 1_609_459_200_000, // 2021-01-01 00:00:00
+            created_time: openshell_core::time::timestamp_from_millis(1_609_459_200_000).ok(), // 2021-01-01 00:00:00
             ..Default::default()
         };
 
@@ -3020,7 +3098,7 @@ mod tests {
             r#type: "anthropic".to_string(),
             credentials: HashMap::new(),
             config: HashMap::new(),
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             profile_workspace: String::new(),
             credential_handles: HashMap::new(),
         };

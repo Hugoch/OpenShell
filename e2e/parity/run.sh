@@ -290,11 +290,13 @@ supervisor_target_triple() {
 build_supervisor() {
   local variant=$1 source_root=$2 target_dir=$3 override=$4 output_var=$5
   local binary target jobs=()
-  target="$(supervisor_target_triple)"
   target_dir="${target_dir:-${ROOT}/target/parity/${variant}}"
   case "${target_dir}" in /*) ;; *) target_dir="${ROOT}/${target_dir}" ;; esac
-  binary="${override:-${target_dir}/${target}/release/openshell-sandbox}"
-  if [ -z "${override}" ]; then
+  if [ -n "${override}" ]; then
+    binary="${override}"
+  else
+    target="$(supervisor_target_triple)"
+    binary="${target_dir}/${target}/release/openshell-sandbox"
     require_clean_source "${variant}" "${source_root}"
     if [ -n "${CARGO_BUILD_JOBS:-}" ]; then jobs=(-j "${CARGO_BUILD_JOBS}"); fi
     echo "Building ${variant} supervisor in ${target_dir}..."
@@ -540,7 +542,8 @@ run_variant() {
     -u CONTAINER_HOST -u CONTAINER_CONNECTION -u CONTAINERS_STORAGE_CONF \
     -u CONTAINERS_CONF -u CONTAINERS_REGISTRIES_CONF -u CONTAINERS_REGISTRIES_CONF_DIR \
     -u CONTAINERS_POLICY -u PODMAN_CONNECTIONS_CONF -u DOCKER_HOST \
-    -u OPENSHELL_SANDBOX_IMAGE -u OPENSHELL_E2E_PODMAN_SANDBOX_IMAGE \
+    -u OPENSHELL_SANDBOX_IMAGE -u OPENSHELL_SANDBOX_RUNTIME_IMAGE \
+    -u OPENSHELL_E2E_PODMAN_SANDBOX_IMAGE \
     -u OPENSHELL_GRPC_ENDPOINT -u OPENSHELL_PODMAN_HOST_GATEWAY_IP \
     -u OPENSHELL_PODMAN_USERNS -u OPENSHELL_PROVIDER_SPIFFE_WORKLOAD_API_SOCKET \
     -u OPENSHELL_E2E_PROVIDER_SPIFFE_SOCKET -u OPENSHELL_APP_ARMOR_PROFILE \

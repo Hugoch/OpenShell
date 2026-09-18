@@ -37,6 +37,10 @@ immediately without a grace period. Finalization is persisted separately from
 the exit result; the gateway deletes an ephemeral sandbox only after the
 finalized supervisor session disconnects.
 
+Local Docker development builds the supervisor image separately from the
+`openshell-sandbox` workload runtime. Cross-platform runtime extraction uses
+the sandbox image, which exports `/openshell-sandbox`.
+
 ## Configuration Boundary
 
 The gateway accepts exactly schema version 2. Missing, legacy, and future
@@ -52,6 +56,46 @@ Kubernetes instead projects guest credentials through its configured Secret.
 The gateway validates this requirement before constructing the selected driver.
 
 ## Protocol and Auth
+
+Gateway validation and concurrency errors use the standard rich gRPC error
+envelope. Shared field validators attach `google.rpc.BadRequest`, and conditional
+write conflicts attach `google.rpc.ErrorInfo` with a stable reason and current
+version when available. `google.rpc.RetryInfo` expresses a minimum retry delay;
+it does not establish that a mutation is safe to repeat. SDKs retain the original
+transport status, metadata, and unknown details alongside decoded fields.
+SDK deletion waits recognize missing-resource status through typed error wrappers
+without suppressing other failures.
+
+Ordinary user-callable unary mutations explicitly opt into durable request
+admission when the client supplies a UUID. Typed adapters
+check current authorization before looking up a caller/method/workspace-scoped
+key. The payload fingerprint excludes that UUID and canonicalizes protobuf maps.
+An atomic, quota-checked insert chooses one executor; owned execution survives
+client cancellation. Success is persisted before acknowledgment. Errors or
+interruption leave permanent unresolved claims, never stealable leases.
+
+Admission rows live outside user workspace namespaces and are bounded per caller.
+Successes expire after 24 hours; cleanup uses the unique admission incarnation
+and version so an old cleaner cannot delete a new attempt. Replay stores only
+resource references and reviewed public scalar/diagnostic receipts, never
+credential-bearing response snapshots. It checks original identities and current
+authorization and never substitutes a same-name resource. Sandbox responses are
+live projections of the original UUID; normal status reconciliation does not
+invalidate replay. Refresh status additionally requires the original grant epoch
+and no deletion timestamp, including a timestamp at the Unix epoch.
+Other resource projections retain exact-version guards. Terminal delete receipts
+do not require the deleted target or parent to remain present.
+
+Sandbox, service, provider/profile, and policy/config adapters use keyed payload
+fingerprints derived from existing gateway JWT or primary TLS private material.
+Replicas must share that material; missing keys or key changes fail closed without
+changing admission identity. Workspace/template adapters retain their original
+format. Intercepted requests carry the original decoded payload only in a private
+in-memory extension. Replay reauthorizes original and current effective scopes,
+requires the same effective payload, and reruns current interceptor validation.
+Interceptors cannot mutate the request UUID. Server-marked replay suppresses
+post-commit observation, which remains best-effort rather than an outbox.
+Credential capabilities and streaming execution require separate contracts.
 
 The gateway listens on one service port and multiplexes gRPC and HTTP traffic.
 The default local single-user deployment mode is mTLS user authentication:
@@ -188,11 +232,12 @@ observation or evaluation failures outside binding policy emit warnings and the
 The gateway reconstructs the original response frames, including trailers and
 body errors, before evaluating the observer.
 
-Interceptor manifests can also vend provider profile catalogs. Gateway
-configuration selects the exact ordered source set from the in-tree built-in
-source, the stored user source, and named profile-capable interceptors. Omitting
-the setting selects `builtin + user`; selecting only an interceptor makes it
-authoritative by omission. Every selected source uses the same snapshot,
+Interceptor manifests can also vend provider profile catalogs. No profile is
+compiled into the gateway: configuration selects the exact ordered source set
+from the stored user source and named profile-capable interceptors. Omitting the
+setting selects the user source alone, so a gateway with nothing imported serves
+an empty catalog; selecting only an interceptor makes it authoritative by
+omission. Every selected source uses the same snapshot,
 semantic-validation, and duplicate-detection path. Duplicate normalized profile
 IDs fail instead of creating source precedence. The gateway treats configured
 interceptors as trusted sources and does not verify signature annotations in
@@ -215,7 +260,7 @@ Supported auth modes:
 | Plaintext | Local development or a trusted reverse proxy boundary. |
 | Unauthenticated local users | Trusted Kubernetes dev or fully trusted proxy deployments only. |
 | Cloudflare JWT | Edge-authenticated deployments where Cloudflare Access supplies identity. |
-| OIDC | Bearer-token auth for users, with browser or device-code PKCE and client credentials login. JWKS validation accepts RS256, RS384, RS512, PS256, PS384, PS512, ES256, ES384, and EdDSA (Ed25519) signing keys. |
+| OIDC | Bearer-token auth for users, with browser or device-code PKCE and client credentials login. Discovery and JWKS retrieval require HTTPS, reject redirects, and pin JWKS to the issuer origin or an explicit origin allowlist. JWKS validation accepts RS256, RS384, RS512, PS256, PS384, PS512, ES256, ES384, and EdDSA (Ed25519) signing keys. |
 
 The CLI persists the scopes requested during OIDC login in gateway metadata and
 reuses them when refreshing an access token. This preserves the intended API
@@ -267,8 +312,13 @@ controlling Sandbox CR. The bootstrap path accepts
 both `agents.x-k8s.io/v1beta1` ownerReferences from newer Agent Sandbox
 controllers and `agents.x-k8s.io/v1alpha1` ownerReferences from existing
 deployments. Supervisors renew gateway JWTs in memory before expiry only while
-the sandbox record still exists. Older tokens are not server-revoked; shared
-deployments bound replay exposure with short `gateway_jwt.ttl_secs` lifetimes.
+the sandbox record still exists. Each successful refresh atomically stores the
+new gateway-token ID in that sandbox record. The immediately consumed bearer
+can recover that same successor for 30 seconds when the request matches, but it
+cannot authorize ordinary RPCs or choose another successor. Advancing the
+successor removes that retry path across every gateway replica. Short
+`gateway_jwt.ttl_secs` lifetimes still bound the exposure of a current bearer
+that has not yet been refreshed.
 Omitting `gateway_jwt.ttl_secs` selects non-expiring tokens for local
 single-player Docker, Podman, and VM gateways; those tokens carry `exp = 0`.
 Kubernetes and other shared deployments should set a positive TTL. Explicit
@@ -334,16 +384,14 @@ The storage schema is intentionally narrow:
 
 ### Protobuf API and storage boundaries
 
-Public RPC contracts and durable protobuf formats have separate ownership. The
-`openshell.v1.OpenShell` service currently has 74 RPCs. Their request and
-response roots, streaming flags, and transitive message closure come from the
-public descriptor set generated by `openshell-core`; a fingerprint test in
-`openshell-server` requires this inventory to be reviewed whenever it changes.
-Compute-driver, credential-driver, gateway-interceptor, and
-supervisor-middleware services are compiled contracts for internal extension
-boundaries, not public gateway RPCs. The current public inventory has 74
-methods, 278 messages, and 12 enums
-(`8ac68c71d93e6a5e56406b8df1882ee40c6066270969e03eb99803f0e6396fc1`).
+Public RPC contracts and durable protobuf formats have separate ownership. The `openshell.v1.OpenShell` service's request and response roots, streaming flags, and transitive message closure come from the public descriptor set generated by `openshell-core`. The `public_and_durable_schema_inventories_are_complete` test in `openshell-server` owns the counts and fingerprints and requires this inventory to be reviewed whenever it changes. Compute-driver, credential-driver, gateway-interceptor, and supervisor-middleware services are compiled contracts for internal extension boundaries.
+
+`ReportEndpointStatus` is a sandbox-authenticated public gateway RPC. Its request, response, and `EndpointObservation` messages belong only to the public closure. `EndpointStatus` and `EndpointResult` also belong to the durable closure because `Sandbox.status.endpoint_statuses` persists them. The repeated status field uses a new wire tag; stored sandboxes without it decode with an empty endpoint list and retain their lifecycle fields. A fixed payload encoded with the earlier sandbox schema verifies that no database rewrite is required.
+
+Allow and deny append requests carry `L7RuleTarget` to declare the rule, endpoint, and complete affected scope. The removed `host` and `port` fields remain reserved by number and name, and requests without a target are rejected. These mutation requests are not persisted formats.
+
+`GetSandboxProviderStatus` and `ReportProviderReadiness` are unary public gateway RPCs. The first lets authorized users inspect a provider change; the second accepts installation reports only from the sandbox's current authenticated supervisor session.
+
 The removed `NetworkBinary.harness` field remains reserved by number and name,
 so protobuf implementations cannot reuse its wire slot or source identifier.
 The durable-policy compatibility decoder reads the former boolean before Prost
@@ -354,21 +402,62 @@ Storage-only messages live in the private, versioned
 `openshell.storage.v1` package under `crates/openshell-server/proto`. The server
 generates these types separately, so the public descriptor set and the Rust,
 Go, Python, and TypeScript client generation inputs do not advertise them.
+When a frozen scalar storage field cannot distinguish absence from its zero
+value, gateway-owned object metadata annotations carry that presence bit rather
+than extending the frozen message.
 
 | Storage classification | Protobuf messages | Durable use |
 |---|---|---|
-| Encoded storage roots | `StoredProviderCredentialRefreshState`, `StoredProviderProfile`, `PolicyRevisionPayload`, `DraftChunkPayload` | Complete protobuf payload stored in an object row or a scoped policy row. |
+| Encoded storage roots | `StoredProviderCredentialRefreshStateV2`, `StoredProviderProfile`, `PolicyRevisionPayload`, `DraftChunkPayload` | Complete protobuf payload stored in an object row or a scoped policy row. The frozen V1 refresh state remains available only for transactional upgrade decoding. |
 | Nested storage-only type | `StoredRefreshMaterialDeletion` | Repeated child records inside provider refresh state. |
 | SQL materializations | `StoredPolicyRevision`, `StoredDraftChunk` | Server-only typed results assembled from indexed columns and decoded payloads; not public RPC messages. |
 | Public messages used directly as encoded storage roots | `Sandbox`, `SandboxWorkloadTemplate`, `Provider`, `Workspace`, `WorkspaceMember`, `SshSession`, `ServiceEndpoint` | The generated public type is also the persisted payload. `SshSession` is not in the current public RPC message closure. |
 | Embedded encoded root | `SandboxPolicy` | Stored in policy rows and inside the JSON settings envelope. |
+| Configuration operation storage root | `StoredConfigUpdateOperation` | One common operation resource stores the exact provider target, receipt projection, snapshot failure reason, and historical outcome. |
+| Public dependencies of an operation | `ConfigUpdateOperation`, `ProviderMutationReceipt`, `ProviderReadinessReason` | Their complete message and enum closures are durable contracts. |
 
-The 12 encoded durable roots above have a closure of 81 messages and eight
-enums (`369b36511c2e38b9df9621704a00123516c7538d8ee89a499158d7de5cee1882`).
-Its intersection with the public RPC closure contains 71 messages and eight
-enums (`05add438ba041defc98d791038ae593d3f09352677cae43f2276d494205ce415`).
-The descriptor-derived test owns these full inventories; the tables here record
-the reviewed roots and classifications.
+The descriptor-derived test owns the complete public, durable, and intersecting inventories and their reviewed fingerprints. The tables here record their roots and classifications. A synthetic sandbox-spec byte fixture verifies that an absent server-owned attachment epoch decodes to the valid empty initial identity; direct and template creation tests separately require the gateway to replace any caller-supplied epoch.
+
+Public delete, membership-removal, and SSH-revocation responses use
+`DeletionOutcome`, not a transport-success boolean. `COMPLETED` establishes
+logical gateway deletion or revocation; it does not guarantee that downstream
+platform garbage collection has finished. Sandbox deletion returns `ACCEPTED`
+while its captured object ID remains in the store, and returns that ID so callers
+can distinguish the original sandbox from a same-name replacement. Identity-aware
+SDK deletion waits complete on absence or a different observed ID; name-only waits
+continue until the name is absent. The existing owned deletion worker continues
+after request cancellation.
+
+Missing targets return `NOT_FOUND` unless `allow_missing` explicitly requests
+`ALREADY_ABSENT`. Authorization, parent resolution, preconditions, and backend
+failures remain errors. Already-revoked sessions complete without another write
+after current authorization. The removed response booleans are reserved by name
+and number; this coordinated pre-1.0 API change does not alter durable schemas.
+The outcome alone does not provide request deduplication. Opted-in unary methods
+require a request UUID for the admission contract.
+
+Configuration admission adds `SandboxStatus.configuration_admission` at field
+11 and optional `configuration_activated` at field 12, extending the public and
+durable closures. New sandboxes explicitly store `false` until first acceptance;
+acceptance stores `true` permanently, including across restart. Legacy rows
+have neither field and conservatively retain static-policy restrictions. No
+database rewrite is required. A pre-admission byte fixture verifies that legacy
+phase and policy-version fields survive without fabricated admission or activation.
+`SandboxStatus.provisioning` uses field 13 for gateway-owned attempt timing and
+compute reclamation progress. Its timestamps survive supervisor reconnects and
+ordinary driver status updates. Older records decode with no provisioning
+record; timing must be adopted once and persisted, never reconstructed from the
+object's frequently changing update timestamp. The additive message requires
+no rewrite of existing payloads and leaves the frozen storage-v1 schema intact.
+Stored settings JSON also carries per-key change IDs and commit timestamps,
+including deletion tombstones. Legacy values acquire stable source identities
+on read; a subsequent write preserves them. These clocks distinguish effective
+edits from no-op writes without treating status updates as configuration edits.
+With timestamp types, deletion outcomes, and optional mutation request IDs, the
+admission contract brings the public closure to 298 messages and 21 enums, the
+durable closure to 92 messages and 16 enums, and their overlap to 80 messages
+and 16 enums. Mutation request IDs extend public request fields without adding
+messages to these closures or changing the durable protobuf schema.
 
 | Dual-purpose encoded root | Current decision |
 |---|---|
@@ -380,6 +469,9 @@ the reviewed roots and classifications.
 | `SshSession` | Defer a storage twin; govern its complete dependency closure as durable. |
 | `ServiceEndpoint` | Defer a storage twin; govern its complete dependency closure as durable. |
 | `SandboxPolicy` | Defer a storage twin; govern its complete dependency closure as durable. |
+| `ConfigUpdateOperation` | Persist the common historical outcome within `StoredConfigUpdateOperation`; govern its complete dependency closure as durable. |
+| `ProviderMutationReceipt` | Persist the immutable provider projection within `StoredConfigUpdateOperation`; govern its complete dependency closure as durable. |
+| `ProviderReadinessReason` | Persist only the closed snapshot failure category within the operation; govern its enum values as durable. |
 
 The public/storage overlap is deliberate for the current format. Storage twins
 for the public roots are deferred: introducing them would require a broad
@@ -419,6 +511,14 @@ populate `scope`, `version`, `status`, `dedup_key`, and `hit_count` so the
 gateway can efficiently fetch the latest policy, track load status, and manage
 advisor drafts without creating resource-specific tables.
 
+Mutation admission uses a private, version-tagged JSON envelope in the same
+object store. Its identity namespace stays stable across format changes, and an
+unknown format fails closed. It contains explicit typed receipts, not arbitrary
+public response payloads, and is not part of the protobuf storage closure.
+Workspace create/delete admissions include the requested workspace name in the
+key, but omit a workspace UUID guard. Different names have independent request-ID
+namespaces; deletion receipts remain replayable after the target disappears.
+
 Each sandbox policy revision stores the complete provenance annotation map
 supplied with that update. The revision payload is the authoritative immutable
 record; sandbox metadata receives the same annotations only as a convenience
@@ -441,6 +541,19 @@ scope semantics.
 For in-memory SQLite, the adapter retains a dedicated keepalive connection for
 the store lifetime. Operational connection replacement therefore preserves the
 shared in-memory schema and objects instead of creating an empty database.
+
+Public protobuf APIs represent absolute times with `google.protobuf.Timestamp`
+and elapsed time with `google.protobuf.Duration`. The integer
+`created_at_ms` and `updated_at_ms` database columns are intentionally internal
+bookkeeping values, not part of that public convention. On startup, both
+storage backends transactionally rewrite legacy scalar time fields inside
+protobuf payloads before serving requests. A malformed affected payload aborts
+and rolls back startup migration. Legacy driver-provided condition strings that
+cannot be represented as timestamps are dropped so an accepted historical
+value cannot make the upgraded gateway unavailable.
+Gateway and Sandbox Protocol token responses follow the same convention: a
+present expiration timestamp carries the absolute deadline, while absence means
+the issued token does not expire.
 
 The SQLite adapter tightens the on-disk database file to mode `0o600` on every
 connect so that provider API keys, SSH session tokens, and sandbox metadata are
@@ -467,6 +580,12 @@ credential driver is configured, gateways use server-owned encrypted database
 credential storage for defense in depth. Multi-replica deployments can use that
 default with a shared database and shared key-encryption key, or opt into an
 external backend such as Vault or Kubernetes Secrets.
+
+The Vault credential driver requires HTTPS for every non-loopback backend,
+never follows HTTP redirects, and keeps standard certificate hostname
+verification enabled. Operators can add private Vault trust roots with a PEM
+CA bundle; the driver does not replace platform roots or expose a certificate
+verification bypass.
 
 Sandbox workload templates are workspace-scoped gateway resources. Workspace
 admins create and delete them; workspace users can read and list them. A
@@ -653,6 +772,28 @@ configuration, valid endpoint-bound static credentials from other attached
 providers, and the dynamic credential snapshot. Provider environment revisions
 include profile endpoint and binding changes.
 
+The supervisor owns provider fetching, support negotiation, and credential resolution outside the workload. The authenticated sandbox boundary receives a revision and its prepared child environment from one snapshot; it preserves the issued placeholders without receiving the secret resolver or turning those placeholders into new references.
+
+Provider mutations return immutable per-sandbox receipts that separate saved desired state from observed runtime installation. A receipt pins sandbox and provider identity, the attachment epoch, and the exact provider/configuration/policy fingerprints. Attachment-set changes replace the epoch in the same sandbox CAS write; credential updates stage distinct backend objects before publishing their handles and provider revision. This prevents a published revision from referring to an unfinished in-place credential write. Update receipts retain the sandbox target set selected before publication.
+
+Each receipt projects a common configuration operation in the `config_update_operation` store; its receipt ID is the operation ID. The provider status path evaluates current installation evidence and records historical terminal outcomes through resource-version CAS. A previously applied operation does not bypass current session, freshness, or authority checks. The live provider projection can be pending after disconnection or superseded after another change even when historical operation state remains applied. Pending operations are evaluated through provider status queries; this path adds no background delivery engine or mutation replay contract.
+
+When a provider mutation opts into admission with `request_id`, its replay record retains references to the original configuration operations and the original mutation ID. Replay returns those immutable receipts even if sandbox attachments have since changed; it does not select new targets or create replacement receipts. Missing operation evidence makes replay unavailable without executing the mutation again. Provider resources still require their original recorded version, and sandbox resources retain the replay contract's current-state projection.
+
+Provider mutation and operation-result writes are separate. A result-storage failure can follow a saved mutation and returns structured uncertainty without a rollback or safe-retry claim. A failed initial snapshot remains failed rather than acquiring a different target during a later lookup. Operations contain only identities, revisions, timestamps, and closed reason categories.
+
+The CLI recognizes the gateway's `CONFIG_OPERATION_STORAGE_UNCERTAIN` error reason and domain for attach, detach, and update. It reports fixed guidance to inspect and reconcile the saved change before retrying, while withholding arbitrary server messages and error metadata. An uncertain mutation never starts a readiness wait or automatic replay.
+
+Provider receipts, installation status, and common operations represent absolute times with protobuf `Timestamp`; report intervals and evidence lifetimes use protobuf `Duration`. Receipt identity compares the full canonical timestamp without truncating nanoseconds. An absent observation or completion time represents missing evidence or an unfinished operation, independently of the Unix epoch.
+
+Provider installation reports belong to the existing `ConnectSupervisor` session. Each report names that session, has an increasing sequence, and expires unless the supervisor reports again. Reconnection or disconnect invalidates prior observations; stored change records survive a gateway restart, but runtime evidence does not. Replaying an identical report cannot extend its lifetime.
+
+Reports and status also compare the supervisor instance with the sandbox's persisted current instance. A different supervisor becoming current invalidates an older connection, including one retained by another gateway replica. Observations stay local to the gateway holding the supervisor session; a status request reaching a replica without that session returns pending. Multi-replica deployments therefore retain the existing supervisor-session routing requirement.
+
+The supervisor reports success only after it installs the matching credentials, activates the effective policy, and receives an acknowledgment from the authenticated workload boundary that it installed the environment for future processes. Environment synchronization shares the process-launch lock, and its acknowledgment identifies the exact publication, including retries at the same provider revision. Failed policy installation cannot reuse evidence for a different installed policy. Ready and revoked statuses also recheck the requested sandbox, provider, attachment and configuration identities; revision fingerprints are compared only for equality. Revocation applies to future credential resolution and future processes. Requests already forwarded upstream can still finish.
+
+Ordinary static credentials retain revision-scoped references. After update readiness, a newly launched process receives the updated reference; an existing process keeps its original revision. Installation completion does not retarget that reference or establish that an old upstream key can be retired.
+
 ## Provider Environment Resolution
 
 The gateway resolves only the providers attached to a sandbox. It combines each
@@ -761,6 +902,25 @@ present -> skip; partial requested state -> fail with a recovery hint; nothing
 requested present -> generate and write. This guards continuity across restarts
 and upgrades while still recovering cleanly if an operator deletes everything
 and starts over.
+
+When `grpcRoute.backendTLSPolicy.enabled=true`, the certgen hook also creates a
+`ConfigMap` containing the CA certificate (`ca.crt`) used by the Gateway proxy
+to validate the backend pod's TLS certificate. The CA is always read from the
+authoritative server Secret (not the in-memory bundle) so that enabling
+BackendTLSPolicy on an existing release uses the CA that actually signed the
+server certificate. The ConfigMap is reconciled on every hook run: if the CA
+changes (rotation, re-issue), the ConfigMap is updated in place. In built-in PKI
+mode the ConfigMap is created in the same pre-install hook. In cert-manager
+mode, a separate post-install/post-upgrade hook Job polls for the cert-manager-
+issued server Secret and then creates or updates the ConfigMap, because
+cert-manager Certificate resources are regular release objects applied after
+pre-install hooks.
+
+The `server.tls.enableMtls` value controls whether the gateway requires client
+certificates. When `enableMtls` is `false`, the gateway runs HTTPS-only without
+client certificate verification (use OIDC for identity instead). BackendTLSPolicy
+requires `enableMtls=false` because the ingress proxy cannot present client
+certificates to the backend.
 
 Operators who manage TLS PKI with cert-manager enable `certManager.enabled`;
 cert-manager takes precedence over built-in TLS generation and the chart still
@@ -883,7 +1043,7 @@ system entry instead of pretending to delete package-manager owned state.
 - Compute runtimes own the mechanics of starting workloads and injecting
   callback configuration. Local Docker, Podman, and VM callback endpoints can
   be derived from their fixed host aliases. Kubernetes requires an explicit
-  endpoint from deployment topology; Helm renders it from the gateway Service
+  endpoint from driver placement; Helm renders it from the gateway Service
   name and namespace rather than inferring it from sandbox placement.
 - Docker-backed local gateways use Docker's `host-gateway` callback alias on
   macOS and Docker Desktop-style runtimes. They request IPv4 loopback callback

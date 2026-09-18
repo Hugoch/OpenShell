@@ -170,7 +170,7 @@ Phase 1: GetSandboxLogs  →  500 initial lines  →  send via Event::LogLines
 Phase 2: WatchSandbox(follow_logs: true)  →  live tail  →  send via Event::LogLines
 ```
 
-**Sandboxes**: Fetched via `ListSandboxes` in a background collection-refresh task scheduled from the 2-second tick, scoped to the current workspace (or all workspaces). Follow `next_page_token` until empty so the dashboard reflects the complete collection.
+**Sandboxes**: Fetched via `ListSandboxes` in a background collection-refresh task scheduled from the 2-second tick, scoped to the current workspace (or all workspaces). Follow `next_page_token` until empty so the dashboard reflects the complete collection. The NOTES column summarizes active `ConfigurationInvalid` readiness conditions as `Invalid config` before port forwards and clears the note on refresh after repair. Full diagnostics remain available through `openshell sandbox get <name> -o json`. Timed-out provisioning attempts show `Provisioning timed out` with cleanup pending or compute reclaimed, preserving port forwards. The sandbox detail pane wraps the full configuration error in its Notes field.
 
 **Providers**: Fetched via `ListProviders` in the background collection-refresh task. Provider profiles are fetched per-workspace via `ListProviderProfiles` and cached in a `ProviderProfileCache` keyed by `(workspace, profile_id)`. Follow each list RPC's `next_page_token` until empty.
 
@@ -484,8 +484,12 @@ use openshell_core::proto::{
   let req = openshell_core::proto::DeleteSandboxRequest {
       name: sandbox_name,
       workspace_scope: Some(workspace_selector(workspace)),
+      allow_missing: true,
   };
   ```
+- Delete responses carry `DeletionOutcome`: distinguish `Accepted` (cleanup
+  pending), `Completed`, and `AlreadyAbsent`. Treat unspecified or unknown
+  outcomes as unconfirmed, not completed.
 - `WatchSandboxRequest` has extra fields beyond what you might need — always use `..Default::default()`:
   ```rust
   let req = openshell_core::proto::WatchSandboxRequest {
@@ -497,12 +501,12 @@ use openshell_core::proto::{
       ..Default::default()
   };
   ```
-- `SandboxLogLine` proto fields: `sandbox_id`, `timestamp_ms`, `level`, `target`, `message`, `source`, `fields` (HashMap<String, String>).
+- `SandboxLogLine` proto fields: `sandbox_id`, `event_time` (`Option<prost_types::Timestamp>`), `level`, `target`, `message`, `source`, `fields` (`HashMap<String, String>`).
 - Workspace-scoped request fields use `workspace_scope: Option<WorkspaceSelector>`.
   Select one workspace with `Some(workspace_selector(name))`. List requests that
   explicitly support cross-workspace access also accept
   `Some(all_workspaces_selector())`; do not use that marker on other requests.
-- `GetSandboxLogsRequest` fields: `sandbox_id`, `lines` (u32), `since_ms` (i64),
+- `GetSandboxLogsRequest` fields: `sandbox_id`, `lines` (u32), `since_time` (`Option<prost_types::Timestamp>`),
   `sources` (Vec<String>), `min_level` (String), `workspace_scope`.
 - `ListSandboxesRequest` fields: `page_size` (i32), `page_token` (String),
   `label_selector` (String), `workspace_scope`.

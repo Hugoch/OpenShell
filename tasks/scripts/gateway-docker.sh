@@ -16,6 +16,7 @@
 #   OPENSHELL_DOCKER_GATEWAY_NAME=my-docker-gateway mise run gateway:docker
 #   OPENSHELL_SANDBOX_NAMESPACE=my-ns mise run gateway:docker
 #   OPENSHELL_SANDBOX_IMAGE=ghcr.io/... mise run gateway:docker
+#   OPENSHELL_SUPERVISOR_IMAGE=ghcr.io/... mise run gateway:docker
 #
 # After the gateway is running, point the CLI at it with either:
 #   openshell --gateway docker-dev <command>
@@ -33,6 +34,7 @@ GATEWAY_NAME="${OPENSHELL_DOCKER_GATEWAY_NAME:-docker-dev}"
 STATE_DIR="${OPENSHELL_DOCKER_GATEWAY_STATE_DIR:-${ROOT}/.cache/gateway-docker}"
 SANDBOX_NAMESPACE="${OPENSHELL_SANDBOX_NAMESPACE:-docker-dev}"
 SANDBOX_IMAGE="${OPENSHELL_SANDBOX_IMAGE:-ghcr.io/nvidia/openshell-community/sandboxes/base:latest}"
+SUPERVISOR_IMAGE="${OPENSHELL_SUPERVISOR_IMAGE:-openshell/supervisor:dev}"
 SANDBOX_IMAGE_PULL_POLICY="$(normalize_image_pull_policy "${OPENSHELL_SANDBOX_IMAGE_PULL_POLICY:-if_not_present}")"
 LOG_LEVEL="${OPENSHELL_LOG_LEVEL:-info}"
 GATEWAY_BIN="${ROOT}/target/debug/openshell-gateway"
@@ -124,6 +126,13 @@ if port_is_in_use "${PORT}"; then
   exit 2
 fi
 
+if [[ -z "${OPENSHELL_SUPERVISOR_IMAGE:-}" ]]; then
+  # Keep the default development image aligned with this checkout. Cargo and
+  # BuildKit caches make an unchanged rebuild incremental.
+  echo "Building local supervisor image (${SUPERVISOR_IMAGE})..."
+  CONTAINER_ENGINE=docker IMAGE_TAG=dev mise run build:docker:supervisor
+fi
+
 GRPC_ENDPOINT="${OPENSHELL_GRPC_ENDPOINT:-http://host.openshell.internal:${PORT}}"
 
 DAEMON_ARCH="$(normalize_arch "$(docker info --format '{{.Architecture}}' 2>/dev/null || true)")"
@@ -185,7 +194,7 @@ if [[ "${HOST_OS}" == "Linux" && "${HOST_ARCH}" == "${DAEMON_ARCH}" ]]; then
     "${ROOT}/target/${SUPERVISOR_TARGET}/debug/openshell-sandbox"
 else
   # Cross-compile through the prebuilt-binary staging helper, then use the
-  # supervisor stage to extract just the openshell-sandbox binary.
+  # sandbox stage to extract just the openshell-sandbox binary.
   #
   # This task is gated on a working Docker daemon above, so pin the
   # container-engine helper to docker — otherwise it auto-detects podman
@@ -195,7 +204,7 @@ else
   if ! CONTAINER_ENGINE=docker \
     DOCKER_PLATFORM="linux/${DAEMON_ARCH}" \
     DOCKER_OUTPUT="type=local,dest=${SUPERVISOR_BUILD_DIR}" \
-      bash "${ROOT}/tasks/scripts/docker-build-image.sh" supervisor-output; then
+      bash "${ROOT}/tasks/scripts/docker-build-image.sh" sandbox; then
     rm -rf -- "${SUPERVISOR_BUILD_DIR}"
     exit 1
   fi
@@ -233,6 +242,7 @@ gateway_id = "${GATEWAY_NAME}"
 
 [openshell.drivers.docker]
 default_image = "${SANDBOX_IMAGE}"
+supervisor_image = "${SUPERVISOR_IMAGE}"
 image_pull_policy = "${SANDBOX_IMAGE_PULL_POLICY}"
 sandbox_label = "${SANDBOX_NAMESPACE}"
 grpc_endpoint = "${GRPC_ENDPOINT}"

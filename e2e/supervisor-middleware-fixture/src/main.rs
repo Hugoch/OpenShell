@@ -96,7 +96,7 @@ impl SupervisorMiddleware for ScriptedMiddleware {
                 operation: SupervisorMiddlewareOperation::HttpRequest as i32,
                 phase: PHASE as i32,
                 max_payload_bytes: MAX_PAYLOAD_BYTES,
-                timeout: String::new(),
+                request_timeout: None,
             }],
             expected_audience: self.audience.clone(),
         }))

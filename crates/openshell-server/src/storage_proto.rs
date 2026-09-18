@@ -15,8 +15,7 @@
 
 include!(concat!(env!("OUT_DIR"), "/openshell.storage.v1.rs"));
 
-#[cfg(test)]
-const STORAGE_FILE_DESCRIPTOR_SET: &[u8] =
+pub(crate) const STORAGE_FILE_DESCRIPTOR_SET: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/storage_descriptor.bin"));
 
 use openshell_core::{
@@ -66,25 +65,25 @@ impl ObjectWorkspace for StoredProviderProfile {
     }
 }
 
-impl ObjectId for StoredProviderCredentialRefreshState {
+impl ObjectId for StoredProviderCredentialRefreshStateV2 {
     fn object_id(&self) -> &str {
         self.metadata.as_ref().map_or("", |m| m.id.as_str())
     }
 }
 
-impl ObjectName for StoredProviderCredentialRefreshState {
+impl ObjectName for StoredProviderCredentialRefreshStateV2 {
     fn object_name(&self) -> &str {
         self.metadata.as_ref().map_or("", |m| m.name.as_str())
     }
 }
 
-impl ObjectLabels for StoredProviderCredentialRefreshState {
+impl ObjectLabels for StoredProviderCredentialRefreshStateV2 {
     fn object_labels(&self) -> Option<HashMap<String, String>> {
         self.metadata.as_ref().map(|m| m.labels.clone())
     }
 }
 
-impl SetResourceVersion for StoredProviderCredentialRefreshState {
+impl SetResourceVersion for StoredProviderCredentialRefreshStateV2 {
     fn set_resource_version(&mut self, version: u64) {
         if let Some(meta) = self.metadata.as_mut() {
             meta.resource_version = version;
@@ -92,13 +91,13 @@ impl SetResourceVersion for StoredProviderCredentialRefreshState {
     }
 }
 
-impl GetResourceVersion for StoredProviderCredentialRefreshState {
+impl GetResourceVersion for StoredProviderCredentialRefreshStateV2 {
     fn get_resource_version(&self) -> u64 {
         self.metadata.as_ref().map_or(0, |m| m.resource_version)
     }
 }
 
-impl ObjectWorkspace for StoredProviderCredentialRefreshState {
+impl ObjectWorkspace for StoredProviderCredentialRefreshStateV2 {
     fn object_workspace(&self) -> &str {
         self.metadata.as_ref().map_or("", |m| m.workspace.as_str())
     }
@@ -117,13 +116,16 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
     const STORAGE_V1_SCHEMA_SHA256: &str =
-        "79c72615d957fc0653c672f61998bf7d8d21b757bc05d07b3fff92bd70fc8f52";
+        "d68401809d8cea445c35233ef32412bbd041cb2ac5acaf368a0d0bf74d2ddf17";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "8ac68c71d93e6a5e56406b8df1882ee40c6066270969e03eb99803f0e6396fc1";
+        "87be23fc0ac4eaf8ce5890a1c87e6a48279f65fc8fbcc0cea7d7cbe426f2cc46";
     const DURABLE_SCHEMA_SHA256: &str =
-        "369b36511c2e38b9df9621704a00123516c7538d8ee89a499158d7de5cee1882";
+        "654649c8f65f44ac2ba04290f49c56de2f488271f99bc0fd4c6d025039c05128";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
-        "05add438ba041defc98d791038ae593d3f09352677cae43f2276d494205ce415";
+        "376cc8ecbc8b9b995e2170ccb5c2f18ef82adf9b5f55f1683571410722dfd4cf";
+    // A persisted Sandbox without endpoint status retains its lifecycle fields;
+    // the absent repeated field decodes empty and needs no database rewrite.
+    const SANDBOX_WITHOUT_ENDPOINT_STATUS: &str = "0a1e0a0a73616e64626f782d6964120773616e64626f783a0764656661756c741a2b0a0773616e64626f782a0d0a05526561647912045472756530023807420d73757065727669736f722d6964";
     // Synthetic payloads generated with the public declarations at v0.0.116,
     // before their relocation into openshell.storage.v1. Values are deliberately
     // non-secret and the ordinary protobuf bytes contain no package names.
@@ -136,22 +138,33 @@ mod tests {
         "0a0472756c651a07666978747572652d0000403f3a0b6578616d706c652e636f6d40bb035002";
     const V0_0_116_POLICY_RECORD: &str = "0a09706f6c6963792d6964120a73616e64626f782d6964180222030102032a0673686132353632066c6f616465643a046e6f6e6540fa0148ac0252110a06736f75726365120766697874757265";
     const V0_0_116_DRAFT_RECORD: &str = "0a086368756e6b2d6964120a73616e64626f782d69641802220770656e64696e672a0472756c65320204053a076669787475726549000000000000e83f50de02589003620b6578616d706c652e636f6d68bb037801";
-    const STORAGE_MESSAGE_NAMES: [&str; 7] = [
+    const STORAGE_MESSAGE_NAMES: [&str; 9] = [
         "DraftChunkPayload",
         "PolicyRevisionPayload",
+        "StoredConfigUpdateOperation",
         "StoredDraftChunk",
         "StoredPolicyRevision",
         "StoredProviderCredentialRefreshState",
+        "StoredProviderCredentialRefreshStateV2",
         "StoredProviderProfile",
         "StoredRefreshMaterialDeletion",
     ];
-    const DURABLE_ROOTS: [&str; 12] = [
+    const PROVIDER_READINESS_RPC_SIGNATURES: [&str; 2] = [
+        "openshell.v1.OpenShell/GetSandboxProviderStatus|.openshell.v1.GetSandboxProviderStatusRequest|.openshell.v1.GetSandboxProviderStatusResponse|false|false",
+        "openshell.v1.OpenShell/ReportProviderReadiness|.openshell.v1.ReportProviderReadinessRequest|.openshell.v1.ReportProviderReadinessResponse|false|false",
+    ];
+    // Synthetic SandboxSpec bytes with log level, provider, and command fields,
+    // emitted before the gateway-owned attachment epoch field was introduced.
+    const PRE_READINESS_SANDBOX_SPEC: &str =
+        "0a04696e666f421273796e7468657469632d70726f766964657262046563686f";
+    const DURABLE_ROOTS: &[&str] = &[
         ".openshell.datamodel.v1.Provider",
         ".openshell.datamodel.v1.Workspace",
         ".openshell.sandbox.v1.SandboxPolicy",
         ".openshell.storage.v1.DraftChunkPayload",
         ".openshell.storage.v1.PolicyRevisionPayload",
-        ".openshell.storage.v1.StoredProviderCredentialRefreshState",
+        ".openshell.storage.v1.StoredConfigUpdateOperation",
+        ".openshell.storage.v1.StoredProviderCredentialRefreshStateV2",
         ".openshell.storage.v1.StoredProviderProfile",
         ".openshell.v1.Sandbox",
         ".openshell.v1.SandboxWorkloadTemplate",
@@ -407,6 +420,51 @@ mod tests {
     }
 
     #[test]
+    fn deletion_responses_reserve_legacy_booleans() {
+        let public = FileDescriptorSet::decode(openshell_core::FILE_DESCRIPTOR_SET).unwrap();
+        for (name, legacy) in [
+            ("DeleteSandboxTemplateResponse", "deleted"),
+            ("DeleteSandboxResponse", "deleted"),
+            ("DeleteServiceResponse", "deleted"),
+            ("DeleteProviderResponse", "deleted"),
+            ("DeleteProviderRefreshResponse", "deleted"),
+            ("DeleteProviderProfileResponse", "deleted"),
+            ("DeleteWorkspaceResponse", "deleted"),
+            ("RemoveWorkspaceMemberResponse", "removed"),
+            ("RevokeSshSessionResponse", "revoked"),
+        ] {
+            let message = public
+                .file
+                .iter()
+                .filter(|file| file.package.as_deref() == Some("openshell.v1"))
+                .flat_map(|file| &file.message_type)
+                .find(|message| message.name.as_deref() == Some(name))
+                .unwrap();
+            assert!(message.reserved_name.iter().any(|name| name == legacy));
+            assert!(
+                message
+                    .reserved_range
+                    .iter()
+                    .any(|range| range.start == Some(1) && range.end == Some(2))
+            );
+            let outcome = message
+                .field
+                .iter()
+                .find(|field| field.name.as_deref() == Some("outcome"))
+                .unwrap();
+            assert_eq!(outcome.number, Some(2));
+            assert_eq!(
+                outcome.type_name.as_deref(),
+                Some(".openshell.v1.DeletionOutcome")
+            );
+        }
+        let legacy = openshell_core::proto::DeleteSandboxResponse::decode(&[8, 1][..]).unwrap();
+        assert_eq!(legacy.outcome, 0);
+        let unknown = openshell_core::proto::DeleteSandboxResponse::decode(&[16, 99][..]).unwrap();
+        assert_eq!(unknown.outcome, 99);
+    }
+
+    #[test]
     fn public_and_durable_schema_inventories_are_complete() {
         let public = FileDescriptorSet::decode(openshell_core::FILE_DESCRIPTOR_SET)
             .expect("public descriptor set must decode");
@@ -447,19 +505,34 @@ mod tests {
             }
         }
         methods.sort();
-        assert_eq!(compiled_method_count, 100, "classify every compiled RPC");
-        assert_eq!(methods.len(), 74, "inventory every public gateway RPC");
+        for signature in PROVIDER_READINESS_RPC_SIGNATURES {
+            assert!(
+                methods.iter().any(|method| method == signature),
+                "provider readiness RPC is missing or changed: {signature}"
+            );
+        }
+        assert_eq!(
+            compiled_method_count,
+            102 + PROVIDER_READINESS_RPC_SIGNATURES.len(),
+            "classify every compiled RPC"
+        );
+        assert_eq!(
+            methods.len(),
+            76 + PROVIDER_READINESS_RPC_SIGNATURES.len(),
+            "inventory every public gateway RPC"
+        );
         assert_eq!(
             methods
                 .iter()
                 .filter(|method| method.starts_with("openshell.v1.OpenShell/"))
                 .count(),
-            74
+            76 + PROVIDER_READINESS_RPC_SIGNATURES.len()
         );
         assert!(methods.iter().all(|method| !method.contains(".storage.")));
 
         let public_closure = schema_closure(&index, public_roots);
-        let durable_closure = schema_closure(&index, DURABLE_ROOTS.into_iter().map(str::to_string));
+        let durable_closure =
+            schema_closure(&index, DURABLE_ROOTS.iter().copied().map(str::to_string));
         let overlap_messages = public_closure
             .messages
             .intersection(&durable_closure.messages)
@@ -485,32 +558,84 @@ mod tests {
         let durable_inventory_hash = schema_fingerprint(&index, &durable_closure);
         let overlap_hash = format!("{:x}", Sha256::digest(overlap_inventory.as_bytes()));
 
+        // Report the complete measured inventory on failure so one schema
+        // change exposes every affected boundary in the same focused run.
         assert_eq!(
-            (public_closure.messages.len(), public_closure.enums.len()),
-            (278, 12)
+            (
+                (public_closure.messages.len(), public_closure.enums.len()),
+                (durable_closure.messages.len(), durable_closure.enums.len()),
+                (overlap_messages.len(), overlap_enums.len()),
+                public_inventory_hash.as_str(),
+                durable_inventory_hash.as_str(),
+                overlap_hash.as_str(),
+            ),
+            (
+                (299, 21),
+                (92, 16),
+                (80, 16),
+                PUBLIC_RPC_SCHEMA_SHA256,
+                DURABLE_SCHEMA_SHA256,
+                PUBLIC_DURABLE_OVERLAP_SHA256
+            ),
+            "the public/durable schema inventory changed; review API and storage ownership, preserve prior-payload decoding, and update the reviewed fingerprints"
         );
-        assert_eq!(
-            (durable_closure.messages.len(), durable_closure.enums.len()),
-            (81, 8)
-        );
-        assert_eq!((overlap_messages.len(), overlap_enums.len()), (71, 8));
+    }
 
-        assert_eq!(
-            public_inventory_hash, PUBLIC_RPC_SCHEMA_SHA256,
-            "the public RPC schema closure changed; review API compatibility and update the inventory and architecture/gateway.md"
-        );
-        assert_eq!(
-            durable_inventory_hash, DURABLE_SCHEMA_SHA256,
-            "a durable protobuf root or transitive dependency changed; record migration handling and a prior-version fixture before updating this fingerprint"
-        );
-        assert_eq!(
-            overlap_hash, PUBLIC_DURABLE_OVERLAP_SHA256,
-            "the public/durable protobuf overlap changed; review both API and storage compatibility before updating this inventory"
-        );
+    #[test]
+    fn pre_readiness_sandbox_spec_decodes_with_initial_attachment_epoch() {
+        let spec = openshell_core::proto::SandboxSpec::decode(
+            legacy_bytes(PRE_READINESS_SANDBOX_SPEC).as_slice(),
+        )
+        .expect("prior sandbox spec must decode");
+        assert_eq!(spec.log_level, "info");
+        assert_eq!(spec.providers, ["synthetic-provider"]);
+        assert_eq!(spec.command, ["echo"]);
+        assert!(spec.provider_attachment_epoch.is_empty());
+    }
+
+    #[test]
+    fn pre_admission_sandbox_bytes_preserve_legacy_status() {
+        use openshell_core::proto::{Sandbox, SandboxPhase};
+        // Synthetic Sandbox encoded with main 0357daee, before admission fields.
+        let bytes =
+            legacy_bytes("0a180a096c65676163792d6964120b6c65676163792d6e616d651a0430023807");
+        let sandbox = Sandbox::decode(bytes.as_slice()).unwrap();
+        let status = sandbox.status.as_ref().unwrap();
+        assert_eq!(status.phase, SandboxPhase::Ready as i32);
+        assert_eq!(status.current_policy_version, 7);
+        assert!(status.configuration_admission.is_none());
+        assert_eq!(status.configuration_activated, None);
+        assert!(status.provisioning.is_none());
+        assert!(!crate::policy_store::permits_initial_static_policy_repair(
+            &sandbox
+        ));
+        assert_eq!(sandbox.encode_to_vec(), bytes);
     }
 
     fn legacy_bytes(encoded: &str) -> Vec<u8> {
         hex::decode(encoded).expect("checked-in legacy fixture must be valid hex")
+    }
+
+    #[test]
+    fn sandbox_payload_without_endpoint_status_decodes() {
+        use openshell_core::proto::{Sandbox, SandboxPhase};
+
+        let sandbox = Sandbox::decode(legacy_bytes(SANDBOX_WITHOUT_ENDPOINT_STATUS).as_slice())
+            .expect("stored sandbox without endpoint status must decode");
+        let metadata = sandbox.metadata.expect("sandbox metadata");
+        assert_eq!(metadata.id, "sandbox-id");
+        assert_eq!(metadata.name, "sandbox");
+        assert_eq!(metadata.workspace, "default");
+        let status = sandbox.status.expect("sandbox status");
+        assert_eq!(status.sandbox_name, "sandbox");
+        assert_eq!(status.phase(), SandboxPhase::Ready);
+        assert_eq!(status.current_policy_version, 7);
+        assert_eq!(status.main_process_instance_id, "supervisor-id");
+        assert_eq!(status.exit_code, None);
+        assert_eq!(status.conditions.len(), 1);
+        assert_eq!(status.conditions[0].r#type, "Ready");
+        assert_eq!(status.conditions[0].status, "True");
+        assert!(status.endpoint_statuses.is_empty());
     }
 
     #[test]
@@ -668,7 +793,7 @@ mod tests {
         }
 
         let refresh = current_store
-            .get_message::<StoredProviderCredentialRefreshState>("legacy-id")
+            .get_message::<StoredProviderCredentialRefreshStateV2>("legacy-id")
             .await
             .expect("decode refresh fixture")
             .expect("refresh fixture must remain present");

@@ -40,6 +40,11 @@ e2e-provider-refresh-keycloak = []
 e2e-vm = ["e2e", "e2e-host-gateway"]
 
 [[test]]
+name = "policy_activation"
+path = "tests/policy_activation.rs"
+required-features = ["e2e-docker"]
+
+[[test]]
 name = "oidc_pkce"
 path = "tests/oidc_pkce.rs"
 required-features = ["e2e-oidc-pkce"]
@@ -108,6 +113,11 @@ required-features = ["e2e-podman"]
 name = "provider_refresh_handles"
 path = "tests/provider_refresh_handles.rs"
 required-features = ["e2e-podman"]
+
+[[test]]
+name = "provider_readiness"
+path = "tests/provider_readiness.rs"
+required-features = ["e2e-docker"]
 
 [[test]]
 name = "vm_gateway_start"
@@ -252,3 +262,7 @@ module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+[[test]]
+name = "live_internet_traffic_perf"
+path = "tests/live_internet_traffic_perf.rs"
+required-features = ["e2e-host-gateway"]
