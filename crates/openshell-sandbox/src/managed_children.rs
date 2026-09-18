@@ -29,7 +29,7 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 /// removing a newer child that reused the same numeric PID after reap.
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
-pub struct ManagedChildRegistration {
+struct ManagedChildRegistration {
     pid: i32,
     generation: u64,
 }
@@ -42,12 +42,12 @@ pub struct ManagedChildRegistration {
 /// otherwise unavoidable window in which a fast-exiting managed child exists
 /// but its PID has not yet been published.
 #[cfg(target_os = "linux")]
-pub struct RegistryGuard(MutexGuard<'static, HashMap<i32, u64>>);
+struct RegistryGuard(MutexGuard<'static, HashMap<i32, u64>>);
 
 #[cfg(target_os = "linux")]
 impl RegistryGuard {
     /// Add a newly spawned managed child.
-    pub fn register(&mut self, pid: u32) -> Option<ManagedChildRegistration> {
+    fn register(&mut self, pid: u32) -> Option<ManagedChildRegistration> {
         let Ok(pid) = i32::try_from(pid) else {
             return None;
         };
@@ -61,7 +61,7 @@ impl RegistryGuard {
 
     /// Return whether the PID belongs to an explicit waiter.
     #[must_use]
-    pub fn contains(&self, pid: i32) -> bool {
+    fn contains(&self, pid: i32) -> bool {
         self.0.contains_key(&pid)
     }
 }
@@ -69,7 +69,7 @@ impl RegistryGuard {
 /// Lock the registry for an atomic spawn-and-register or inspect-and-reap
 /// operation.
 #[cfg(target_os = "linux")]
-pub fn lock() -> RegistryGuard {
+fn lock() -> RegistryGuard {
     RegistryGuard(
         MANAGED_CHILDREN
             .lock()
@@ -77,16 +77,10 @@ pub fn lock() -> RegistryGuard {
     )
 }
 
-/// Register a child and return the generation-bearing removal token.
-#[cfg(target_os = "linux")]
-pub fn register(pid: u32) -> Option<ManagedChildRegistration> {
-    lock().register(pid)
-}
-
 /// Remove exactly this supervised-child registration. A newer registration
 /// for a reused PID is preserved.
 #[cfg(target_os = "linux")]
-pub fn unregister(child: ManagedChildRegistration) {
+fn unregister(child: ManagedChildRegistration) {
     if let Ok(mut children) = MANAGED_CHILDREN.lock()
         && children.get(&child.pid) == Some(&child.generation)
     {
@@ -95,9 +89,9 @@ pub fn unregister(child: ManagedChildRegistration) {
 }
 
 /// Return `true` if `pid` is currently in the supervised-child set.
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 #[must_use]
-pub fn is_managed(pid: i32) -> bool {
+fn is_managed(pid: i32) -> bool {
     lock().contains(pid)
 }
 
@@ -112,7 +106,7 @@ fn valid_pid(pid: Option<u32>) -> Option<u32> {
 /// insertion, so the orphan reaper cannot consume a fast child's status
 /// between those operations. Other platforms retain the same ownership API
 /// without enabling Linux-only reaper bookkeeping.
-pub struct ManagedChild<C> {
+pub(crate) struct ManagedChild<C> {
     child: C,
     pid: Option<u32>,
     #[cfg(target_os = "linux")]
@@ -121,7 +115,7 @@ pub struct ManagedChild<C> {
 
 impl<C> ManagedChild<C> {
     /// Spawn a child and register its PID before returning it.
-    pub fn spawn<E>(
+    pub(crate) fn spawn<E>(
         spawn: impl FnOnce() -> Result<C, E>,
         pid: impl FnOnce(&C) -> Option<u32>,
     ) -> Result<Self, E> {
@@ -148,7 +142,7 @@ impl<C> ManagedChild<C> {
 
     /// Return the child's PID when it was available at spawn time.
     #[must_use]
-    pub const fn id(&self) -> Option<u32> {
+    pub(crate) const fn id(&self) -> Option<u32> {
         self.pid
     }
 
@@ -179,7 +173,7 @@ fn log_wait_error(pid: Option<u32>, error: &std::io::Error) {
 
 impl ManagedChild<tokio::process::Child> {
     /// Wait for a Tokio child and release its managed PID.
-    pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+    pub(crate) async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         let status = self.child.wait().await;
         if let Err(error) = &status {
             log_wait_error(self.pid, error);
@@ -189,7 +183,7 @@ impl ManagedChild<tokio::process::Child> {
     }
 
     /// Observe a Tokio child without blocking.
-    pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+    pub(crate) fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self.child.try_wait() {
             Ok(status) => {
                 if status.is_some() {
@@ -206,24 +200,24 @@ impl ManagedChild<tokio::process::Child> {
     }
 
     /// Take the child's stdin handle without exposing the child itself.
-    pub fn take_stdin(&mut self) -> Option<tokio::process::ChildStdin> {
+    pub(crate) fn take_stdin(&mut self) -> Option<tokio::process::ChildStdin> {
         self.child.stdin.take()
     }
 
     /// Take the child's stdout handle without exposing the child itself.
-    pub fn take_stdout(&mut self) -> Option<tokio::process::ChildStdout> {
+    pub(crate) fn take_stdout(&mut self) -> Option<tokio::process::ChildStdout> {
         self.child.stdout.take()
     }
 
     /// Take the child's stderr handle without exposing the child itself.
-    pub fn take_stderr(&mut self) -> Option<tokio::process::ChildStderr> {
+    pub(crate) fn take_stderr(&mut self) -> Option<tokio::process::ChildStderr> {
         self.child.stderr.take()
     }
 }
 
 impl ManagedChild<std::process::Child> {
     /// Wait for a standard-library child and release its managed PID.
-    pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+    pub(crate) fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         let status = self.child.wait();
         if let Err(error) = &status {
             log_wait_error(self.pid, error);
@@ -233,17 +227,17 @@ impl ManagedChild<std::process::Child> {
     }
 
     /// Take the child's stdin handle without exposing the child itself.
-    pub fn take_stdin(&mut self) -> Option<std::process::ChildStdin> {
+    pub(crate) fn take_stdin(&mut self) -> Option<std::process::ChildStdin> {
         self.child.stdin.take()
     }
 
     /// Take the child's stdout handle without exposing the child itself.
-    pub fn take_stdout(&mut self) -> Option<std::process::ChildStdout> {
+    pub(crate) fn take_stdout(&mut self) -> Option<std::process::ChildStdout> {
         self.child.stdout.take()
     }
 
     /// Take the child's stderr handle without exposing the child itself.
-    pub fn take_stderr(&mut self) -> Option<std::process::ChildStderr> {
+    pub(crate) fn take_stderr(&mut self) -> Option<std::process::ChildStderr> {
         self.child.stderr.take()
     }
 }
@@ -253,7 +247,7 @@ impl ManagedChild<std::process::Child> {
 /// Keeping the child as a zombie prevents PID/process-group reuse until the
 /// owner publishes terminal state and performs the final wait.
 #[cfg(target_os = "linux")]
-pub fn wait_until_terminal(pid: u32) -> io::Result<()> {
+pub(crate) fn wait_until_terminal(pid: u32) -> io::Result<()> {
     use nix::sys::wait::{Id, WaitPidFlag, waitid};
     let pid = i32::try_from(pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "PID out of range"))?;
@@ -270,7 +264,7 @@ pub fn wait_until_terminal(pid: u32) -> io::Result<()> {
 /// Explicitly managed children remain owned by their normal waiters. Only
 /// unregistered children adopted from the workload process tree are reaped.
 #[cfg(target_os = "linux")]
-pub fn start_orphan_reaper() -> io::Result<()> {
+pub(crate) fn start_orphan_reaper() -> io::Result<()> {
     std::thread::Builder::new()
         .name("openshell-orphan-reaper".to_string())
         .spawn(|| {
