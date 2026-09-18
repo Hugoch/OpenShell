@@ -786,8 +786,14 @@ gateway that owns a session and forward the same typed message without changing
 mutation handlers.
 
 Current supervisors establish the stream before gateway-owned runtime
-initialization, apply bootstrap and live snapshots directly, and persist only
-compact component observations from their results. Previous-revision
+initialization. The initial hello may offer an image policy. The gateway
+selects the gateway policy when present, otherwise the image policy, and sends
+that policy back for image-specific preparation on the same stream. It
+validates and persists any prepared proposal before accepting the session.
+`SessionAccepted` then carries the only startup state used to initialize the
+runtime. Reconnects skip preparation and receive the current gateway bootstrap
+directly. Supervisors apply later snapshots on the accepted stream and persist
+only compact component observations from their results. Previous-revision
 supervisors retain polling as a rollout fallback, and owner reconciliation
 repairs missed or failed delivery from current database state. Snapshot build,
 fanout, or enqueue failure cannot fail a mutation that already committed.

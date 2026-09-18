@@ -3571,6 +3571,28 @@ pub(super) async fn handle_update_config(
     result
 }
 
+/// Persist a policy prepared by the authenticated supervisor during its
+/// startup handshake. Reuse the normal sandbox policy mutation path so the
+/// proposal receives the same authorization, diff, safety, and composition
+/// checks as a unary `UpdateConfig` request.
+pub async fn persist_supervisor_startup_policy(
+    state: &Arc<ServerState>,
+    principal: Principal,
+    sandbox: &Sandbox,
+    policy: ProtoSandboxPolicy,
+) -> Result<(), Status> {
+    let mut request = Request::new(UpdateConfigRequest {
+        name: sandbox.object_name().to_string(),
+        policy: Some(policy),
+        workspace_scope: Some(openshell_core::proto::workspace_selector(
+            sandbox.object_workspace(),
+        )),
+        ..UpdateConfigRequest::default()
+    });
+    request.extensions_mut().insert(principal);
+    handle_update_config(state, request).await.map(|_| ())
+}
+
 async fn handle_update_config_inner(
     state: &Arc<ServerState>,
     request: Request<UpdateConfigRequest>,

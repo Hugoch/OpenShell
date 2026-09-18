@@ -621,6 +621,8 @@ pub async fn run_sandbox(
     let sandbox_bearer = openshell_core::grpc_client::install_supervisor_auth_bundle(&auth_bundle)?;
 
     let supervisor_instance_id = uuid::Uuid::new_v4().to_string();
+    let image_policy = (policy_rules.is_none() && policy_data.is_none())
+        .then(discover_policy_from_disk_or_default);
     let mut prepared_supervisor_session =
         if let (Some(endpoint), Some(id)) = (&openshell_endpoint, &sandbox_id) {
             Some(
@@ -628,6 +630,11 @@ pub async fn run_sandbox(
                     endpoint.clone(),
                     id.clone(),
                     supervisor_instance_id.clone(),
+                    image_policy,
+                    |mut policy| {
+                        let enriched = enrich_proto_baseline_paths(&mut policy);
+                        Ok(proto_sync_payload_for_enriched_policy(&policy, enriched))
+                    },
                 )
                 .await
                 .map_err(|error| {
@@ -637,89 +644,13 @@ pub async fn run_sandbox(
         } else {
             None
         };
-    let mut stream_bootstrap = prepared_supervisor_session.as_mut().and_then(
+    let stream_bootstrap = prepared_supervisor_session.as_mut().and_then(
         openshell_supervisor_process::supervisor_session::PreparedSupervisorSession::take_bootstrap,
     );
     let uses_stream_configuration = prepared_supervisor_session.as_ref().is_some_and(
         openshell_supervisor_process::supervisor_session::PreparedSupervisorSession::uses_stream_configuration,
     );
 
-    // Policy discovery and baseline enrichment mutate gateway state. Commit
-    // that repair before initialization, then reopen the stream so startup
-    // uses only a fresh authoritative bootstrap.
-    let initial_policy_repair =
-        if uses_stream_configuration && policy_rules.is_none() && policy_data.is_none() {
-            stream_bootstrap
-                .as_ref()
-                .and_then(|bootstrap| bootstrap.sandbox_config.as_ref())
-                .and_then(|snapshot| {
-                    snapshot.policy.clone().map_or_else(
-                        || {
-                            let mut discovered = discover_policy_from_disk_or_default();
-                            enrich_proto_baseline_paths(&mut discovered);
-                            strip_proto_provider_policy_entries(&mut discovered);
-                            Some(discovered)
-                        },
-                        |mut policy| {
-                            let enriched = enrich_proto_baseline_paths(&mut policy);
-                            proto_sync_payload_for_enriched_policy(&policy, enriched)
-                        },
-                    )
-                })
-        } else {
-            None
-        };
-    if let Some(initial_policy_repair) = initial_policy_repair {
-        let endpoint = openshell_endpoint.as_deref().ok_or_else(|| {
-            miette::miette!("gateway-backed policy discovery requires an OpenShell endpoint")
-        })?;
-        let id = sandbox_id.as_deref().ok_or_else(|| {
-            miette::miette!("gateway-backed policy discovery requires a sandbox ID")
-        })?;
-        let sandbox_name = sandbox.as_deref().ok_or_else(|| {
-            miette::miette!("gateway-backed policy discovery requires a sandbox name")
-        })?;
-        let workspace = stream_bootstrap
-            .as_ref()
-            .and_then(|bootstrap| bootstrap.sandbox_config.as_ref())
-            .map(|snapshot| snapshot.workspace.clone())
-            .ok_or_else(|| {
-                miette::miette!("supervisor bootstrap omitted required sandbox configuration")
-            })?;
-        grpc_retry("Initial policy bootstrap repair", || {
-            let initial_policy_repair = initial_policy_repair.clone();
-            let workspace = workspace.clone();
-            async move {
-                openshell_core::grpc_client::sync_policy_and_fetch_snapshot(
-                    endpoint,
-                    id,
-                    sandbox_name,
-                    &initial_policy_repair,
-                    &workspace,
-                )
-                .await
-                .map(|_| ())
-            }
-        })
-        .await?;
-
-        prepared_supervisor_session = Some(
-            openshell_supervisor_process::supervisor_session::prepare(
-                endpoint.to_string(),
-                id.to_string(),
-                supervisor_instance_id.clone(),
-            )
-            .await
-            .map_err(|error| {
-                miette::miette!(
-                    "failed to reestablish supervisor session after policy bootstrap repair: {error}"
-                )
-            })?,
-        );
-        stream_bootstrap = prepared_supervisor_session.as_mut().and_then(
-            openshell_supervisor_process::supervisor_session::PreparedSupervisorSession::take_bootstrap,
-        );
-    }
     if stream_bootstrap
         .as_ref()
         .is_some_and(|bootstrap| bootstrap.sandbox_config.is_none())

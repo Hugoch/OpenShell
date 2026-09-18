@@ -609,16 +609,45 @@ quickly.
 The gateway and supervisor must implement the same internal supervisor protocol
 revision. Peers built before the handshake existed report revision zero and are
 accepted for one release with a warning and a counter, because sandboxes keep
-their supervisor binary until they are recreated. The gateway includes a configuration bootstrap when it accepts a
-`ConnectSupervisor` session and can send complete component replacements on the
-same stream after policy, settings, or provider state changes.
-While polling remains authoritative, optional bootstrap construction has a
-one-second budget. The gateway accepts the session without a bootstrap when
-that budget expires, so slow credential backends do not block relay reconnects.
-These payloads describe the latest effective state rather than
-the mutation that produced it. The gateway assigns ordering sequences within
-each session and component, while each snapshot retains its own content
-revision.
+their supervisor binary until they are recreated.
+
+On the initial `ConnectSupervisor` stream, `SupervisorHello` carries the policy
+found in the workload image. A gateway policy takes precedence when one exists.
+The gateway sends its selected full policy as `StartupConfigCandidate`, and the
+supervisor prepares that candidate against paths present in the local image. It
+returns either `unchanged`, a complete prepared policy, or a bounded failure.
+The gateway validates and persists any proposed change through the normal
+sandbox policy update path. Only then does it send `SessionAccepted` with a
+fresh, complete configuration bootstrap. The supervisor initializes runtime
+state from that bootstrap, never from the candidate or preparation response.
+Reconnects omit the image policy and receive the current authoritative
+bootstrap directly.
+
+```mermaid
+sequenceDiagram
+    participant SUP as Supervisor
+    participant GW as Gateway
+    participant DB as Gateway store
+
+    SUP->>GW: SupervisorHello(image_policy)
+    GW->>DB: Read current policy
+    Note right of GW: Gateway policy wins, otherwise it uses the image policy
+    GW->>SUP: StartupConfigCandidate(policy, candidate_id)
+    SUP->>SUP: Enrich for paths in this image
+    SUP->>GW: StartupConfigPrepared(unchanged | prepared_policy | failure)
+    GW->>GW: Validate the proposed difference
+    GW->>DB: Persist when required
+    GW->>DB: Build fresh authoritative bootstrap
+    GW->>SUP: SessionAccepted(bootstrap)
+    SUP->>SUP: Initialize from bootstrap
+    SUP->>GW: ConfigBootstrapResult
+```
+
+The gateway can send complete component replacements on the accepted stream
+after policy, settings, or provider state changes. These payloads describe the
+latest effective state rather than the mutation that produced it. The gateway
+assigns ordering sequences within each session and component, while each
+snapshot retains its own content revision.
 
 Bootstrap components are independent read projections, not one atomic database
 snapshot. The sandbox configuration carries the provider-environment revision
@@ -661,12 +690,10 @@ If policy construction fails, it reports the captured revision as `FAILED` with
 the original construction error. It never infers revision identity by comparing
 policy structure.
 
-This holds even when the initial policy is enriched with baseline paths during
-startup: the enriched revision the supervisor synced back to the gateway is the
-revision it acknowledges, so a successfully constructed initial policy never
-remains `Pending`. If the first poll returns a different revision, the supervisor
-processes it through the normal reload path instead of treating it as already
-loaded.
+This holds when the initial policy is enriched with baseline paths during the
+startup stream exchange. The gateway validates and persists the prepared
+policy before building `SessionAccepted`, so the supervisor acknowledges the
+exact revision from the final bootstrap.
 
 A newer sandbox-scoped revision can carry the same non-empty effective policy
 hash as the currently loaded revision, for example when provenance changes

@@ -22,7 +22,7 @@ Gateway CLI flag  >  gateway OPENSHELL_* env var  >  TOML file  >  built-in defa
 
 ## Supervisor connections and policy recovery
 
-During supervisor reconnects, the gateway waits at most one second for the optional configuration bootstrap. If a credential backend stalls, the gateway accepts the session without that bootstrap so SSH, exec, and service connections can resume. Supervisor polling continues to supply configuration.
+The first supervisor connection offers the policy found in the sandbox image. A policy already stored by the gateway takes precedence. The gateway sends the selected policy back on the same stream for image-specific filesystem preparation, validates and persists any proposed change, then accepts the session with a fresh authoritative configuration bootstrap. A preparation or bootstrap failure rejects the session before runtime initialization. Reconnects skip image-policy preparation and receive the current gateway bootstrap directly.
 
 On startup, the gateway repairs missing legacy policy history and skips invalid stored policies. A valid global policy can still override an invalid local policy; otherwise, that sandbox's configuration reads continue to report the validation failure.
 

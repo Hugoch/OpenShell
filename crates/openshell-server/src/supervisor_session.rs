@@ -21,8 +21,9 @@ use openshell_core::proto::{
     ConfigApplyOutcome, ConfigBootstrap, ConfigComponent, ConfigComponentApplyResult,
     ConfigSnapshotRevision, ConfigUpdate, ConfigUpdateResult, GatewayMessage, PolicySource,
     RelayFrame, RelayInit, RelayOpen, ReportMainProcessExitRequest, ReportMainProcessExitResponse,
-    Sandbox, SandboxPhase, SessionAccepted, SshRelayTarget, SupervisorMessage,
-    config_snapshot_revision, config_update, gateway_message, relay_open, supervisor_message,
+    Sandbox, SandboxPhase, SessionAccepted, SessionRejected, SshRelayTarget,
+    StartupConfigCandidate, SupervisorMessage, config_snapshot_revision, config_update,
+    gateway_message, relay_open, startup_config_prepared, supervisor_message,
 };
 use openshell_core::proto::{
     LEGACY_SUPERVISOR_PROTOCOL_REVISION, PREVIOUS_SUPERVISOR_PROTOCOL_REVISION,
@@ -1194,6 +1195,190 @@ fn expected_transport_close_during_session_state(
 // ConnectSupervisor gRPC handler
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
+async fn accept_supervisor_session(
+    state: Arc<ServerState>,
+    sandbox_id: String,
+    instance_id: String,
+    protocol_revision: u32,
+    stream_applies_config: bool,
+    bootstrap: Option<ConfigBootstrap>,
+    outbound_tx: mpsc::Sender<GatewayMessage>,
+    mut inbound: tonic::Streaming<SupervisorMessage>,
+) -> Result<(), Status> {
+    let expected_bootstrap_revisions = bootstrap
+        .as_ref()
+        .map(bootstrap_revision_fence)
+        .unwrap_or_default();
+    let session_id = Uuid::new_v4().to_string();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    // Keep the session unroutable to the response stream until every fallible
+    // acceptance step completes. Registry traffic can safely queue here while
+    // endpoint-status authority is initialized; the forwarder starts only
+    // after SessionAccepted has been queued on the public stream.
+    let (session_tx, mut session_rx) = mpsc::channel::<GatewayMessage>(64);
+    let mut accepted = GatewayMessage {
+        payload: Some(gateway_message::Payload::SessionAccepted(SessionAccepted {
+            session_id: session_id.clone(),
+            bootstrap,
+            protocol_revision,
+            heartbeat_interval: openshell_core::time::duration_from_std(Duration::from_secs(
+                u64::from(HEARTBEAT_INTERVAL_SECS),
+            ))
+            .ok(),
+        })),
+    };
+    if accepted.encoded_len() > MAX_SUPERVISOR_CONFIG_MESSAGE_BYTES {
+        counter!(
+            "openshell_supervisor_config_bootstrap_total",
+            "outcome" => "payload_too_large"
+        )
+        .increment(1);
+        if stream_applies_config {
+            return Err(Status::resource_exhausted(
+                "supervisor configuration bootstrap exceeds the stream message limit",
+            ));
+        }
+        let Some(gateway_message::Payload::SessionAccepted(accepted_payload)) =
+            accepted.payload.as_mut()
+        else {
+            unreachable!("constructed SessionAccepted payload")
+        };
+        accepted_payload.bootstrap = None;
+    }
+    let superseded = state.supervisor_sessions.register(
+        sandbox_id.clone(),
+        session_id.clone(),
+        session_tx.clone(),
+        shutdown_tx,
+    );
+    if superseded {
+        info!(
+            sandbox_id = %sandbox_id,
+            session_id = %session_id,
+            "supervisor session: superseded previous session"
+        );
+    }
+
+    if let Err(error) = crate::grpc::policy::reset_endpoint_status_for_supervisor_session(
+        &state,
+        &sandbox_id,
+        &session_id,
+    )
+    .await
+    {
+        state
+            .supervisor_sessions
+            .remove_if_current(&sandbox_id, &session_id);
+        return Err(error);
+    }
+    if !state
+        .supervisor_sessions
+        .initialize_endpoint_status_authority(&sandbox_id, &session_id)
+    {
+        state
+            .supervisor_sessions
+            .remove_if_current(&sandbox_id, &session_id);
+        return Err(Status::failed_precondition(
+            "supervisor session was replaced during endpoint status initialization",
+        ));
+    }
+
+    if !stream_applies_config
+        && !mark_supervisor_initialized(&state, &sandbox_id, &session_id, &instance_id).await
+    {
+        state
+            .supervisor_sessions
+            .remove_if_current(&sandbox_id, &session_id);
+        return Err(Status::aborted(
+            "failed to persist supervisor session state; reconnect",
+        ));
+    }
+
+    if outbound_tx.send(accepted).await.is_err() {
+        state
+            .supervisor_sessions
+            .remove_if_current(&sandbox_id, &session_id);
+        return Err(Status::internal("failed to send session accepted"));
+    }
+    info!(
+        sandbox_id = %sandbox_id,
+        session_id = %session_id,
+        instance_id = %instance_id,
+        "supervisor session: accepted"
+    );
+
+    let public_tx = outbound_tx.clone();
+    tokio::spawn(async move {
+        while let Some(message) = session_rx.recv().await {
+            if public_tx.send(message).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    if superseded {
+        state
+            .supervisor_sessions
+            .replay_pending_relays(&sandbox_id, &session_tx)
+            .await;
+    }
+
+    tokio::spawn(async move {
+        run_session_loop(
+            &state,
+            &sandbox_id,
+            &session_id,
+            &instance_id,
+            stream_applies_config,
+            &expected_bootstrap_revisions,
+            &session_tx,
+            &mut inbound,
+            shutdown_rx,
+        )
+        .await;
+        let terminal_finalized = state
+            .supervisor_sessions
+            .remove_if_current(&sandbox_id, &session_id);
+        if let Some(terminal_finalized) = terminal_finalized {
+            info!(sandbox_id = %sandbox_id, session_id = %session_id, "supervisor session: ended");
+            state.telemetry.sandbox_session_disconnected(&sandbox_id);
+            tokio::spawn(
+                crate::grpc::policy::retry_endpoint_status_after_supervisor_disconnect(
+                    Arc::clone(&state),
+                    sandbox_id.clone(),
+                ),
+            );
+            if let Err(err) = state
+                .compute
+                .supervisor_session_disconnected(&sandbox_id, terminal_finalized)
+                .await
+            {
+                warn!(
+                    sandbox_id = %sandbox_id,
+                    session_id = %session_id,
+                    error = %err,
+                    "supervisor session: failed to mark sandbox disconnected"
+                );
+            }
+        } else {
+            info!(sandbox_id = %sandbox_id, session_id = %session_id, "supervisor session: ended (already superseded)");
+        }
+    });
+
+    Ok(())
+}
+
+async fn reject_startup_session(tx: &mpsc::Sender<GatewayMessage>, error: &Status) {
+    let _ = tx
+        .send(GatewayMessage {
+            payload: Some(gateway_message::Payload::SessionRejected(SessionRejected {
+                reason: error.message().chars().take(1024).collect(),
+            })),
+        })
+        .await;
+}
+
 pub async fn handle_connect_supervisor(
     state: &Arc<ServerState>,
     request: Request<tonic::Streaming<SupervisorMessage>>,
@@ -1260,159 +1445,152 @@ pub async fn handle_connect_supervisor(
                 None
             }
         };
-    let expected_bootstrap_revisions = bootstrap
-        .as_ref()
-        .map(bootstrap_revision_fence)
-        .unwrap_or_default();
-
-    let session_id = Uuid::new_v4().to_string();
-    info!(
-        sandbox_id = %sandbox_id,
-        session_id = %session_id,
-        instance_id = %hello.instance_id,
-        "supervisor session: accepted"
-    );
-
-    // Step 2: Queue SessionAccepted before the session becomes routable. This
-    // keeps a concurrent ConfigUpdate from becoming the first stream message.
     let (tx, rx) = mpsc::channel::<GatewayMessage>(64);
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let mut accepted = GatewayMessage {
-        payload: Some(gateway_message::Payload::SessionAccepted(SessionAccepted {
-            session_id: session_id.clone(),
-            bootstrap,
-            protocol_revision: hello.protocol_revision,
-            heartbeat_interval: openshell_core::time::duration_from_std(Duration::from_secs(
-                u64::from(HEARTBEAT_INTERVAL_SECS),
-            ))
-            .ok(),
-        })),
-    };
-    if accepted.encoded_len() > MAX_SUPERVISOR_CONFIG_MESSAGE_BYTES {
-        counter!(
-            "openshell_supervisor_config_bootstrap_total",
-            "outcome" => "payload_too_large"
-        )
-        .increment(1);
-        if stream_applies_config {
+    let gateway_snapshot = bootstrap
+        .as_ref()
+        .and_then(|bootstrap| bootstrap.sandbox_config.as_ref());
+    let gateway_policy = gateway_snapshot.and_then(|snapshot| snapshot.policy.clone());
+    let gateway_has_policy = gateway_policy.is_some();
+
+    if stream_applies_config && hello.image_policy.is_some() {
+        let policy = gateway_policy
+            .or(hello.image_policy)
+            .ok_or_else(|| Status::failed_precondition("startup policy candidate is missing"))?;
+        let (policy_hash, policy_source, policy_version) = if gateway_has_policy {
+            let snapshot = gateway_snapshot.expect("gateway policy came from sandbox snapshot");
+            (
+                snapshot.policy_hash.clone(),
+                snapshot.policy_source,
+                snapshot.version,
+            )
+        } else {
+            (
+                openshell_core::policy_identity::deterministic_policy_hash(&policy),
+                PolicySource::Sandbox.into(),
+                0,
+            )
+        };
+        let candidate_id = Uuid::new_v4().to_string();
+        let candidate = GatewayMessage {
+            payload: Some(gateway_message::Payload::StartupConfigCandidate(
+                StartupConfigCandidate {
+                    candidate_id: candidate_id.clone(),
+                    policy_hash,
+                    policy_source,
+                    policy_version,
+                    policy: Some(policy.clone()),
+                },
+            )),
+        };
+        if candidate.encoded_len() > MAX_SUPERVISOR_CONFIG_MESSAGE_BYTES {
             return Err(Status::resource_exhausted(
-                "supervisor configuration bootstrap exceeds the stream message limit",
+                "startup configuration candidate exceeds the stream message limit",
             ));
         }
-        let Some(gateway_message::Payload::SessionAccepted(accepted_payload)) =
-            accepted.payload.as_mut()
-        else {
-            unreachable!("constructed SessionAccepted payload")
-        };
-        accepted_payload.bootstrap = None;
-    }
-    if tx.send(accepted).await.is_err() {
-        return Err(Status::internal("failed to send session accepted"));
-    }
+        tx.send(candidate)
+            .await
+            .map_err(|_| Status::internal("failed to send startup configuration candidate"))?;
 
-    let superseded = state.supervisor_sessions.register(
-        sandbox_id.clone(),
-        session_id.clone(),
-        tx.clone(),
-        shutdown_tx,
-    );
-    if superseded {
-        info!(
-            sandbox_id = %sandbox_id,
-            session_id = %session_id,
-            "supervisor session: superseded previous session"
-        );
-    }
-
-    // A replacement stream is a new observation authority. Reset its endpoint
-    // results before acknowledging the session so it cannot inherit evidence
-    // reported by the superseded stream.
-    if let Err(error) = crate::grpc::policy::reset_endpoint_status_for_supervisor_session(
-        state,
-        &sandbox_id,
-        &session_id,
-    )
-    .await
-    {
-        state
-            .supervisor_sessions
-            .remove_if_current(&sandbox_id, &session_id);
-        return Err(error);
-    }
-    if !state
-        .supervisor_sessions
-        .initialize_endpoint_status_authority(&sandbox_id, &session_id)
-    {
-        return Err(Status::failed_precondition(
-            "supervisor session was replaced during endpoint status initialization",
-        ));
-    }
-
-    if superseded {
-        state
-            .supervisor_sessions
-            .replay_pending_relays(&sandbox_id, &tx)
-            .await;
-    }
-
-    if !stream_applies_config
-        && !mark_supervisor_initialized(state, &sandbox_id, &session_id, &hello.instance_id).await
-    {
-        state
-            .supervisor_sessions
-            .remove_if_current(&sandbox_id, &session_id);
-        return Err(Status::aborted(
-            "failed to persist supervisor session state; reconnect",
-        ));
-    }
-
-    // Step 4: Spawn the session loop that reads inbound messages.
-    let state_clone = Arc::clone(state);
-    let sandbox_id_clone = sandbox_id.clone();
-    let instance_id = hello.instance_id.clone();
-    tokio::spawn(async move {
-        run_session_loop(
-            &state_clone,
-            &sandbox_id_clone,
-            &session_id,
-            &instance_id,
-            stream_applies_config,
-            &expected_bootstrap_revisions,
-            &tx,
-            &mut inbound,
-            shutdown_rx,
-        )
-        .await;
-        let terminal_finalized = state_clone
-            .supervisor_sessions
-            .remove_if_current(&sandbox_id_clone, &session_id);
-        if let Some(terminal_finalized) = terminal_finalized {
-            info!(sandbox_id = %sandbox_id_clone, session_id = %session_id, "supervisor session: ended");
-            state_clone
-                .telemetry
-                .sandbox_session_disconnected(&sandbox_id_clone);
-            tokio::spawn(
-                crate::grpc::policy::retry_endpoint_status_after_supervisor_disconnect(
-                    Arc::clone(&state_clone),
-                    sandbox_id_clone.clone(),
-                ),
-            );
-            if let Err(err) = state_clone
-                .compute
-                .supervisor_session_disconnected(&sandbox_id_clone, terminal_finalized)
+        let state = Arc::clone(state);
+        let tx_for_rejection = tx.clone();
+        let protocol_revision = hello.protocol_revision;
+        let instance_id = hello.instance_id;
+        tokio::spawn(async move {
+            let result = async {
+                let prepared = tokio::time::timeout(
+                    crate::config_delivery::REQUIRED_CONFIG_BOOTSTRAP_BUILD_TIMEOUT,
+                    inbound.message(),
+                )
                 .await
-            {
-                warn!(
-                    sandbox_id = %sandbox_id_clone,
-                    session_id = %session_id,
-                    error = %err,
-                    "supervisor session: failed to mark sandbox disconnected"
-                );
+                .map_err(|_| {
+                    Status::deadline_exceeded("startup configuration preparation timed out")
+                })??
+                .ok_or_else(|| {
+                    Status::aborted("supervisor disconnected during startup preparation")
+                })?;
+                let Some(supervisor_message::Payload::StartupConfigPrepared(prepared)) =
+                    prepared.payload
+                else {
+                    return Err(Status::invalid_argument("expected StartupConfigPrepared"));
+                };
+                if prepared.candidate_id != candidate_id {
+                    return Err(Status::failed_precondition(
+                        "startup configuration candidate ID does not match",
+                    ));
+                }
+
+                let policy_to_persist = match prepared.result {
+                    Some(startup_config_prepared::Result::Unchanged(())) => {
+                        (!gateway_has_policy).then_some(policy)
+                    }
+                    Some(startup_config_prepared::Result::PreparedPolicy(policy)) => Some(policy),
+                    Some(startup_config_prepared::Result::Failure(failure)) => {
+                        return Err(Status::failed_precondition(format!(
+                            "supervisor could not prepare startup policy: {}: {}",
+                            failure.code, failure.message
+                        )));
+                    }
+                    None => {
+                        return Err(Status::invalid_argument(
+                            "startup configuration result is required",
+                        ));
+                    }
+                };
+
+                if let Some(policy) = policy_to_persist {
+                    let principal = principal.clone().ok_or_else(|| {
+                        Status::unauthenticated(
+                            "startup policy preparation requires an authenticated supervisor",
+                        )
+                    })?;
+                    crate::grpc::policy::persist_supervisor_startup_policy(
+                        &state, principal, &sandbox, policy,
+                    )
+                    .await?;
+                }
+
+                let sandbox = require_persisted_sandbox(&state.store, &sandbox_id).await?;
+                let bootstrap = crate::config_delivery::build_config_bootstrap(
+                    &state,
+                    &sandbox,
+                    crate::config_delivery::REQUIRED_CONFIG_BOOTSTRAP_BUILD_TIMEOUT,
+                )
+                .await?;
+                accept_supervisor_session(
+                    state,
+                    sandbox_id.clone(),
+                    instance_id,
+                    protocol_revision,
+                    true,
+                    Some(bootstrap),
+                    tx,
+                    inbound,
+                )
+                .await
             }
-        } else {
-            info!(sandbox_id = %sandbox_id_clone, session_id = %session_id, "supervisor session: ended (already superseded)");
-        }
-    });
+            .await;
+            if let Err(error) = result {
+                warn!(
+                    sandbox_id = %sandbox_id,
+                    error_code = ?error.code(),
+                    "supervisor startup policy preparation failed"
+                );
+                reject_startup_session(&tx_for_rejection, &error).await;
+            }
+        });
+    } else {
+        accept_supervisor_session(
+            Arc::clone(state),
+            sandbox_id,
+            hello.instance_id,
+            hello.protocol_revision,
+            stream_applies_config,
+            bootstrap,
+            tx,
+            inbound,
+        )
+        .await?;
+    }
 
     // Return the outbound stream.
     let stream = ReceiverStream::new(rx);
@@ -1966,7 +2144,7 @@ mod tests {
     use crate::persistence::Store;
     use openshell_core::proto::{
         ProviderEnvironmentSnapshot, ProviderEnvironmentValue, SandboxConfigRevision,
-        SandboxConfigSnapshot,
+        SandboxConfigSnapshot, SandboxSpec, StartupConfigPrepared, startup_config_prepared,
     };
     use prost::Message;
 
@@ -2103,6 +2281,20 @@ mod tests {
             .put_message(&sandbox_record(sandbox_id, sandbox_id))
             .await
             .unwrap();
+        state
+    }
+
+    async fn state_with_startup_policy(
+        sandbox_id: &str,
+        policy: Option<openshell_core::proto::SandboxPolicy>,
+    ) -> Arc<ServerState> {
+        let state = crate::grpc::test_support::test_server_state().await;
+        let mut sandbox = sandbox_record(sandbox_id, sandbox_id);
+        sandbox.spec = Some(SandboxSpec {
+            policy,
+            ..SandboxSpec::default()
+        });
+        state.store.put_message(&sandbox).await.unwrap();
         state
     }
 
@@ -2274,6 +2466,205 @@ mod tests {
                 .supervisor_sessions
                 .is_current_session("sb-stage-one", &accepted.session_id)
         );
+    }
+
+    #[tokio::test]
+    async fn startup_candidate_prefers_gateway_policy_and_accepts_unchanged_result() {
+        let gateway_policy = openshell_policy::restrictive_default_policy();
+        let mut image_policy = gateway_policy.clone();
+        image_policy
+            .filesystem
+            .get_or_insert_default()
+            .read_only
+            .push("/image-only".into());
+        let state =
+            state_with_startup_policy("sb-startup-gateway", Some(gateway_policy.clone())).await;
+        let mut harness = crate::grpc::test_support::connect_supervisor_stream_with_image_policy(
+            &state,
+            "sb-startup-gateway",
+            SUPERVISOR_PROTOCOL_REVISION,
+            Some(image_policy),
+        )
+        .await
+        .expect("supervisor must connect");
+
+        let Some(gateway_message::Payload::StartupConfigCandidate(candidate)) =
+            first_gateway_message(&mut harness).await.payload
+        else {
+            panic!("expected StartupConfigCandidate");
+        };
+        assert_eq!(candidate.policy.as_ref(), Some(&gateway_policy));
+        harness
+            .outbound
+            .send(SupervisorMessage {
+                payload: Some(supervisor_message::Payload::StartupConfigPrepared(
+                    StartupConfigPrepared {
+                        candidate_id: candidate.candidate_id,
+                        result: Some(startup_config_prepared::Result::Unchanged(())),
+                    },
+                )),
+            })
+            .await
+            .unwrap();
+
+        let Some(gateway_message::Payload::SessionAccepted(accepted)) =
+            first_gateway_message(&mut harness).await.payload
+        else {
+            panic!("expected SessionAccepted");
+        };
+        assert_eq!(
+            accepted
+                .bootstrap
+                .and_then(|bootstrap| bootstrap.sandbox_config)
+                .and_then(|snapshot| snapshot.policy),
+            Some(gateway_policy)
+        );
+    }
+
+    #[tokio::test]
+    async fn unchanged_image_policy_is_persisted_before_session_acceptance() {
+        let image_policy = openshell_policy::restrictive_default_policy();
+        let state = state_with_startup_policy("sb-startup-image", None).await;
+        let mut harness = crate::grpc::test_support::connect_supervisor_stream_with_image_policy(
+            &state,
+            "sb-startup-image",
+            SUPERVISOR_PROTOCOL_REVISION,
+            Some(image_policy.clone()),
+        )
+        .await
+        .expect("supervisor must connect");
+
+        let Some(gateway_message::Payload::StartupConfigCandidate(candidate)) =
+            first_gateway_message(&mut harness).await.payload
+        else {
+            panic!("expected StartupConfigCandidate");
+        };
+        assert_eq!(candidate.policy.as_ref(), Some(&image_policy));
+        assert_eq!(candidate.policy_version, 0);
+        harness
+            .outbound
+            .send(SupervisorMessage {
+                payload: Some(supervisor_message::Payload::StartupConfigPrepared(
+                    StartupConfigPrepared {
+                        candidate_id: candidate.candidate_id,
+                        result: Some(startup_config_prepared::Result::Unchanged(())),
+                    },
+                )),
+            })
+            .await
+            .unwrap();
+
+        let Some(gateway_message::Payload::SessionAccepted(accepted)) =
+            first_gateway_message(&mut harness).await.payload
+        else {
+            panic!("expected SessionAccepted");
+        };
+        let snapshot = accepted
+            .bootstrap
+            .and_then(|bootstrap| bootstrap.sandbox_config)
+            .expect("authoritative sandbox snapshot");
+        assert_eq!(snapshot.policy, Some(image_policy));
+        assert_eq!(snapshot.version, 1);
+    }
+
+    #[tokio::test]
+    async fn prepared_policy_is_validated_and_returned_in_fresh_bootstrap() {
+        let image_policy = openshell_policy::restrictive_default_policy();
+        let mut prepared_policy = image_policy.clone();
+        prepared_policy
+            .filesystem
+            .get_or_insert_default()
+            .read_only
+            .push("/prepared-path".into());
+        let state = state_with_startup_policy("sb-startup-prepared", None).await;
+        let mut harness = crate::grpc::test_support::connect_supervisor_stream_with_image_policy(
+            &state,
+            "sb-startup-prepared",
+            SUPERVISOR_PROTOCOL_REVISION,
+            Some(image_policy),
+        )
+        .await
+        .expect("supervisor must connect");
+
+        let Some(gateway_message::Payload::StartupConfigCandidate(candidate)) =
+            first_gateway_message(&mut harness).await.payload
+        else {
+            panic!("expected StartupConfigCandidate");
+        };
+        harness
+            .outbound
+            .send(SupervisorMessage {
+                payload: Some(supervisor_message::Payload::StartupConfigPrepared(
+                    StartupConfigPrepared {
+                        candidate_id: candidate.candidate_id,
+                        result: Some(startup_config_prepared::Result::PreparedPolicy(
+                            prepared_policy.clone(),
+                        )),
+                    },
+                )),
+            })
+            .await
+            .unwrap();
+
+        let Some(gateway_message::Payload::SessionAccepted(accepted)) =
+            first_gateway_message(&mut harness).await.payload
+        else {
+            panic!("expected SessionAccepted");
+        };
+        assert_eq!(
+            accepted
+                .bootstrap
+                .and_then(|bootstrap| bootstrap.sandbox_config)
+                .and_then(|snapshot| snapshot.policy),
+            Some(prepared_policy)
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_prepared_policy_rejects_session_without_acceptance() {
+        let image_policy = openshell_policy::restrictive_default_policy();
+        let mut invalid_policy = image_policy.clone();
+        invalid_policy
+            .filesystem
+            .get_or_insert_default()
+            .read_only
+            .push("relative/path".into());
+        let state = state_with_startup_policy("sb-startup-invalid", None).await;
+        let mut harness = crate::grpc::test_support::connect_supervisor_stream_with_image_policy(
+            &state,
+            "sb-startup-invalid",
+            SUPERVISOR_PROTOCOL_REVISION,
+            Some(image_policy),
+        )
+        .await
+        .expect("supervisor must connect");
+
+        let Some(gateway_message::Payload::StartupConfigCandidate(candidate)) =
+            first_gateway_message(&mut harness).await.payload
+        else {
+            panic!("expected StartupConfigCandidate");
+        };
+        harness
+            .outbound
+            .send(SupervisorMessage {
+                payload: Some(supervisor_message::Payload::StartupConfigPrepared(
+                    StartupConfigPrepared {
+                        candidate_id: candidate.candidate_id,
+                        result: Some(startup_config_prepared::Result::PreparedPolicy(
+                            invalid_policy,
+                        )),
+                    },
+                )),
+            })
+            .await
+            .unwrap();
+
+        let Some(gateway_message::Payload::SessionRejected(rejected)) =
+            first_gateway_message(&mut harness).await.payload
+        else {
+            panic!("invalid preparation must reject without accepting the session");
+        };
+        assert!(rejected.reason.contains("policy"));
     }
 
     #[tokio::test]

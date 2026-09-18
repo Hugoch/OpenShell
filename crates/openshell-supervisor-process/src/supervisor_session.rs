@@ -20,9 +20,10 @@ use openshell_core::proto::{
     ConfigApplyFailure, ConfigApplyOutcome, ConfigBootstrap, ConfigBootstrapResult,
     ConfigComponent, ConfigComponentApplyResult, ConfigSnapshotRevision, ConfigUpdate,
     ConfigUpdateResult, FinalizeMainProcessExitRequest, GatewayMessage, RelayFrame, RelayInit,
-    RelayOpen, RelayOpenResult, ReportMainProcessExitRequest, SupervisorHeartbeat, SupervisorHello,
-    SupervisorMessage, TcpRelayTarget, config_snapshot_revision, config_update, gateway_message,
-    relay_open, supervisor_message,
+    RelayOpen, RelayOpenResult, ReportMainProcessExitRequest, SandboxPolicy, StartupConfigPrepared,
+    SupervisorHeartbeat, SupervisorHello, SupervisorMessage, TcpRelayTarget,
+    config_snapshot_revision, config_update, gateway_message, relay_open, startup_config_prepared,
+    supervisor_message,
 };
 use openshell_core::proto::{
     LEGACY_SUPERVISOR_PROTOCOL_REVISION, PREVIOUS_SUPERVISOR_PROTOCOL_REVISION,
@@ -45,6 +46,9 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const CONFIG_APPLY_TIMEOUT: Duration = Duration::from_mins(1);
 const SESSION_PREPARE_TIMEOUT: Duration = Duration::from_mins(2);
+
+type StartupPolicyPreparer =
+    Box<dyn FnOnce(SandboxPolicy) -> Result<Option<SandboxPolicy>, String> + Send>;
 
 /// A stream-delivered desired-state payload awaiting application by the
 /// supervisor runtime. The response travels back over `ConnectSupervisor`.
@@ -437,10 +441,18 @@ pub async fn prepare(
     endpoint: String,
     sandbox_id: String,
     instance_id: String,
+    image_policy: Option<SandboxPolicy>,
+    prepare_policy: impl FnOnce(SandboxPolicy) -> Result<Option<SandboxPolicy>, String> + Send + 'static,
 ) -> Result<PreparedSupervisorSession, Box<dyn std::error::Error + Send + Sync>> {
     let prepared = tokio::time::timeout(
         SESSION_PREPARE_TIMEOUT,
-        open_session(endpoint, sandbox_id, instance_id),
+        open_session(
+            endpoint,
+            sandbox_id,
+            instance_id,
+            image_policy,
+            Some(Box::new(prepare_policy)),
+        ),
     )
     .await
     .map_err(|_| "timed out waiting for supervisor session bootstrap")??;
@@ -548,6 +560,8 @@ async fn run_single_session(
         config.endpoint.clone(),
         config.sandbox_id.clone(),
         config.instance_id.clone(),
+        None,
+        None,
     )
     .await?;
     run_prepared_session(config, prepared, None).await
@@ -557,6 +571,8 @@ async fn open_session(
     endpoint: String,
     sandbox_id: String,
     instance_id: String,
+    image_policy: Option<SandboxPolicy>,
+    mut prepare_policy: Option<StartupPolicyPreparer>,
 ) -> Result<PreparedSupervisorSession, Box<dyn std::error::Error + Send + Sync>> {
     // The same authenticated channel carries the long-lived control stream
     // and all data-plane RelayStream calls.
@@ -575,6 +591,7 @@ async fn open_session(
             sandbox_id: sandbox_id.clone(),
             instance_id: instance_id.clone(),
             protocol_revision: SUPERVISOR_PROTOCOL_REVISION,
+            image_policy,
         })),
     })
     .await
@@ -587,18 +604,61 @@ async fn open_session(
         .map_err(|e| format!("connect_supervisor RPC failed: {e}"))?;
     let mut inbound = response.into_inner();
 
-    // Wait for SessionAccepted.
-    let accepted = match map_stream_message(
-        inbound.message().await,
-        "stream closed before session accepted",
-    )?
-    .payload
-    {
-        Some(gateway_message::Payload::SessionAccepted(a)) => a,
-        Some(gateway_message::Payload::SessionRejected(r)) => {
-            return Err(format!("session rejected: {}", r.reason).into());
+    // The gateway may ask the initial supervisor to prepare its selected
+    // policy against the local image before it sends the authoritative
+    // bootstrap. Reconnects do not repeat this startup-only exchange.
+    let accepted = loop {
+        match map_stream_message(
+            inbound.message().await,
+            "stream closed before session accepted",
+        )?
+        .payload
+        {
+            Some(gateway_message::Payload::StartupConfigCandidate(candidate)) => {
+                let preparer = prepare_policy
+                    .take()
+                    .ok_or("gateway requested startup preparation on a reconnect")?;
+                let result = candidate.policy.map_or_else(
+                    || {
+                        startup_config_prepared::Result::Failure(ConfigApplyFailure {
+                            code: "startup_policy_candidate_missing".to_string(),
+                            message: "gateway startup candidate omitted its policy".to_string(),
+                            retryable: false,
+                        })
+                    },
+                    |policy| match preparer(policy) {
+                        Ok(Some(policy)) => startup_config_prepared::Result::PreparedPolicy(policy),
+                        Ok(None) => startup_config_prepared::Result::Unchanged(()),
+                        Err(message) => {
+                            startup_config_prepared::Result::Failure(ConfigApplyFailure {
+                                code: "startup_policy_preparation_failed".to_string(),
+                                message: message.chars().take(1024).collect(),
+                                retryable: false,
+                            })
+                        }
+                    },
+                );
+                tx.send(SupervisorMessage {
+                    payload: Some(supervisor_message::Payload::StartupConfigPrepared(
+                        StartupConfigPrepared {
+                            candidate_id: candidate.candidate_id,
+                            result: Some(result),
+                        },
+                    )),
+                })
+                .await
+                .map_err(|_| "failed to send startup configuration result")?;
+            }
+            Some(gateway_message::Payload::SessionAccepted(accepted)) => break accepted,
+            Some(gateway_message::Payload::SessionRejected(rejected)) => {
+                return Err(format!("session rejected: {}", rejected.reason).into());
+            }
+            _ => {
+                return Err(
+                    "expected StartupConfigCandidate, SessionAccepted, or SessionRejected".into(),
+                );
+            }
         }
-        _ => return Err("expected SessionAccepted or SessionRejected".into()),
     };
 
     let heartbeat_secs = accepted

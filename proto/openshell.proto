@@ -7,6 +7,7 @@ package openshell.v1;
 
 import "datamodel.proto";
 import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "options.proto";
@@ -2641,6 +2642,7 @@ message SupervisorMessage {
     RelayClose relay_close = 4;
     ConfigUpdateResult config_update_result = 5;
     ConfigBootstrapResult config_bootstrap_result = 6;
+    StartupConfigPrepared startup_config_prepared = 7;
   }
 }
 
@@ -2653,6 +2655,7 @@ message GatewayMessage {
     RelayOpen relay_open = 4;
     RelayClose relay_close = 5;
     ConfigUpdate config_update = 6;
+    StartupConfigCandidate startup_config_candidate = 7;
   }
 }
 
@@ -2665,6 +2668,34 @@ message SupervisorHello {
   // Exact internal stream protocol revision implemented by this supervisor.
   // Zero identifies a supervisor built before the handshake existed.
   uint32 protocol_revision = 3;
+  // Policy discovered in the sandbox image. The gateway considers it only
+  // when preparing the first authoritative bootstrap for this process.
+  openshell.sandbox.v1.SandboxPolicy image_policy = 4;
+}
+
+// Gateway-selected policy that the supervisor must prepare against the local
+// image before the session can be accepted. The candidate is not authoritative
+// runtime state; SessionAccepted carries the final gateway-owned bootstrap.
+message StartupConfigCandidate {
+  // Opaque identifier scoped to this ConnectSupervisor attempt.
+  string candidate_id = 1;
+  openshell.sandbox.v1.SandboxPolicy policy = 2;
+  string policy_hash = 3;
+  openshell.sandbox.v1.PolicySource policy_source = 4;
+  uint32 policy_version = 5;
+}
+
+// Supervisor preparation result for one StartupConfigCandidate.
+message StartupConfigPrepared {
+  string candidate_id = 1;
+  oneof result {
+    // The candidate needs no image-specific changes.
+    google.protobuf.Empty unchanged = 2;
+    // Complete prepared policy. The gateway validates its difference from the
+    // candidate and remains authoritative for persistence and composition.
+    openshell.sandbox.v1.SandboxPolicy prepared_policy = 3;
+    ConfigApplyFailure failure = 4;
+  }
 }
 
 // Gateway accepts the supervisor session.

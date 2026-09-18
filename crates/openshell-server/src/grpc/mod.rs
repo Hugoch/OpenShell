@@ -832,7 +832,9 @@ pub mod test_support {
 
     use crate::ServerState;
     use crate::auth::identity::{Identity, IdentityProvider};
-    use crate::auth::principal::{Principal, UserPrincipal};
+    use crate::auth::principal::{
+        Principal, SandboxIdentitySource, SandboxPrincipal, UserPrincipal,
+    };
     use crate::compute::{
         NoopTestDriver, new_test_runtime, new_test_runtime_for_driver, new_test_runtime_with_driver,
     };
@@ -845,7 +847,7 @@ pub mod test_support {
     use openshell_core::proto::open_shell_client::OpenShellClient;
     use openshell_core::proto::open_shell_server::OpenShellServer;
     use openshell_core::proto::{
-        GatewayMessage, SupervisorHello, SupervisorMessage, supervisor_message,
+        GatewayMessage, SandboxPolicy, SupervisorHello, SupervisorMessage, supervisor_message,
     };
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
@@ -855,7 +857,7 @@ pub mod test_support {
     pub struct SupervisorStreamHarness {
         server: tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
         /// Held so the supervisor side of the stream stays open.
-        _outbound: mpsc::Sender<SupervisorMessage>,
+        pub outbound: mpsc::Sender<SupervisorMessage>,
         pub inbound: tonic::Streaming<GatewayMessage>,
     }
 
@@ -873,13 +875,34 @@ pub mod test_support {
         sandbox_id: &str,
         protocol_revision: u32,
     ) -> Result<SupervisorStreamHarness, tonic::Status> {
+        connect_supervisor_stream_with_image_policy(state, sandbox_id, protocol_revision, None)
+            .await
+    }
+
+    pub async fn connect_supervisor_stream_with_image_policy(
+        state: &Arc<ServerState>,
+        sandbox_id: &str,
+        protocol_revision: u32,
+        image_policy: Option<SandboxPolicy>,
+    ) -> Result<SupervisorStreamHarness, tonic::Status> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let principal = Principal::Sandbox(SandboxPrincipal {
+            sandbox_id: sandbox_id.to_string(),
+            source: SandboxIdentitySource::BootstrapJwt {
+                issuer: "openshell-gateway:test".to_string(),
+            },
+            trust_domain: Some("openshell".to_string()),
+        });
         let server = tokio::spawn(
             tonic::transport::Server::builder()
-                .add_service(OpenShellServer::new(super::OpenShellService::new(
-                    Arc::clone(state),
-                )))
+                .add_service(OpenShellServer::with_interceptor(
+                    super::OpenShellService::new(Arc::clone(state)),
+                    move |mut request: Request<()>| {
+                        request.extensions_mut().insert(principal.clone());
+                        Ok(request)
+                    },
+                ))
                 .serve_with_incoming(TcpListenerStream::new(listener)),
         );
         let mut client = OpenShellClient::connect(format!("http://{address}"))
@@ -892,6 +915,7 @@ pub mod test_support {
                     sandbox_id: sandbox_id.into(),
                     instance_id: "instance".into(),
                     protocol_revision,
+                    image_policy,
                 })),
             })
             .await
@@ -905,7 +929,7 @@ pub mod test_support {
         };
         Ok(SupervisorStreamHarness {
             server,
-            _outbound: outbound,
+            outbound,
             inbound,
         })
     }
