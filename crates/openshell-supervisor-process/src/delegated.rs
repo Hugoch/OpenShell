@@ -96,12 +96,58 @@ pub async fn start_boundary_access(
 ) -> Result<BoundaryAccess> {
     let terminating = Arc::new(AtomicBool::new(false));
     let Some(ssh_socket_path) = ssh_socket_path.map(std::path::PathBuf::from) else {
+        let (session_task, session_readiness) = match (prepared_supervisor_session, config_apply_tx)
+        {
+            (Some(prepared), Some(config_apply_tx)) => {
+                // Configuration admission is carried by the supervisor stream,
+                // even when this sandbox does not expose SSH. Keep the stream
+                // alive and use the canonical socket path only as the target for
+                // any unexpected relay request; no listener is started here.
+                let (task, mut accepted) = crate::supervisor_session::spawn_prepared(
+                    prepared,
+                    prepared_bootstrap_result,
+                    std::path::PathBuf::from(openshell_core::container_paths::SSH_SOCKET_PATH),
+                    port_forward,
+                    None,
+                    terminating.clone(),
+                    config_apply_tx,
+                    supervisor_session_updates,
+                );
+                let accepted_result = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    accepted.wait_for(|ready| *ready),
+                )
+                .await
+                .map(|result| result.map(|_| ()));
+                match accepted_result {
+                    Ok(Ok(())) => (Some(task), Some(accepted)),
+                    Ok(Err(_)) => {
+                        task.abort();
+                        return Err(miette::miette!(
+                            "prepared supervisor session ended before bootstrap acknowledgement"
+                        ));
+                    }
+                    Err(_) => {
+                        task.abort();
+                        return Err(miette::miette!(
+                            "prepared supervisor session did not become ready within 10 seconds"
+                        ));
+                    }
+                }
+            }
+            (Some(_), None) => {
+                return Err(miette::miette!(
+                    "prepared supervisor session requires a configuration apply channel"
+                ));
+            }
+            (None, _) => (None, None),
+        };
         return Ok(BoundaryAccess {
             instance_id,
             terminating,
             ssh_task: None,
-            session_task: None,
-            session_readiness: None,
+            session_task,
+            session_readiness,
             main_session: None,
         });
     };
