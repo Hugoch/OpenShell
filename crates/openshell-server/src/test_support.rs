@@ -367,15 +367,14 @@ impl ComputeDriver for FakeComputeDriver {
         let sandbox = self.with_state(|state| {
             state.calls.push(FakeComputeDriverCall::GetSandbox {
                 sandbox_id: request.sandbox_id.clone(),
-                sandbox_name: request.sandbox_name.clone(),
+                sandbox_name: request.name.clone(),
             });
             state
                 .sandboxes
                 .values()
                 .find(|sandbox| {
                     (!request.sandbox_id.is_empty() && sandbox.id == request.sandbox_id)
-                        || (!request.sandbox_name.is_empty()
-                            && sandbox.name == request.sandbox_name)
+                        || (!request.name.is_empty() && sandbox.name == request.name)
                 })
                 .cloned()
         });
@@ -424,7 +423,7 @@ impl ComputeDriver for FakeComputeDriver {
         self.with_state(|state| {
             state.calls.push(FakeComputeDriverCall::StopSandbox {
                 sandbox_id: request.sandbox_id,
-                sandbox_name: request.sandbox_name,
+                sandbox_name: request.name,
             });
         });
         Ok(Response::new(StopSandboxResponse {}))
@@ -439,7 +438,7 @@ impl ComputeDriver for FakeComputeDriver {
         self.with_state(|state| {
             state.calls.push(FakeComputeDriverCall::StartSandbox {
                 sandbox_id: request.sandbox_id,
-                sandbox_name: request.sandbox_name,
+                sandbox_name: request.name,
             });
         });
         Ok(Response::new(StartSandboxResponse {}))
@@ -454,13 +453,13 @@ impl ComputeDriver for FakeComputeDriver {
         let deleted = self.with_state(|state| {
             state.calls.push(FakeComputeDriverCall::DeleteSandbox {
                 sandbox_id: request.sandbox_id.clone(),
-                sandbox_name: request.sandbox_name.clone(),
+                sandbox_name: request.name.clone(),
             });
             if request.sandbox_id.is_empty() {
                 let Some(id) = state
                     .sandboxes
                     .iter()
-                    .find(|(_, sandbox)| sandbox.name == request.sandbox_name)
+                    .find(|(_, sandbox)| sandbox.name == request.name)
                     .map(|(id, _)| id.clone())
                 else {
                     return false;

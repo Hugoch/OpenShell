@@ -31,7 +31,7 @@ use crate::ServerState;
 use crate::auth::identity::IdentityProvider;
 use crate::auth::principal::Principal;
 use crate::auth::workspace_authz::{
-    MinWorkspaceRole, authorize_workspace, authorize_workspace_selector, require_platform_admin,
+    MinWorkspaceRole, authorize_workspace, require_platform_admin, selected_workspace_name,
 };
 use crate::persistence::{
     ObjectType, PersistenceError, SetResourceVersion, Store, WriteCondition, current_time_ms,
@@ -506,13 +506,14 @@ fn global_scope(state: &ServerState, principal: &Principal) -> Result<Scope, Sta
 async fn template_scope(
     state: &ServerState,
     principal: &Principal,
-    selector: Option<&WorkspaceSelector>,
+    workspace_scope: Option<&WorkspaceSelector>,
 ) -> Result<Scope, Status> {
-    let authz = authorize_workspace_selector(
+    let workspace = selected_workspace_name(workspace_scope)?;
+    let authz = authorize_workspace(
         &state.store,
         &state.admin_role,
         principal,
-        selector,
+        workspace,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -689,7 +690,13 @@ resource_mutation!(
     workspace::handle_add_workspace_member,
     member,
     async |req: &AddWorkspaceMemberRequest, state: &ServerState, principal: &Principal| {
-        member_scope(state, principal, &req.workspace, Some(req.role)).await
+        member_scope(
+            state,
+            principal,
+            selected_workspace_name(req.workspace_scope.as_ref())?,
+            Some(req.role),
+        )
+        .await
     }
 );
 deletion_mutation!(
@@ -698,7 +705,13 @@ deletion_mutation!(
     "RemoveWorkspaceMember",
     workspace::handle_remove_workspace_member,
     async |req: &RemoveWorkspaceMemberRequest, state: &ServerState, principal: &Principal| {
-        member_scope(state, principal, &req.workspace, None).await
+        member_scope(
+            state,
+            principal,
+            selected_workspace_name(req.workspace_scope.as_ref())?,
+            None,
+        )
+        .await
     }
 );
 
