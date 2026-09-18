@@ -13021,7 +13021,7 @@ mod tests {
             "invalid stored policy must not be persisted as history"
         );
 
-        let error = handle_get_sandbox_config(
+        let rejected = handle_get_sandbox_config(
             &state,
             with_sandbox(
                 Request::new(GetSandboxConfigRequest {
@@ -13031,8 +13031,15 @@ mod tests {
             ),
         )
         .await
-        .expect_err("invalid stored policy still fails only its own config read");
-        assert_eq!(error.code(), Code::FailedPrecondition);
+        .expect("invalid stored policy returns a repairable admission snapshot")
+        .into_inner();
+        assert!(!rejected.configuration_admitted);
+        assert!(rejected.policy.is_none());
+        assert_eq!(rejected.workspace, "default");
+        assert_eq!(
+            rejected.configuration_error,
+            "Stored policy structure or safety validation failed; submit a complete valid replacement policy"
+        );
     }
 
     #[tokio::test]
