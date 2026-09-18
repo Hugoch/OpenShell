@@ -2536,12 +2536,38 @@ fn build_container_create_body_disables_docker_networking() {
 
 #[test]
 fn docker_supervisor_uses_host_network() {
-    let host = docker_supervisor_host_config(Vec::new());
+    let host = docker_supervisor_host_config(Vec::new(), "https://127.0.0.1:17670");
 
     assert_eq!(host.network_mode.as_deref(), Some("host"));
-    assert_eq!(host.extra_hosts, None);
+    assert_eq!(
+        host.extra_hosts,
+        Some(vec![
+            "host.openshell.internal:127.0.0.1".to_string(),
+            "host.docker.internal:127.0.0.1".to_string(),
+        ])
+    );
     assert_eq!(host.cap_drop, Some(vec!["ALL".to_string()]));
     assert_eq!(host.cap_add, None);
+}
+
+#[test]
+fn docker_supervisor_maps_host_aliases_to_the_gateway_address() {
+    let host = docker_supervisor_host_config(Vec::new(), "https://172.20.0.4:17670");
+
+    assert_eq!(
+        host.extra_hosts,
+        Some(vec![
+            "host.openshell.internal:172.20.0.4".to_string(),
+            "host.docker.internal:172.20.0.4".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn docker_supervisor_leaves_named_gateway_hosts_to_dns() {
+    let host = docker_supervisor_host_config(Vec::new(), "https://gateway.example.com:17670");
+
+    assert_eq!(host.extra_hosts, None);
 }
 
 #[test]

@@ -125,6 +125,8 @@ const BOUNDARY_CERTIFICATE_FILE: &str = "boundary-server.crt";
 const BOUNDARY_PRIVATE_KEY_FILE: &str = "boundary-server.key";
 const SUPERVISOR_AUTH_BUNDLE_FILE: &str = "supervisor-auth.json";
 const START_GENERATION_FILE: &str = "start-generation";
+const HOST_OPEN_SHELL_INTERNAL: &str = "host.openshell.internal";
+const HOST_DOCKER_INTERNAL: &str = "host.docker.internal";
 
 fn provisioning_span(
     parent: &opentelemetry::Context,
@@ -4728,13 +4730,14 @@ fn docker_auxiliary_container_labels(
     ])
 }
 
-fn docker_supervisor_host_config(mounts: Vec<Mount>) -> HostConfig {
+fn docker_supervisor_host_config(mounts: Vec<Mount>, grpc_endpoint: &str) -> HostConfig {
     HostConfig {
         // The supervisor is trusted infrastructure and originates every
-        // approved upstream connection. Host networking lets it use the
-        // gateway's primary loopback endpoint; the workload remains fenced
-        // by network=none.
+        // approved upstream connection. Host networking lets it reach the
+        // configured gateway and host-side services directly; the workload
+        // remains fenced by network=none.
         network_mode: Some("host".to_string()),
+        extra_hosts: docker_supervisor_host_aliases(grpc_endpoint),
         mounts: Some(mounts),
         cap_drop: Some(vec!["ALL".to_string()]),
         cap_add: None,
@@ -4761,6 +4764,23 @@ fn docker_supervisor_host_config(mounts: Vec<Mount>) -> HostConfig {
         restart_policy: None,
         ..Default::default()
     }
+}
+
+fn docker_supervisor_host_aliases(grpc_endpoint: &str) -> Option<Vec<String>> {
+    let endpoint = Url::parse(grpc_endpoint).ok()?;
+    let address = match endpoint.host()? {
+        url::Host::Ipv4(address) => address.to_string(),
+        url::Host::Domain(domain) if domain.eq_ignore_ascii_case("localhost") => {
+            Ipv4Addr::LOCALHOST.to_string()
+        }
+        // Docker's extra-host syntax for IPv6 differs across daemon versions.
+        // Leave IPv6 and named remote endpoints to normal name resolution.
+        url::Host::Ipv6(_) | url::Host::Domain(_) => return None,
+    };
+    Some(vec![
+        format!("{HOST_OPEN_SHELL_INTERNAL}:{address}"),
+        format!("{HOST_DOCKER_INTERNAL}:{address}"),
+    ])
 }
 
 async fn spawn_docker_control_process(
@@ -4932,7 +4952,10 @@ async fn spawn_docker_control_process(
             start_period: Some(SUPERVISOR_HEALTH_START_PERIOD_NS),
             start_interval: Some(SUPERVISOR_HEALTH_INTERVAL_NS),
         }),
-        host_config: Some(docker_supervisor_host_config(supervisor_mounts)),
+        host_config: Some(docker_supervisor_host_config(
+            supervisor_mounts,
+            &config.supervisor_grpc_endpoint,
+        )),
         ..Default::default()
     };
     let created = docker
