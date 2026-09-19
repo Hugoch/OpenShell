@@ -62,7 +62,7 @@ Common gateway options:
 |---|---|
 | `compute_driver = "<driver>"` | Select the compute driver. Built-in values are `docker`, `podman`, `kubernetes`, and `vm`; custom names require `[openshell.drivers.<name>].socket_path`. |
 
-Set driver-specific values such as sandbox images, callback endpoints, network names, TLS material, and VM sizing in the gateway TOML file. See the [Gateway Configuration File](./gateway-config) reference for the full `[openshell.drivers.<name>]` schema.
+Set driver-specific values such as sandbox images, gateway endpoints, network names, TLS material, and VM sizing in the gateway TOML file. See the [Gateway Configuration File](./gateway-config) reference for the full `[openshell.drivers.<name>]` schema.
 
 Extension drivers use the same `compute_driver.proto` gRPC surface as the
 managed VM driver. For an out-of-tree driver, choose a driver name and point
@@ -152,15 +152,10 @@ It overrides the gateway's configured default runtime class for that sandbox,
 while a typed `SandboxTemplate.runtime_class_name` value from the API still
 takes precedence.
 
-Docker and Podman report the address through which their sandboxes can reach
-the gateway. If the primary listener covers that address, the gateway reuses
-it and sandbox JWT authentication restricts the supervisor to its callback RPC
-allowlist. If the primary listener is not reachable through that address, the
-gateway creates an additional callback-only listener. Use the primary endpoint
-for CLI, administrator, health, reflection, inference-route management, and
-HTTP requests. A `PermissionDenied` response from an additional callback-only
-listener is expected for those requests. Do not broaden the primary listener
-to `0.0.0.0` solely to make sandbox callbacks reachable.
+Docker and Podman supervisors use host networking. On Linux they connect to the
+gateway's primary loopback listener. Sandbox JWT authentication restricts each
+supervisor to the sandbox-callable RPC allowlist; no additional gateway
+listener is created.
 
 The published supervisor container uses a shell-free distroless Debian 13 image.
 Inspect its container logs and health status with your runtime tools; it does not
@@ -173,14 +168,16 @@ change the tools available inside your workload image.
 
 The gateway talks to the Docker daemon to create sandbox containers. Docker is also required for local image builds from directories or Dockerfiles.
 
-Docker Desktop and compatible macOS runtimes route `host.openshell.internal`
-through an IPv4 host-gateway alias. The gateway reuses an IPv4 primary listener
-that already covers loopback. Otherwise, the Docker driver requests a separate
-`127.0.0.1:<gateway-port>` callback-only listener.
+The trusted supervisor companion uses Docker host networking; the agent
+workload retains `network=none`. On Linux the supervisor reaches the gateway at
+its primary loopback endpoint. Docker Desktop requires host networking to be
+enabled and does not support this mode together with Enhanced Container
+Isolation. Set `grpc_endpoint` when the gateway is not reachable on the Docker
+daemon host.
 
 For maintainer-level implementation details, refer to the [Docker driver README](https://github.com/NVIDIA/OpenShell/blob/main/crates/openshell-driver-docker/README.md).
 
-Select Docker with `compute_driver = "docker"` in `[openshell.gateway]`. Configure Docker driver values such as `socket_path`, `grpc_endpoint`, `network_name`, `sandbox_runtime_image`, `supervisor_image`, `image_pull_policy`, `sandbox_pids_limit`, and `guest_tls_*` in `[openshell.drivers.docker]`. The sandbox runtime image contains `/openshell-sandbox`; the supervisor image contains `/openshell-supervisor`. When `socket_path` is unset, the driver uses the same responsive local socket selected by auto-detection. An explicitly selected Docker driver falls back to `/var/run/docker.sock` when no candidate responds.
+Select Docker with `compute_driver = "docker"` in `[openshell.gateway]`. Configure Docker driver values such as `socket_path`, `grpc_endpoint`, `sandbox_runtime_image`, `supervisor_image`, `image_pull_policy`, `sandbox_pids_limit`, and `guest_tls_*` in `[openshell.drivers.docker]`. The sandbox runtime image contains `/openshell-sandbox`; the supervisor image contains `/openshell-supervisor`. When `socket_path` is unset, the driver uses the same responsive local socket selected by auto-detection. An explicitly selected Docker driver falls back to `/var/run/docker.sock` when no candidate responds.
 
 When operating `openshell-driver-docker` as an external driver, set
 `OPENSHELL_OTLP_ENDPOINT` to export its spans. The driver continues W3C trace
@@ -256,7 +253,7 @@ namespace roots. These checks do not make host bind mounts safe.
 
 The gateway talks to the Podman API socket. The Podman driver requires Podman 5.x, cgroups v2, rootless networking, and an active Podman user socket. When `socket_path` is not set, the driver probes known socket paths, then uses the `podman` CLI to resolve the active native or machine-backed connection. It fails to start if neither method finds a socket.
 
-The agent workload uses `network=none`. Its trusted supervisor companion uses Podman's host network for gateway callbacks and policy-approved upstream connections.
+The agent workload uses `network=none`. Its trusted supervisor companion uses Podman's host network for its gateway session and policy-approved upstream connections.
 
 For maintainer-level implementation details, refer to the [Podman driver README](https://github.com/NVIDIA/OpenShell/blob/main/crates/openshell-driver-podman/README.md) and [Podman networking notes](https://github.com/NVIDIA/OpenShell/blob/main/crates/openshell-driver-podman/NETWORKING.md).
 
@@ -274,7 +271,11 @@ stopped sandboxes alone.
 
 For proxy-required networks, the Podman driver also accepts the corporate egress proxy keys `https_proxy`, `no_proxy`, `proxy_auth_file`, `proxy_auth_allow_insecure`, and `proxy_connect_by_hostname`. The supervisor chains policy-approved TLS tunnels through the proxy with HTTP CONNECT instead of dialing destinations directly. See the [Gateway Configuration File](./gateway-config) reference for the full contract, including the cleartext-credential acknowledgement and the validated-IP CONNECT behavior.
 
-On macOS with `podman machine`, the driver uses gvproxy's host-loopback IP, `192.168.127.254`, for sandbox host aliases by default. Set `host_gateway_ip` only when your Podman machine uses a non-standard host-loopback address. On Linux, an empty `host_gateway_ip` keeps Podman's `host-gateway` resolver behavior. Direct local callbacks from rootless Podman require Podman to report the pasta network helper. Slirp4netns, other helpers, and Podman versions that do not report their helper require an explicitly remote `grpc_endpoint`; otherwise the gateway fails startup rather than leaving sandbox callbacks unreachable. Rootful Podman continues to use the configured network's bridge gateway address.
+On Linux, the host-networked supervisor uses the gateway's primary loopback
+endpoint. On macOS with `podman machine`, the driver uses gvproxy's
+host-loopback IP, `192.168.127.254`, by default. Set `host_gateway_ip` only when
+your Podman machine uses a non-standard host-loopback address, or set
+`grpc_endpoint` explicitly when the gateway is remote.
 
 ### Podman Driver Config Mounts
 
@@ -426,7 +427,7 @@ For maintainer-level implementation details, refer to the [Kubernetes driver REA
 | `image_pull_policy` | `server.sandboxImagePullPolicy` | Set the Kubernetes image pull policy for sandbox pods. |
 | `image_pull_secrets` | `server.sandboxImagePullSecrets` | Attach Kubernetes image-pull Secrets to sandbox pods. Managed mode copies these explicitly named Secrets from the configured source namespace into each workspace namespace. In shared and operator modes, the Secrets must already exist in the sandbox namespace. |
 | `[managed_ssh_ingress]` | `networkPolicy.enabled` | In managed mode, create an SSH ingress policy in every workspace namespace. Helm configures the gateway namespace and pod selector automatically. Operator mode leaves namespace policy management to the platform operator. |
-| `grpc_endpoint` | `server.grpcEndpoint` | Set the gateway callback endpoint reachable from sandbox pods. |
+| `grpc_endpoint` | `server.grpcEndpoint` | Set the gateway endpoint reachable from sandbox pods. |
 | `client_tls_secret_name` | `server.tls.clientTlsSecretName` | Mount sandbox client TLS materials from a Kubernetes secret. |
 | `sandbox_runtime_image` | `sandboxRuntime.image.repository` / `sandboxRuntime.image.tag` | Override the image that provides `openshell-sandbox`. The default repository with an empty tag uses the version pinned into the gateway. |
 | `sandbox_runtime_image_pull_policy` | `sandboxRuntime.image.pullPolicy` | Set the Kubernetes image pull policy for the sandbox runtime image. |
