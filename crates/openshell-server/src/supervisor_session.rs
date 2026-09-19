@@ -2279,10 +2279,19 @@ async fn handle_supervisor_message(
                 state
                     .supervisor_sessions
                     .finalize_config_update(sandbox_id, session_id, &completed, false);
+                // Either projection can arrive first. Once the supervisor has
+                // staged one half, rebuild both current projections so the
+                // matching half and the deferred admission result are driven
+                // to a fixed point even when no further mutation occurs.
+                crate::config_delivery::publish_sandbox_components(
+                    state,
+                    sandbox_id,
+                    crate::config_delivery::ConfigComponents::SANDBOX_AND_PROVIDER,
+                );
                 debug!(
                     sandbox_id,
                     session_id,
-                    "supervisor configuration generation is waiting for its matching component"
+                    "supervisor configuration generation is waiting for its matching component; scheduled reconciliation"
                 );
                 return;
             }
@@ -3085,11 +3094,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generation_pending_result_is_not_persisted_or_suppressed() {
+    async fn generation_pending_result_schedules_reconciliation_without_persistence() {
         use openshell_core::proto::{ConfigApplyFailure, ConfigurationAdmissionState};
 
         let sandbox_id = "sb-generation-pending-retry";
         let state = state_with_sandbox(sandbox_id).await;
+        let mut stored_sandbox = state
+            .store
+            .get_message::<Sandbox>(sandbox_id)
+            .await
+            .unwrap()
+            .expect("sandbox is persisted");
+        stored_sandbox.spec = Some(SandboxSpec::default());
+        state.store.put_message(&stored_sandbox).await.unwrap();
         let (tx, mut rx) = mpsc::channel(4);
         let (shutdown_tx, _shutdown_rx) = oneshot::channel();
         state.supervisor_sessions.register(
@@ -3180,12 +3197,30 @@ mod tests {
                 .is_none(),
             "a transient generation mismatch must not persist rejected admission"
         );
-        assert_eq!(
-            state
-                .supervisor_sessions
-                .deliver_config(sandbox_id, message, false),
-            DeliveryDisposition::Enqueued
-        );
+        let redriven_components = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut components = Vec::new();
+            while components.len() < 2 {
+                let Some(gateway_message::Payload::ConfigUpdate(update)) = rx
+                    .recv()
+                    .await
+                    .expect("redriven configuration update")
+                    .payload
+                else {
+                    continue;
+                };
+                components.push(match update.component.expect("redriven component") {
+                    config_update::Component::SandboxConfig(_) => ConfigComponent::SandboxConfig,
+                    config_update::Component::ProviderEnvironment(_) => {
+                        ConfigComponent::ProviderEnvironment
+                    }
+                });
+            }
+            components
+        })
+        .await
+        .expect("generation mismatch schedules prompt reconciliation");
+        assert!(redriven_components.contains(&ConfigComponent::SandboxConfig));
+        assert!(redriven_components.contains(&ConfigComponent::ProviderEnvironment));
     }
 
     #[tokio::test]
