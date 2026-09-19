@@ -4167,10 +4167,10 @@ async fn handle_update_config_inner(
 
     let mut projected_annotations = response_annotations.clone();
     projected_annotations.extend(req.annotations.clone());
-    let sandbox_projection_annotations = if projected_annotations == response_annotations {
-        None
-    } else {
-        Some(&req.annotations)
+    let sandbox_projection = crate::persistence::AtomicSandboxProjection {
+        sandbox_id: &sandbox_id,
+        annotations: &req.annotations,
+        expected_resource_version: req.expected_resource_version,
     };
 
     if has_setting {
@@ -4221,13 +4221,7 @@ async fn handle_update_config_inner(
                     sandbox.object_name(),
                     &sandbox_settings,
                     &operation_record,
-                    sandbox_projection_annotations
-                        .map(|annotations| crate::persistence::AtomicSandboxProjection {
-                            sandbox_id: &sandbox_id,
-                            annotations,
-                            expected_resource_version: req.expected_resource_version,
-                        })
-                        .as_ref(),
+                    Some(&sandbox_projection),
                 )
                 .await?;
             }
@@ -4308,13 +4302,7 @@ async fn handle_update_config_inner(
                 sandbox.object_name(),
                 &sandbox_settings,
                 &operation_record,
-                sandbox_projection_annotations
-                    .map(|annotations| crate::persistence::AtomicSandboxProjection {
-                        sandbox_id: &sandbox_id,
-                        annotations,
-                        expected_resource_version: req.expected_resource_version,
-                    })
-                    .as_ref(),
+                Some(&sandbox_projection),
             )
             .await?;
         }

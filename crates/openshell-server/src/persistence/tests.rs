@@ -1410,7 +1410,10 @@ async fn configuration_transactions_fill_the_other_target_dimension() {
     assert_eq!(policy_operation.target_settings_revision, 2);
 }
 
-async fn settings_projection_uses_locked_sandbox_version(store: Store) {
+async fn settings_projection_uses_locked_sandbox_version(
+    store: Store,
+    requested: StdHashMap<String, String>,
+) {
     let suffix = uuid::Uuid::new_v4();
     let sandbox_id = format!("settings-projection-{suffix}");
     let sandbox_name = format!("settings-projection-name-{suffix}");
@@ -1436,7 +1439,9 @@ async fn settings_projection_uses_locked_sandbox_version(store: Store) {
         .unwrap()
         .unwrap();
     let before_version = before.metadata.as_ref().unwrap().resource_version;
-    let requested = StdHashMap::from([("requested".to_string(), "applied".to_string())]);
+    let projection_changes_sandbox = requested
+        .iter()
+        .any(|(key, value)| before.metadata.as_ref().unwrap().annotations.get(key) != Some(value));
     let operation = new_record(
         &stale,
         "default",
@@ -1477,15 +1482,17 @@ async fn settings_projection_uses_locked_sandbox_version(store: Store) {
         .unwrap()
         .unwrap();
     let metadata = after.metadata.as_ref().unwrap();
-    assert_eq!(metadata.resource_version, before_version + 1);
+    assert_eq!(
+        metadata.resource_version,
+        before_version + u64::from(projection_changes_sandbox)
+    );
     assert_eq!(
         metadata.annotations.get("concurrent").map(String::as_str),
         Some("preserved")
     );
-    assert_eq!(
-        metadata.annotations.get("requested").map(String::as_str),
-        Some("applied")
-    );
+    for (key, value) in &requested {
+        assert_eq!(metadata.annotations.get(key), Some(value));
+    }
 
     let stored_operation = store
         .get_message::<crate::storage_proto::StoredConfigUpdateOperation>(&operation_id)
@@ -1498,14 +1505,26 @@ async fn settings_projection_uses_locked_sandbox_version(store: Store) {
 
 #[tokio::test]
 async fn sqlite_settings_projection_uses_locked_sandbox_version() {
-    settings_projection_uses_locked_sandbox_version(test_store().await).await;
+    let store = test_store().await;
+    settings_projection_uses_locked_sandbox_version(
+        store.clone(),
+        StdHashMap::from([("requested".to_string(), "applied".to_string())]),
+    )
+    .await;
+    settings_projection_uses_locked_sandbox_version(store, StdHashMap::new()).await;
 }
 
 #[tokio::test]
 #[ignore = "requires OPENSHELL_TEST_POSTGRES_URL pointing to a test database"]
 async fn postgres_settings_projection_uses_locked_sandbox_version() {
     let url = std::env::var("OPENSHELL_TEST_POSTGRES_URL").expect("test database URL");
-    settings_projection_uses_locked_sandbox_version(Store::connect(&url).await.unwrap()).await;
+    let store = Store::connect(&url).await.unwrap();
+    settings_projection_uses_locked_sandbox_version(
+        store.clone(),
+        StdHashMap::from([("requested".to_string(), "applied".to_string())]),
+    )
+    .await;
+    settings_projection_uses_locked_sandbox_version(store, StdHashMap::new()).await;
 }
 
 #[tokio::test]
