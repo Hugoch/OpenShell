@@ -944,9 +944,40 @@ pub mod test_support {
         protocol_revision: u32,
         image_policy_discovery: openshell_core::proto::ImagePolicyDiscovery,
     ) -> Result<SupervisorStreamHarness, tonic::Status> {
+        connect_supervisor_stream_with_optional_image_policy_discovery(
+            state,
+            sandbox_id,
+            protocol_revision,
+            Some(image_policy_discovery),
+        )
+        .await
+    }
+
+    /// Model a stock supervisor reconnect, which omits the one-shot image
+    /// policy discovery after its initial session has been prepared.
+    pub async fn reconnect_supervisor_stream(
+        state: &Arc<ServerState>,
+        sandbox_id: &str,
+        protocol_revision: u32,
+    ) -> Result<SupervisorStreamHarness, tonic::Status> {
+        connect_supervisor_stream_with_optional_image_policy_discovery(
+            state,
+            sandbox_id,
+            protocol_revision,
+            None,
+        )
+        .await
+    }
+
+    async fn connect_supervisor_stream_with_optional_image_policy_discovery(
+        state: &Arc<ServerState>,
+        sandbox_id: &str,
+        protocol_revision: u32,
+        image_policy_discovery: Option<openshell_core::proto::ImagePolicyDiscovery>,
+    ) -> Result<SupervisorStreamHarness, tonic::Status> {
         let image_policy = image_policy_discovery
-            .result
             .as_ref()
+            .and_then(|discovery| discovery.result.as_ref())
             .and_then(|result| match result {
                 openshell_core::proto::image_policy_discovery::Result::Policy(policy) => {
                     Some(policy.clone())
@@ -984,7 +1015,7 @@ pub mod test_support {
                     instance_id: "instance".into(),
                     protocol_revision,
                     image_policy,
-                    image_policy_discovery: Some(image_policy_discovery),
+                    image_policy_discovery,
                     supports_provider_readiness: false,
                 })),
             })

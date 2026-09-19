@@ -62,6 +62,10 @@ const MAX_PENDING_RELAYS: usize = 256;
 /// cap (20) so tunnel-specific limits still fire first for that caller.
 const MAX_PENDING_RELAYS_PER_SANDBOX: usize = 32;
 
+#[cfg(test)]
+static FAIL_NEXT_ADMISSION_PERSISTENCE_FOR_SANDBOX: std::sync::LazyLock<Mutex<Option<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(None));
+
 impl ObjectType for StoredConfigComponentObservation {
     fn object_type() -> &'static str {
         CONFIG_COMPONENT_OBSERVATION_OBJECT_TYPE
@@ -119,7 +123,22 @@ struct ComponentDeliveryState {
     sequence: u64,
     in_flight: Option<InFlightConfigUpdate>,
     pending: Option<SupervisorConfigMessage>,
-    last_acknowledged_revision: Option<ConfigSnapshotRevision>,
+    last_acknowledged_fingerprint: Option<ConfigSnapshotFingerprint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ConfigSnapshotFingerprint {
+    Sandbox {
+        revision: ConfigSnapshotRevision,
+        provider_env_revision: u64,
+        provider_attachment_epoch: String,
+        policy_hash: String,
+    },
+    ProviderEnvironment {
+        provider_env_revision: u64,
+        provider_attachment_epoch: String,
+        policy_hash: String,
+    },
 }
 
 #[derive(Debug)]
@@ -127,11 +146,17 @@ struct InFlightConfigUpdate {
     update_id: String,
     component_sequence: u64,
     revision: ConfigSnapshotRevision,
+    fingerprint: ConfigSnapshotFingerprint,
     admission: Option<SandboxConfigurationAdmission>,
     sent_at: Instant,
 }
 
 struct CompletedConfigUpdate {
+    component: ConfigComponent,
+    update_id: String,
+    component_sequence: u64,
+    revision: ConfigSnapshotRevision,
+    fingerprint: ConfigSnapshotFingerprint,
     outcome: ConfigApplyOutcome,
     admission: Option<SandboxConfigurationAdmission>,
 }
@@ -261,6 +286,7 @@ fn build_config_update(
 ) -> (GatewayMessage, InFlightConfigUpdate) {
     state.sequence = state.sequence.saturating_add(1);
     let component_sequence = state.sequence;
+    let fingerprint = config_message_fingerprint(&message);
     let (component, revision, admission) = match message {
         SupervisorConfigMessage::SandboxConfig(snapshot) => {
             let admission = expected_configuration_admission(&snapshot);
@@ -307,10 +333,29 @@ fn build_config_update(
             update_id,
             component_sequence,
             revision,
+            fingerprint,
             admission,
             sent_at: Instant::now(),
         },
     )
+}
+
+fn config_message_fingerprint(message: &SupervisorConfigMessage) -> ConfigSnapshotFingerprint {
+    match message {
+        SupervisorConfigMessage::SandboxConfig(snapshot) => ConfigSnapshotFingerprint::Sandbox {
+            revision: config_message_revision(message),
+            provider_env_revision: snapshot.provider_env_revision,
+            provider_attachment_epoch: snapshot.provider_attachment_epoch.clone(),
+            policy_hash: snapshot.policy_hash.clone(),
+        },
+        SupervisorConfigMessage::ProviderEnvironment(snapshot) => {
+            ConfigSnapshotFingerprint::ProviderEnvironment {
+                provider_env_revision: snapshot.provider_env_revision,
+                provider_attachment_epoch: snapshot.provider_attachment_epoch.clone(),
+                policy_hash: snapshot.policy_hash.clone(),
+            }
+        }
+    }
 }
 
 fn config_message_revision(message: &SupervisorConfigMessage) -> ConfigSnapshotRevision {
@@ -375,6 +420,13 @@ fn outcome_acknowledges_revision(outcome: ConfigApplyOutcome) -> bool {
             | ConfigApplyOutcome::RetainedLocalOverride
             | ConfigApplyOutcome::Degraded
     )
+}
+
+fn generation_is_pending(result: &ConfigComponentApplyResult) -> bool {
+    result
+        .failure
+        .as_ref()
+        .is_some_and(|failure| failure.retryable && failure.code == "generation_mismatch")
 }
 
 impl SupervisorSessionRegistry {
@@ -577,8 +629,8 @@ impl SupervisorSessionRegistry {
             }
         };
         if delivery_state.in_flight.is_none()
-            && delivery_state.last_acknowledged_revision.as_ref()
-                == Some(&config_message_revision(&message))
+            && delivery_state.last_acknowledged_fingerprint.as_ref()
+                == Some(&config_message_fingerprint(&message))
         {
             return DeliveryDisposition::SuppressedUnchanged;
         }
@@ -660,18 +712,60 @@ impl SupervisorSessionRegistry {
         }
         let outcome = validate_component_apply_result(component_result, &in_flight.revision)?;
         let completed = CompletedConfigUpdate {
+            component,
+            update_id: in_flight.update_id.clone(),
+            component_sequence: in_flight.component_sequence,
+            revision: in_flight.revision.clone(),
+            fingerprint: in_flight.fingerprint.clone(),
             outcome,
             admission: in_flight.admission.clone(),
         };
-        if outcome_acknowledges_revision(outcome) {
-            delivery_state.last_acknowledged_revision = Some(in_flight.revision.clone());
+        Ok(completed)
+    }
+
+    /// Finish a validated update after all durable side effects have either
+    /// succeeded or failed. Keeping the update in flight until this point
+    /// prevents reconciliation from treating a locally reported result as an
+    /// acknowledgement before its observation and admission are durable.
+    fn finalize_config_update(
+        &self,
+        sandbox_id: &str,
+        session_id: &str,
+        completed: &CompletedConfigUpdate,
+        acknowledge: bool,
+    ) -> bool {
+        let mut sessions = self.sessions.lock().unwrap();
+        let Some(session) = sessions
+            .get_mut(sandbox_id)
+            .filter(|session| session.session_id == session_id)
+        else {
+            return false;
+        };
+        let delivery_state = match completed.component {
+            ConfigComponent::SandboxConfig => &mut session.config_sequences.sandbox_config,
+            ConfigComponent::ProviderEnvironment => {
+                &mut session.config_sequences.provider_environment
+            }
+            ConfigComponent::Unspecified => return false,
+        };
+        let Some(in_flight) = delivery_state.in_flight.as_ref() else {
+            return false;
+        };
+        if in_flight.update_id != completed.update_id
+            || in_flight.component_sequence != completed.component_sequence
+            || in_flight.revision != completed.revision
+        {
+            return false;
+        }
+        if acknowledge && outcome_acknowledges_revision(completed.outcome) {
+            delivery_state.last_acknowledged_fingerprint = Some(completed.fingerprint.clone());
         }
         delivery_state.in_flight = None;
         if let Some(pending) = delivery_state.pending.take() {
-            if delivery_state.last_acknowledged_revision.as_ref()
-                == Some(&config_message_revision(&pending))
+            if delivery_state.last_acknowledged_fingerprint.as_ref()
+                == Some(&config_message_fingerprint(&pending))
             {
-                return Ok(completed);
+                return true;
             }
             let (message, next) = build_config_update(delivery_state, pending);
             match session.tx.try_send(message) {
@@ -681,7 +775,7 @@ impl SupervisorSessionRegistry {
                 }
             }
         }
-        Ok(completed)
+        true
     }
 
     /// Record a successfully persisted bootstrap result in the live session's
@@ -695,13 +789,14 @@ impl SupervisorSessionRegistry {
         sandbox_id: &str,
         session_id: &str,
         result: &ConfigComponentApplyResult,
+        fingerprint: &ConfigSnapshotFingerprint,
     ) -> bool {
         let component = ConfigComponent::try_from(result.component).unwrap_or_default();
         let outcome = ConfigApplyOutcome::try_from(result.outcome).unwrap_or_default();
         if !outcome_acknowledges_revision(outcome) {
             return false;
         }
-        let Some(revision) = result.requested_revision.as_ref() else {
+        let Some(_revision) = result.requested_revision.as_ref() else {
             return false;
         };
         let mut sessions = self.sessions.lock().unwrap();
@@ -718,41 +813,13 @@ impl SupervisorSessionRegistry {
             }
             ConfigComponent::Unspecified => return false,
         };
-        if delivery_state.in_flight.is_some() || delivery_state.last_acknowledged_revision.is_some()
+        if delivery_state.in_flight.is_some()
+            || delivery_state.last_acknowledged_fingerprint.is_some()
         {
             return false;
         }
-        delivery_state.last_acknowledged_revision = Some(revision.clone());
+        delivery_state.last_acknowledged_fingerprint = Some(fingerprint.clone());
         true
-    }
-
-    fn retry_config_update_after_persistence_failure(
-        &self,
-        sandbox_id: &str,
-        session_id: &str,
-        result: &ConfigComponentApplyResult,
-    ) {
-        let component = ConfigComponent::try_from(result.component).unwrap_or_default();
-        let Some(requested_revision) = result.requested_revision.as_ref() else {
-            return;
-        };
-        let mut sessions = self.sessions.lock().unwrap();
-        let Some(session) = sessions
-            .get_mut(sandbox_id)
-            .filter(|session| session.session_id == session_id)
-        else {
-            return;
-        };
-        let delivery_state = match component {
-            ConfigComponent::SandboxConfig => &mut session.config_sequences.sandbox_config,
-            ConfigComponent::ProviderEnvironment => {
-                &mut session.config_sequences.provider_environment
-            }
-            ConfigComponent::Unspecified => return,
-        };
-        if delivery_state.last_acknowledged_revision.as_ref() == Some(requested_revision) {
-            delivery_state.last_acknowledged_revision = None;
-        }
     }
 
     pub fn is_current_session(&self, sandbox_id: &str, session_id: &str) -> bool {
@@ -1669,6 +1736,11 @@ pub async fn handle_connect_supervisor(
 
     let sandbox_id = hello.sandbox_id.clone();
     let stream_applies_config = hello.protocol_revision == SUPERVISOR_PROTOCOL_REVISION;
+    // The stock supervisor includes discovery only on its first connection.
+    // Reconnects from the same process intentionally omit both startup policy
+    // fields and must proceed directly to the current authoritative bootstrap.
+    let prepares_startup_policy = stream_applies_config
+        && (hello.image_policy_discovery.is_some() || hello.image_policy.is_some());
     let image_policy_admission = image_policy_admission(&hello)?;
     if sandbox_id.is_empty() {
         return Err(Status::invalid_argument("sandbox_id is required"));
@@ -1772,7 +1844,7 @@ pub async fn handle_connect_supervisor(
     let gateway_policy = gateway_snapshot.and_then(|snapshot| snapshot.policy.clone());
     let gateway_has_policy = gateway_policy.is_some();
 
-    if stream_applies_config {
+    if prepares_startup_policy {
         let policy = gateway_policy
             .or_else(|| match image_policy_admission {
                 ImagePolicyAdmission::Policy(policy) => Some(*policy),
@@ -2018,7 +2090,11 @@ async fn run_session_loop(
     session_id: &str,
     instance_id: &str,
     stream_applies_config: bool,
-    expected_bootstrap_revisions: &[(ConfigComponent, ConfigSnapshotRevision)],
+    expected_bootstrap_revisions: &[(
+        ConfigComponent,
+        ConfigSnapshotRevision,
+        ConfigSnapshotFingerprint,
+    )],
     expected_bootstrap_admission: Option<&SandboxConfigurationAdmission>,
     tx: &mpsc::Sender<GatewayMessage>,
     inbound: &mut tonic::Streaming<SupervisorMessage>,
@@ -2069,6 +2145,7 @@ async fn run_session_loop(
                             session_id,
                             instance_id,
                             stream_applies_config,
+                            expected_bootstrap_revisions,
                             tx,
                             msg,
                         ).await;
@@ -2153,12 +2230,18 @@ async fn run_session_loop(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_supervisor_message(
     state: &Arc<ServerState>,
     sandbox_id: &str,
     session_id: &str,
     instance_id: &str,
     stream_applies_config: bool,
+    expected_bootstrap_revisions: &[(
+        ConfigComponent,
+        ConfigSnapshotRevision,
+        ConfigSnapshotFingerprint,
+    )],
     tx: &mpsc::Sender<GatewayMessage>,
     msg: SupervisorMessage,
 ) {
@@ -2213,12 +2296,23 @@ async fn handle_supervisor_message(
                     return;
                 }
             };
+            if result.result.as_ref().is_some_and(generation_is_pending) {
+                state
+                    .supervisor_sessions
+                    .finalize_config_update(sandbox_id, session_id, &completed, false);
+                debug!(
+                    sandbox_id,
+                    session_id,
+                    "supervisor configuration generation is waiting for its matching component"
+                );
+                return;
+            }
             if let Some(result) = result.result.as_ref()
                 && let Err(error) = record_component_apply_result(state, sandbox_id, result).await
             {
                 state
                     .supervisor_sessions
-                    .retry_config_update_after_persistence_failure(sandbox_id, session_id, result);
+                    .finalize_config_update(sandbox_id, session_id, &completed, false);
                 warn!(
                     sandbox_id,
                     session_id,
@@ -2236,11 +2330,14 @@ async fn handle_supervisor_message(
                 ) {
                     Ok(admission) => admission,
                     Err(error) => {
+                        state
+                            .supervisor_sessions
+                            .finalize_config_update(sandbox_id, session_id, &completed, false);
                         warn!(sandbox_id, session_id, error = %error, "invalid supervisor configuration admission");
                         return;
                     }
                 };
-                let _ = persist_and_ack_admission(
+                let acknowledged = persist_and_ack_admission(
                     state,
                     sandbox_id,
                     session_id,
@@ -2249,6 +2346,16 @@ async fn handle_supervisor_message(
                     tx,
                 )
                 .await;
+                state.supervisor_sessions.finalize_config_update(
+                    sandbox_id,
+                    session_id,
+                    &completed,
+                    acknowledged,
+                );
+            } else {
+                state
+                    .supervisor_sessions
+                    .finalize_config_update(sandbox_id, session_id, &completed, true);
             }
         }
         Some(supervisor_message::Payload::ConfigBootstrapResult(result)) => {
@@ -2266,12 +2373,20 @@ async fn handle_supervisor_message(
                 return;
             }
             for component in &result.results {
+                let fingerprint = expected_bootstrap_revisions
+                    .iter()
+                    .find(|(expected, _, _)| i32::from(*expected) == component.component)
+                    .map(|(_, _, fingerprint)| fingerprint);
                 match record_component_apply_result(state, sandbox_id, component).await {
-                    Ok(()) => {
-                        state
-                            .supervisor_sessions
-                            .acknowledge_bootstrap_component(sandbox_id, session_id, component);
+                    Ok(()) if fingerprint.is_some() => {
+                        state.supervisor_sessions.acknowledge_bootstrap_component(
+                            sandbox_id,
+                            session_id,
+                            component,
+                            fingerprint.expect("checked above"),
+                        );
                     }
+                    Ok(()) => {}
                     Err(error) => {
                         warn!(
                             sandbox_id,
@@ -2312,21 +2427,32 @@ async fn handle_supervisor_message(
 
 fn bootstrap_revision_fence(
     bootstrap: &ConfigBootstrap,
-) -> Vec<(ConfigComponent, ConfigSnapshotRevision)> {
+) -> Vec<(
+    ConfigComponent,
+    ConfigSnapshotRevision,
+    ConfigSnapshotFingerprint,
+)> {
     let mut revisions = Vec::with_capacity(2);
     if let Some(snapshot) = bootstrap.sandbox_config.as_ref() {
+        let revision = ConfigSnapshotRevision {
+            component: Some(config_snapshot_revision::Component::SandboxConfig(
+                openshell_core::proto::SandboxConfigRevision {
+                    config_revision: snapshot.config_revision,
+                    policy_version: snapshot.version,
+                    policy_source: snapshot.policy_source,
+                    global_policy_version: snapshot.global_policy_version,
+                    settings_revision: snapshot.settings_revision,
+                },
+            )),
+        };
         revisions.push((
             ConfigComponent::SandboxConfig,
-            ConfigSnapshotRevision {
-                component: Some(config_snapshot_revision::Component::SandboxConfig(
-                    openshell_core::proto::SandboxConfigRevision {
-                        config_revision: snapshot.config_revision,
-                        policy_version: snapshot.version,
-                        policy_source: snapshot.policy_source,
-                        global_policy_version: snapshot.global_policy_version,
-                        settings_revision: snapshot.settings_revision,
-                    },
-                )),
+            revision.clone(),
+            ConfigSnapshotFingerprint::Sandbox {
+                revision,
+                provider_env_revision: snapshot.provider_env_revision,
+                provider_attachment_epoch: snapshot.provider_attachment_epoch.clone(),
+                policy_hash: snapshot.policy_hash.clone(),
             },
         ));
     }
@@ -2338,6 +2464,11 @@ fn bootstrap_revision_fence(
                     snapshot.provider_env_revision,
                 )),
             },
+            ConfigSnapshotFingerprint::ProviderEnvironment {
+                provider_env_revision: snapshot.provider_env_revision,
+                provider_attachment_epoch: snapshot.provider_attachment_epoch.clone(),
+                policy_hash: snapshot.policy_hash.clone(),
+            },
         ));
     }
     revisions
@@ -2345,7 +2476,11 @@ fn bootstrap_revision_fence(
 
 fn validate_bootstrap_result(
     results: &[ConfigComponentApplyResult],
-    expected: &[(ConfigComponent, ConfigSnapshotRevision)],
+    expected: &[(
+        ConfigComponent,
+        ConfigSnapshotRevision,
+        ConfigSnapshotFingerprint,
+    )],
 ) -> Result<bool, Status> {
     if expected.len() != 2 || results.len() != expected.len() {
         return Err(Status::invalid_argument(
@@ -2361,9 +2496,9 @@ fn validate_bootstrap_result(
                 "bootstrap result contains an invalid or duplicate component",
             ));
         }
-        let Some((_, revision)) = expected
+        let Some((_, revision, _)) = expected
             .iter()
-            .find(|(expected_component, _)| *expected_component == component)
+            .find(|(expected_component, _, _)| *expected_component == component)
         else {
             return Err(Status::invalid_argument(
                 "bootstrap result contains an unexpected component",
@@ -2432,6 +2567,14 @@ async fn persist_and_ack_admission(
         .is_current_session(sandbox_id, session_id)
     {
         return false;
+    }
+    #[cfg(test)]
+    {
+        let mut failure_target = FAIL_NEXT_ADMISSION_PERSISTENCE_FOR_SANDBOX.lock().unwrap();
+        if failure_target.as_deref() == Some(sandbox_id) {
+            failure_target.take();
+            return false;
+        }
     }
     if let Err(error) = state
         .compute
@@ -2738,10 +2881,24 @@ mod tests {
             component: Some(config_snapshot_revision::Component::ProviderEnvironment(9)),
         };
         let expected = vec![
-            (ConfigComponent::SandboxConfig, sandbox_revision.clone()),
+            (
+                ConfigComponent::SandboxConfig,
+                sandbox_revision.clone(),
+                ConfigSnapshotFingerprint::Sandbox {
+                    revision: sandbox_revision.clone(),
+                    provider_env_revision: 0,
+                    provider_attachment_epoch: String::new(),
+                    policy_hash: String::new(),
+                },
+            ),
             (
                 ConfigComponent::ProviderEnvironment,
                 provider_revision.clone(),
+                ConfigSnapshotFingerprint::ProviderEnvironment {
+                    provider_env_revision: 9,
+                    provider_attachment_epoch: String::new(),
+                    policy_hash: String::new(),
+                },
             ),
         ];
         let result =
@@ -2832,6 +2989,13 @@ mod tests {
             "session-1",
             "instance-1",
             true,
+            &[(
+                ConfigComponent::ProviderEnvironment,
+                revision.clone(),
+                config_message_fingerprint(&SupervisorConfigMessage::ProviderEnvironment(
+                    snapshot.clone(),
+                )),
+            )],
             &tx,
             SupervisorMessage {
                 payload: Some(supervisor_message::Payload::ConfigBootstrapResult(
@@ -2861,6 +3025,186 @@ mod tests {
             DeliveryDisposition::SuppressedUnchanged
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_admission_persistence_does_not_suppress_unchanged_repair() {
+        let sandbox_id = "sb-admission-persistence-retry";
+        let state = state_with_sandbox(sandbox_id).await;
+        let (tx, mut rx) = mpsc::channel(4);
+        let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+        state.supervisor_sessions.register(
+            sandbox_id.into(),
+            "session-1".into(),
+            tx.clone(),
+            shutdown_tx,
+        );
+        let snapshot = SandboxConfigSnapshot {
+            configuration_instance_id: "configuration-1".into(),
+            configuration_admitted: true,
+            config_revision: 7,
+            version: 3,
+            policy_hash: "policy-hash".into(),
+            provider_env_revision: 5,
+            ..Default::default()
+        };
+        let message = SupervisorConfigMessage::SandboxConfig(Box::new(snapshot.clone()));
+        assert_eq!(
+            state
+                .supervisor_sessions
+                .deliver_config(sandbox_id, message.clone()),
+            DeliveryDisposition::Enqueued
+        );
+        let Some(gateway_message::Payload::ConfigUpdate(update)) =
+            rx.recv().await.expect("initial update").payload
+        else {
+            panic!("expected initial config update");
+        };
+        let revision = config_message_revision(&message);
+        *FAIL_NEXT_ADMISSION_PERSISTENCE_FOR_SANDBOX.lock().unwrap() = Some(sandbox_id.into());
+
+        handle_supervisor_message(
+            &state,
+            sandbox_id,
+            "session-1",
+            "instance-1",
+            true,
+            &[],
+            &tx,
+            SupervisorMessage {
+                payload: Some(supervisor_message::Payload::ConfigUpdateResult(
+                    ConfigUpdateResult {
+                        update_id: update.update_id,
+                        component_sequence: update.component_sequence,
+                        result: Some(ConfigComponentApplyResult {
+                            component: ConfigComponent::SandboxConfig.into(),
+                            requested_revision: Some(revision.clone()),
+                            applied_revision: Some(revision),
+                            outcome: ConfigApplyOutcome::Applied.into(),
+                            ..Default::default()
+                        }),
+                        admission: Some(expected_configuration_admission(&snapshot)),
+                    },
+                )),
+            },
+        )
+        .await;
+
+        assert_eq!(
+            state
+                .supervisor_sessions
+                .deliver_config(sandbox_id, message),
+            DeliveryDisposition::Enqueued,
+            "a non-durable admission must leave the revision eligible for repair"
+        );
+        assert!(matches!(
+            rx.recv().await.expect("repair update").payload,
+            Some(gateway_message::Payload::ConfigUpdate(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn generation_pending_result_is_not_persisted_or_suppressed() {
+        use openshell_core::proto::{ConfigApplyFailure, ConfigurationAdmissionState};
+
+        let sandbox_id = "sb-generation-pending-retry";
+        let state = state_with_sandbox(sandbox_id).await;
+        let (tx, mut rx) = mpsc::channel(4);
+        let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+        state.supervisor_sessions.register(
+            sandbox_id.into(),
+            "session-1".into(),
+            tx.clone(),
+            shutdown_tx,
+        );
+        let snapshot = SandboxConfigSnapshot {
+            configuration_instance_id: "configuration-1".into(),
+            configuration_admitted: true,
+            config_revision: 7,
+            version: 3,
+            policy_hash: "policy-hash".into(),
+            provider_env_revision: 5,
+            ..Default::default()
+        };
+        let message = SupervisorConfigMessage::SandboxConfig(Box::new(snapshot.clone()));
+        assert_eq!(
+            state
+                .supervisor_sessions
+                .deliver_config(sandbox_id, message.clone()),
+            DeliveryDisposition::Enqueued
+        );
+        let Some(gateway_message::Payload::ConfigUpdate(update)) =
+            rx.recv().await.expect("initial update").payload
+        else {
+            panic!("expected initial config update");
+        };
+        let revision = config_message_revision(&message);
+        let mut rejected_admission = expected_configuration_admission(&snapshot);
+        rejected_admission.state = ConfigurationAdmissionState::Rejected.into();
+        rejected_admission.error = "effective configuration could not be activated".into();
+
+        handle_supervisor_message(
+            &state,
+            sandbox_id,
+            "session-1",
+            "instance-1",
+            true,
+            &[],
+            &tx,
+            SupervisorMessage {
+                payload: Some(supervisor_message::Payload::ConfigUpdateResult(
+                    ConfigUpdateResult {
+                        update_id: update.update_id,
+                        component_sequence: update.component_sequence,
+                        result: Some(ConfigComponentApplyResult {
+                            component: ConfigComponent::SandboxConfig.into(),
+                            requested_revision: Some(revision),
+                            applied_revision: None,
+                            outcome: ConfigApplyOutcome::FailedClosed.into(),
+                            failure: Some(ConfigApplyFailure {
+                                code: "generation_mismatch".into(),
+                                message: "waiting for matching provider generation".into(),
+                                retryable: true,
+                            }),
+                        }),
+                        admission: Some(rejected_admission),
+                    },
+                )),
+            },
+        )
+        .await;
+
+        assert!(
+            state
+                .store
+                .get_message::<StoredConfigComponentObservation>(
+                    "sb-generation-pending-retry:sandbox_config",
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "a transient cross-component ordering result must not become durable state"
+        );
+        let sandbox = state
+            .store
+            .get_message::<Sandbox>(sandbox_id)
+            .await
+            .unwrap()
+            .expect("sandbox remains persisted");
+        assert!(
+            sandbox
+                .status
+                .as_ref()
+                .and_then(|status| status.configuration_admission.as_ref())
+                .is_none(),
+            "a transient generation mismatch must not persist rejected admission"
+        );
+        assert_eq!(
+            state
+                .supervisor_sessions
+                .deliver_config(sandbox_id, message),
+            DeliveryDisposition::Enqueued
+        );
     }
 
     #[tokio::test]
@@ -2919,6 +3263,79 @@ mod tests {
             .expect("gateway message")
     }
 
+    fn applied_bootstrap_result(bootstrap: &ConfigBootstrap) -> ConfigBootstrapResult {
+        let sandbox = bootstrap
+            .sandbox_config
+            .as_ref()
+            .expect("sandbox bootstrap component");
+        let provider = bootstrap
+            .provider_environment
+            .as_ref()
+            .expect("provider bootstrap component");
+        let sandbox_revision = config_message_revision(&SupervisorConfigMessage::SandboxConfig(
+            Box::new(sandbox.clone()),
+        ));
+        let provider_revision = config_message_revision(
+            &SupervisorConfigMessage::ProviderEnvironment(provider.clone()),
+        );
+        ConfigBootstrapResult {
+            results: vec![
+                ConfigComponentApplyResult {
+                    component: ConfigComponent::SandboxConfig.into(),
+                    requested_revision: Some(sandbox_revision.clone()),
+                    applied_revision: Some(sandbox_revision),
+                    outcome: ConfigApplyOutcome::Applied.into(),
+                    ..Default::default()
+                },
+                ConfigComponentApplyResult {
+                    component: ConfigComponent::ProviderEnvironment.into(),
+                    requested_revision: Some(provider_revision.clone()),
+                    applied_revision: Some(provider_revision),
+                    outcome: ConfigApplyOutcome::Applied.into(),
+                    ..Default::default()
+                },
+            ],
+            admission: Some(expected_configuration_admission(sandbox)),
+        }
+    }
+
+    async fn report_bootstrap_and_runtime_ready(
+        state: &Arc<ServerState>,
+        sandbox_id: &str,
+        harness: &mut crate::grpc::test_support::SupervisorStreamHarness,
+        bootstrap: &ConfigBootstrap,
+    ) {
+        harness
+            .outbound
+            .send(SupervisorMessage {
+                payload: Some(supervisor_message::Payload::ConfigBootstrapResult(
+                    applied_bootstrap_result(bootstrap),
+                )),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            first_gateway_message(harness).await.payload,
+            Some(gateway_message::Payload::ConfigurationAdmission(_))
+        ));
+        harness
+            .outbound
+            .send(SupervisorMessage {
+                payload: Some(supervisor_message::Payload::RuntimeReady(
+                    openshell_core::proto::SupervisorRuntimeReady {},
+                )),
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !state.supervisor_sessions.is_runtime_ready(sandbox_id) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("runtime readiness before timeout");
+    }
+
     #[tokio::test]
     async fn legacy_supervisor_without_protocol_revision_is_accepted() {
         let state = state_with_sandbox("sb-legacy").await;
@@ -2971,6 +3388,62 @@ mod tests {
                 .supervisor_sessions
                 .is_current_session("sb-stage-one", &accepted.session_id)
         );
+    }
+
+    #[tokio::test]
+    async fn revision_two_reconnect_skips_startup_preparation_and_restores_readiness() {
+        let sandbox_id = "sb-reconnect-no-preparation";
+        let policy = openshell_policy::restrictive_default_policy();
+        let state = state_with_startup_policy(sandbox_id, Some(policy)).await;
+        let mut initial = crate::grpc::test_support::connect_supervisor_stream(
+            &state,
+            sandbox_id,
+            SUPERVISOR_PROTOCOL_REVISION,
+        )
+        .await
+        .expect("initial supervisor connection");
+        let Some(gateway_message::Payload::StartupConfigCandidate(candidate)) =
+            first_gateway_message(&mut initial).await.payload
+        else {
+            panic!("initial session must prepare the startup policy");
+        };
+        initial
+            .outbound
+            .send(SupervisorMessage {
+                payload: Some(supervisor_message::Payload::StartupConfigPrepared(
+                    StartupConfigPrepared {
+                        candidate_id: candidate.candidate_id,
+                        result: Some(startup_config_prepared::Result::Unchanged(())),
+                    },
+                )),
+            })
+            .await
+            .unwrap();
+        let Some(gateway_message::Payload::SessionAccepted(accepted)) =
+            first_gateway_message(&mut initial).await.payload
+        else {
+            panic!("expected initial SessionAccepted");
+        };
+        let bootstrap = accepted.bootstrap.expect("initial authoritative bootstrap");
+        report_bootstrap_and_runtime_ready(&state, sandbox_id, &mut initial, &bootstrap).await;
+        drop(initial);
+
+        let mut reconnect = crate::grpc::test_support::reconnect_supervisor_stream(
+            &state,
+            sandbox_id,
+            SUPERVISOR_PROTOCOL_REVISION,
+        )
+        .await
+        .expect("stock supervisor reconnect");
+        let Some(gateway_message::Payload::SessionAccepted(accepted)) =
+            first_gateway_message(&mut reconnect).await.payload
+        else {
+            panic!("reconnect must proceed directly to SessionAccepted");
+        };
+        let bootstrap = accepted
+            .bootstrap
+            .expect("reconnect authoritative bootstrap");
+        report_bootstrap_and_runtime_ready(&state, sandbox_id, &mut reconnect, &bootstrap).await;
     }
 
     #[tokio::test]
@@ -3291,6 +3764,9 @@ mod tests {
         let revision = config_message_revision(&SupervisorConfigMessage::SandboxConfig(Box::new(
             snapshot.clone(),
         )));
+        let fingerprint = config_message_fingerprint(&SupervisorConfigMessage::SandboxConfig(
+            Box::new(snapshot.clone()),
+        ));
 
         assert!(!registry.acknowledge_bootstrap_component(
             "sb-1",
@@ -3302,6 +3778,7 @@ mod tests {
                 outcome: ConfigApplyOutcome::FailedClosed.into(),
                 ..Default::default()
             },
+            &fingerprint,
         ));
         assert!(registry.acknowledge_bootstrap_component(
             "sb-1",
@@ -3313,6 +3790,7 @@ mod tests {
                 outcome: ConfigApplyOutcome::Applied.into(),
                 ..Default::default()
             },
+            &fingerprint,
         ));
         assert_eq!(
             registry.deliver_config(
@@ -3332,6 +3810,11 @@ mod tests {
         registry.register("sb-1".into(), "session-1".into(), tx, shutdown_tx);
         let bootstrap_revision = ConfigSnapshotRevision {
             component: Some(config_snapshot_revision::Component::ProviderEnvironment(7)),
+        };
+        let bootstrap_fingerprint = ConfigSnapshotFingerprint::ProviderEnvironment {
+            provider_env_revision: 7,
+            provider_attachment_epoch: String::new(),
+            policy_hash: String::new(),
         };
 
         assert_eq!(
@@ -3354,6 +3837,7 @@ mod tests {
                 outcome: ConfigApplyOutcome::Applied.into(),
                 ..Default::default()
             },
+            &bootstrap_fingerprint,
         ));
 
         let message = rx.try_recv().expect("newer update");
@@ -3397,7 +3881,136 @@ mod tests {
                 outcome: ConfigApplyOutcome::Applied.into(),
                 ..Default::default()
             },
+            &bootstrap_fingerprint,
         ));
+    }
+
+    #[test]
+    fn sandbox_delivery_fingerprint_includes_provider_generation() {
+        let registry = SupervisorSessionRegistry::new();
+        let (tx, mut rx) = mpsc::channel(1);
+        let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+        registry.register("sb-1".into(), "session-1".into(), tx, shutdown_tx);
+        let snapshot = SandboxConfigSnapshot {
+            configuration_admitted: true,
+            config_revision: 7,
+            provider_env_revision: 11,
+            provider_attachment_epoch: "epoch-1".into(),
+            policy_hash: "policy-1".into(),
+            ..Default::default()
+        };
+        let message = SupervisorConfigMessage::SandboxConfig(Box::new(snapshot.clone()));
+        let revision = config_message_revision(&message);
+        assert!(registry.acknowledge_bootstrap_component(
+            "sb-1",
+            "session-1",
+            &ConfigComponentApplyResult {
+                component: ConfigComponent::SandboxConfig.into(),
+                requested_revision: Some(revision.clone()),
+                applied_revision: Some(revision),
+                outcome: ConfigApplyOutcome::Applied.into(),
+                ..Default::default()
+            },
+            &config_message_fingerprint(&message),
+        ));
+        assert_eq!(
+            registry.deliver_config("sb-1", message),
+            DeliveryDisposition::SuppressedUnchanged
+        );
+        assert_eq!(
+            registry.deliver_config(
+                "sb-1",
+                SupervisorConfigMessage::SandboxConfig(Box::new(SandboxConfigSnapshot {
+                    provider_env_revision: 12,
+                    ..snapshot
+                })),
+            ),
+            DeliveryDisposition::Enqueued
+        );
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn provider_delivery_fingerprint_includes_policy_hash_and_attachment_epoch() {
+        let registry = SupervisorSessionRegistry::new();
+        let (tx, mut rx) = mpsc::channel(2);
+        let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+        registry.register("sb-1".into(), "session-1".into(), tx, shutdown_tx);
+        let snapshot = ProviderEnvironmentSnapshot {
+            provider_env_revision: 7,
+            provider_attachment_epoch: "epoch-1".into(),
+            policy_hash: "policy-1".into(),
+            ..Default::default()
+        };
+        let message = SupervisorConfigMessage::ProviderEnvironment(snapshot.clone());
+        let revision = config_message_revision(&message);
+        let fingerprint = config_message_fingerprint(&message);
+        assert!(registry.acknowledge_bootstrap_component(
+            "sb-1",
+            "session-1",
+            &ConfigComponentApplyResult {
+                component: ConfigComponent::ProviderEnvironment.into(),
+                requested_revision: Some(revision.clone()),
+                applied_revision: Some(revision),
+                outcome: ConfigApplyOutcome::Applied.into(),
+                ..Default::default()
+            },
+            &fingerprint,
+        ));
+        assert_eq!(
+            registry.deliver_config("sb-1", message),
+            DeliveryDisposition::SuppressedUnchanged
+        );
+
+        let policy_changed =
+            SupervisorConfigMessage::ProviderEnvironment(ProviderEnvironmentSnapshot {
+                policy_hash: "policy-2".into(),
+                ..snapshot.clone()
+            });
+        assert_eq!(
+            registry.deliver_config("sb-1", policy_changed),
+            DeliveryDisposition::Enqueued
+        );
+        assert!(rx.try_recv().is_ok());
+
+        let (replacement_tx, mut replacement_rx) = mpsc::channel(1);
+        let (replacement_shutdown_tx, _replacement_shutdown_rx) = oneshot::channel();
+        registry.register(
+            "sb-1".into(),
+            "session-2".into(),
+            replacement_tx,
+            replacement_shutdown_tx,
+        );
+        let fingerprint = config_message_fingerprint(
+            &SupervisorConfigMessage::ProviderEnvironment(snapshot.clone()),
+        );
+        assert!(registry.acknowledge_bootstrap_component(
+            "sb-1",
+            "session-2",
+            &ConfigComponentApplyResult {
+                component: ConfigComponent::ProviderEnvironment.into(),
+                requested_revision: Some(config_message_revision(
+                    &SupervisorConfigMessage::ProviderEnvironment(snapshot.clone()),
+                )),
+                applied_revision: Some(config_message_revision(
+                    &SupervisorConfigMessage::ProviderEnvironment(snapshot.clone()),
+                )),
+                outcome: ConfigApplyOutcome::Applied.into(),
+                ..Default::default()
+            },
+            &fingerprint,
+        ));
+        assert_eq!(
+            registry.deliver_config(
+                "sb-1",
+                SupervisorConfigMessage::ProviderEnvironment(ProviderEnvironmentSnapshot {
+                    provider_attachment_epoch: "epoch-2".into(),
+                    ..snapshot
+                }),
+            ),
+            DeliveryDisposition::Enqueued
+        );
+        assert!(replacement_rx.try_recv().is_ok());
     }
 
     #[tokio::test]
@@ -3462,7 +4075,7 @@ mod tests {
             .unwrap()
             .revision
             .clone();
-        registry
+        let completed = registry
             .complete_config_update(
                 "sb-1",
                 "session-1",
@@ -3480,6 +4093,7 @@ mod tests {
                 },
             )
             .unwrap();
+        assert!(registry.finalize_config_update("sb-1", "session-1", &completed, true,));
         let second = update(rx.recv().await.expect("coalesced config update"));
         assert_eq!(second.component_sequence, 2);
         assert_eq!(update(third).component_sequence, 1);
