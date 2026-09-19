@@ -9,7 +9,7 @@ environment variable.
 workload container                       supervisor container
 agent -> sandbox -- private UDS / gRPC -> policy proxy -> host network -> destination
                                             |
-                                            +-- authenticated gateway callback
+                                            +-- authenticated gateway session
 ```
 
 ## Outer network fence
@@ -24,17 +24,13 @@ TCP opens, TCP byte streams, DNS requests/replies, and lifecycle operations
 share the authenticated gRPC channel. DNS is resolved and authorized by the
 supervisor. General UDP is unsupported.
 
-## Supervisor callback network
+## Supervisor network
 
-The supervisor companion uses Podman's host network. Host-gateway aliases and
-the upstream corporate proxy apply only to the supervisor. The gateway's SSH
-tunnel uses the supervisor relay over its private Unix socket, so the driver
-does not publish a supervisor port.
-
-Rootful Podman uses the configured bridge and its gateway address. Rootless
-local callbacks require the existing pasta path; slirp4netns or unknown helpers
-require an explicitly remote `grpc_endpoint`. On macOS, Podman Machine provides
-the runtime and host-loopback forwarding.
+The supervisor companion uses Podman's host network. On Linux it connects to
+the gateway's primary loopback endpoint. On macOS, Podman Machine provides the
+host-loopback route. The upstream corporate proxy applies only to the
+supervisor. The gateway's SSH tunnel uses the supervisor relay over its private
+Unix socket, so the driver does not publish a supervisor port.
 
 These runtime-managed network helpers are outside the workload trust boundary.
 Sharing the workload's user namespace preserves volume UID/GID mapping; it
@@ -50,8 +46,8 @@ Inspect both containers with the same sandbox-ID label, distinguishing
   kernel/runtime primitive. Do not add capabilities or disable runtime seccomp.
 - Sandbox cannot authenticate to supervisor: check the private channel volume,
   matching user namespace mappings, and shared SELinux label.
-- Supervisor cannot call back: inspect its configured gateway endpoint,
-  credentials, host network, and gateway callback listener.
+- Supervisor cannot connect: inspect its configured gateway endpoint,
+  credentials, host network, and the gateway's primary listener.
 - DNS or egress denied: inspect supervisor policy decisions. Do not add a
   workload network, resolver bypass, or direct gateway route.
 - Pair is not Ready: check the supervisor health socket and gateway session.

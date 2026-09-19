@@ -101,15 +101,42 @@ jobs:
     with:
       checkout-ref: ${{ github.sha }}
 
-  conformance:
+  prepare-integration:
     needs: [build-binaries, build-images]
     permissions:
       actions: read
       contents: read
-    uses: ./.github/workflows/conformance.yml
+      packages: read
+    uses: ./.github/workflows/prepare-integration-inputs.yml
+
+  conformance-integration:
+    needs: prepare-integration
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    uses: ./.github/workflows/integration-runner.yml
     with:
-      scenarios: '["ubuntu-docker-rootful", "fedora-podman-rootful", "fedora-podman-rootless"]'
-      testsuites: '["conformance"]'
+      category: conformance
+      source-sha: ${{ needs.prepare-integration.outputs.source_sha }}
+      integration-inputs-artifact-id: ${{ needs.prepare-integration.outputs.integration_inputs_artifact_id }}
+
+  feature-specific-integration:
+    needs: prepare-integration
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    uses: ./.github/workflows/integration-runner.yml
+    with:
+      category: feature-specific
+      source-sha: ${{ needs.prepare-integration.outputs.source_sha }}
+      integration-inputs-artifact-id: ${{ needs.prepare-integration.outputs.integration_inputs_artifact_id }}
+      test-matrix: >-
+        [
+          {"environment":"fedora-podman-rootful","installer":"binaries","testsuite":"provider-refresh"},
+          {"environment":"fedora-podman-rootless","installer":"binaries","testsuite":"provider-refresh"}
+        ]
 
   docker-e2e:
     needs: [build-binaries, build-images]
@@ -122,18 +149,6 @@ jobs:
       image-tag: ${{ github.sha }}
       checkout-ref: ${{ github.sha }}
       runner: linux-arm64-cpu8
-      conformance-artifact-prefix: openshell-conformance
-
-  podman-e2e:
-    needs: [build-binaries, build-images]
-    permissions:
-      actions: read
-      contents: read
-      packages: read
-    uses: ./.github/workflows/e2e-podman-test.yml
-    with:
-      image-tag: ${{ github.sha }}
-      checkout-ref: ${{ github.sha }}
       conformance-artifact-prefix: openshell-conformance
 
   vm-e2e:
@@ -244,7 +259,17 @@ jobs:
   # ---------------------------------------------------------------------------
   release-dev:
     name: Release Dev
-    needs: [compute-versions, package-binaries, build-python-wheel, conformance, docker-e2e, podman-e2e, vm-e2e, build-deb, build-rpm, build-snap]
+    needs:
+      - compute-versions
+      - package-binaries
+      - build-python-wheel
+      - conformance-integration
+      - feature-specific-integration
+      - docker-e2e
+      - vm-e2e
+      - build-deb
+      - build-rpm
+      - build-snap
     runs-on: linux-amd64-cpu8
     timeout-minutes: 10
     permissions:

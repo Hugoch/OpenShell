@@ -241,6 +241,12 @@ connection metadata agrees. When request paths overlap, a path endpoint with a
 higher specificity rank deterministically overrides broader request-processing
 metadata. Equally specific overlapping endpoints must agree.
 
+Endpoint `tls`, `enforcement`, and `access` use protobuf enums and retain their
+named YAML spellings. `protocol` remains a string so the supported protocol set
+can evolve, but every ingress validates it before persistence or activation.
+The supervisor also refuses unknown enum numbers and protocol values
+defensively; an unrecognized enforcement value never falls back to audit.
+
 Gateway mutation paths validate the complete effective candidate before
 persistence when the affected sandbox scope is known. Direct replacements,
 incremental merges and approvals, provider attachment, and profile fanout reject
@@ -383,15 +389,20 @@ final enforcement boundary.
 
 The standalone `openshell-prover check` command compares a fully composed local
 candidate policy with an operator-supplied local boundary. It establishes
-`Allowed(candidate) ⊆ Allowed(boundary)` for the model scope reported in its
+`Allowed(candidate) ⊆ Allowed(boundary)` for the policy domains reported in its
 result. It does not fetch gateway state, compose provider rules, apply policy,
 or decide whether an in-boundary change is eligible for automatic approval.
 
-The initial model covers filesystem paths, L4 network authority, and enforced
-REST method and path authority. It returns explicit unsupported or inconclusive
+The containment model covers filesystem paths, supported process identities,
+Landlock compatibility requirements, L4 destinations including IP ranges, and
+enforced REST method and path authority. Identity comparisons assume consistent
+user and group resolution. Compatibility checks compare requested enforcement
+requirements, not the actual kernel state of a running sandbox.
+It returns explicit unsupported or inconclusive
 results when a sound decision depends on authority or runtime context outside
-the model. The result records the model version and covered domains so callers
-can bind a successful check to those semantics.
+the model. The result records the covered domains so callers can require the
+authority relevant to their decision. The JSON `schema_version` versions the
+result contract, while `prover_version` identifies the producing implementation.
 
 Before semantic validation, the checker observes cancellation and applies
 aggregate limits across both inputs. Oversized checks therefore return
@@ -403,8 +414,8 @@ The Rust containment API has an explicit extensibility contract: options and
 modeled-domain evidence permit additive growth, while the four `CheckResult`
 states remain exhaustive and authorization accepts only `Within`. This Rust
 source-compatibility boundary is separate from the CLI JSON schema and the
-reported containment model version. See the `openshell-prover` crate README for
-the supported construction and matching patterns.
+reported modeled domains. See the `openshell-prover` crate README for the
+supported construction and matching patterns.
 
 This containment operation is separate from the proposal-risk queries below.
 See the [standalone policy prover documentation](../docs/reference/policy-prover.mdx)

@@ -465,7 +465,7 @@ These are the primary `mise` tasks for day-to-day development:
 | `python/`       | Python SDK and bindings                       |
 | `sdk/go/`       | Go SDK (types, gRPC clients, converters)      |
 | `sdk/typescript/` | TypeScript SDK (Connect client and generated protobuf bindings) |
-| `proto/`        | Protocol buffer definitions                   |
+| `proto/`        | Protocol buffer definitions and [public API conventions](proto/README.md) |
 | `tasks/`        | `mise` task definitions and build scripts     |
 | `deploy/`       | Dockerfiles, Helm chart, Kubernetes manifests |
 | `docs/`         | Published Fern docs source, navigation, and content assets |
@@ -478,6 +478,12 @@ These are the primary `mise` tasks for day-to-day development:
 ## RFCs
 
 New features always start as GitHub issues using the feature request template. For cross-cutting architectural decisions, API contract changes, or process proposals that need broad consensus, maintainers may ask for an RFC from the issue and assign an RFC number there. RFCs live in `rfc/`. See [rfc/README.md](rfc/README.md) for the full lifecycle and guidelines.
+
+## Public API conventions
+
+Follow [the protobuf API conventions](proto/README.md) when adding or changing
+gRPC contracts. The guide defines entity-reference naming, workspace selectors,
+field design, and schema-evolution rules.
 
 ## Documentation
 
@@ -551,7 +557,46 @@ chore(deps): bump tokio to 1.40
 
 ### DCO
 
-All human contributions must include a `Signed-off-by` line in each commit message. This certifies you have the right to submit the work under the project license. See the [Developer Certificate of Origin](https://developercertificate.org/). Dependabot-authored dependency update PRs are allowlisted because the bot cannot sign commits.
+All human contributions must include a `Signed-off-by` line in each commit message. This certifies you have the right to submit the work under the project license. Dependabot-authored dependency update PRs are allowlisted because the bot cannot sign commits.
+
+The project uses version 1.1 of the [Developer Certificate of Origin](https://developercertificate.org/):
+
+```text
+Developer Certificate of Origin
+Version 1.1
+
+Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
+
+Everyone is permitted to copy and distribute verbatim copies of this
+license document, but changing it is not allowed.
+
+
+Developer's Certificate of Origin 1.1
+
+By making a contribution to this project, I certify that:
+
+(a) The contribution was created in whole or in part by me and I
+    have the right to submit it under the open source license
+    indicated in the file; or
+
+(b) The contribution is based upon previous work that, to the best
+    of my knowledge, is covered under an appropriate open source
+    license and I have the right under that license to submit that
+    work with modifications, whether created in whole or in part
+    by me, under the same open source license (unless I am
+    permitted to submit under a different license), as indicated
+    in the file; or
+
+(c) The contribution was provided directly to me by some other
+    person who certified (a), (b) or (c) and I have not modified
+    it.
+
+(d) I understand and agree that this project and the contribution
+    are public and that a record of the contribution (including all
+    personal information I submit with it, including my sign-off) is
+    maintained indefinitely and may be redistributed consistent with
+    this project or the open source license(s) involved.
+```
 
 ```bash
 git commit -s -m "feat(sandbox): add new capability"

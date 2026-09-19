@@ -14,7 +14,8 @@
 
 use openshell_core::net::{is_always_blocked_ip, is_internal_ip, is_known_metadata_hostname};
 use openshell_core::proto::{
-    DenialSummary, L7Allow, L7Rule, NetworkBinary, NetworkEndpoint, NetworkPolicyRule, PolicyChunk,
+    DenialSummary, L7Allow, L7Rule, NetworkBinary, NetworkEndpoint, NetworkEnforcementMode,
+    NetworkPolicyRule, PolicyChunk,
 };
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -133,7 +134,7 @@ pub fn generate_proposals(summaries: &[DenialSummary]) -> Vec<PolicyChunk> {
                 port: *port,
                 ports: vec![*port],
                 protocol: "rest".to_string(),
-                enforcement: "enforce".to_string(),
+                enforcement: NetworkEnforcementMode::Enforce as i32,
                 rules: l7_rules,
                 advisor_proposed: true,
                 ..Default::default()
@@ -588,8 +589,11 @@ mod tests {
         // L7 fields should be set.
         assert_eq!(ep.protocol, "rest");
         // tls field is no longer set (auto-detection handles it).
-        assert!(ep.tls.is_empty());
-        assert_eq!(ep.enforcement, "enforce");
+        assert_eq!(
+            ep.tls,
+            openshell_core::proto::NetworkTlsMode::Unspecified as i32
+        );
+        assert_eq!(ep.enforcement, NetworkEnforcementMode::Enforce as i32);
 
         // Should have L7 rules.
         assert!(!ep.rules.is_empty());

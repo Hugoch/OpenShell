@@ -78,14 +78,38 @@ fn contained_policy_returns_stable_json_and_zero() {
     assert_eq!(value["result"], "within_boundary");
     assert_eq!(value["exit_code"], 0);
     assert_eq!(
-        value["scope"],
+        value["coverage"],
         serde_json::json!({
-            "model_version": "boundary-v1",
-            "policy_version": 1,
-            "domains": ["filesystem", "network_l4", "network_rest"]
+            "domains": ["filesystem", "network_l4", "network_rest", "process", "landlock"]
         })
     );
+    assert!(value.get("scope").is_none());
     assert!(value["counterexample"].is_null());
+}
+
+#[test]
+fn contained_policy_returns_stable_text_coverage_and_zero() {
+    let output = run(&[
+        "check",
+        fixture("candidate-contained.yaml")
+            .to_str()
+            .expect("UTF-8 fixture path"),
+        "--boundary",
+        fixture("boundary.yaml")
+            .to_str()
+            .expect("UTF-8 fixture path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("UTF-8 text output"),
+        "result: within_boundary\ncoverage: domains=filesystem,network_l4,network_rest,process,landlock\n"
+    );
 }
 
 #[test]
@@ -101,6 +125,58 @@ fn exceeding_policy_returns_counterexample_and_one() {
     assert_eq!(value["result"], "exceeds_boundary");
     assert_eq!(value["exit_code"], 1);
     assert_eq!(value["counterexample"]["domain"], "filesystem");
+}
+
+#[test]
+fn counterexamples_have_stable_json_shapes() {
+    for (candidate, boundary, expected) in [
+        (
+            "candidate-process-root.yaml",
+            "boundary-execution.yaml",
+            serde_json::json!({
+                "domain": "process",
+                "field": "run_as_user",
+                "boundary": "sandbox",
+                "candidate": "root"
+            }),
+        ),
+        (
+            "candidate-landlock-best-effort.yaml",
+            "boundary-execution.yaml",
+            serde_json::json!({
+                "domain": "landlock",
+                "boundary": "hard_requirement",
+                "candidate": "best_effort"
+            }),
+        ),
+        (
+            "candidate-ipv6.yaml",
+            "boundary-empty.yaml",
+            serde_json::json!({
+                "domain": "network",
+                "binary": null,
+                "ancestor_binary": null,
+                "binary_identity_required": false,
+                "host": "api.example.com",
+                "destination_ip": "2001:db8::",
+                "trusted_gateway": false,
+                "port": 443,
+                "protocol": "l4",
+                "method": null,
+                "path": null
+            }),
+        ),
+    ] {
+        let output = check_json(candidate, boundary);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "candidate={candidate}, stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).expect("single JSON object");
+        assert_eq!(value["counterexample"], expected, "candidate={candidate}");
+    }
 }
 
 #[test]
@@ -536,6 +612,9 @@ fn sigint_interrupts_the_check_with_exit_130() {
         policy(
             (0..300)
                 .map(|index| format!("/route{index}/**/tail*"))
+                // Cover the bounded concrete-witness sample so this fixture
+                // still exercises interruption of the unrestricted solver.
+                .chain(std::iter::once("/routea/**/tail*".to_owned()))
                 .collect(),
         )
         .to_string(),

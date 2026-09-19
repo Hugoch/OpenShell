@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use openshell_prover::containment::{
-    CheckOptions, CheckResult, CheckScope, ContainmentPolicy, Counterexample, parse_policy_str,
+    CheckCoverage, CheckOptions, CheckResult, ContainmentPolicy, Counterexample, parse_policy_str,
 };
 use serde::Serialize;
 
@@ -62,7 +62,7 @@ struct Envelope<'a> {
     schema_version: u32,
     prover_version: &'static str,
     check: &'static str,
-    scope: Option<ScopeJson<'a>>,
+    coverage: Option<CoverageJson<'a>>,
     result: &'static str,
     exit_code: u8,
     inputs: InputsJson,
@@ -72,9 +72,7 @@ struct Envelope<'a> {
 }
 
 #[derive(Debug, Serialize)]
-struct ScopeJson<'a> {
-    model_version: &'a str,
-    policy_version: u32,
+struct CoverageJson<'a> {
     domains: Vec<&'a str>,
 }
 
@@ -87,6 +85,15 @@ struct InputsJson {
 #[derive(Debug, Serialize)]
 #[serde(tag = "domain", rename_all = "snake_case")]
 enum CounterexampleJson<'a> {
+    Process {
+        field: &'a str,
+        boundary: &'a str,
+        candidate: &'a str,
+    },
+    Landlock {
+        boundary: &'a str,
+        candidate: &'a str,
+    },
     Filesystem {
         access: &'a str,
         path: &'a str,
@@ -96,6 +103,8 @@ enum CounterexampleJson<'a> {
         ancestor_binary: Option<&'a str>,
         binary_identity_required: bool,
         host: &'a str,
+        destination_ip: String,
+        trusted_gateway: bool,
         port: u16,
         protocol: &'a str,
         method: Option<&'a str>,
@@ -284,7 +293,7 @@ fn render_input_error(
             schema_version: 1,
             prover_version: env!("CARGO_PKG_VERSION"),
             check: "boundary",
-            scope: None,
+            coverage: None,
             result: "error",
             exit_code: 2,
             inputs,
@@ -308,10 +317,12 @@ fn render_cancelled(output: OutputFormat, inputs: InputsJson) -> Result<u8, Stri
 }
 
 fn result_envelope(result: &CheckResult, inputs: InputsJson) -> Result<Envelope<'_>, String> {
-    let (scope, result_name, exit_code, counterexample, reason_code, reason) = match result {
-        CheckResult::Within(evidence) => (evidence.scope(), "within_boundary", 0, None, None, None),
+    let (coverage, result_name, exit_code, counterexample, reason_code, reason) = match result {
+        CheckResult::Within(evidence) => {
+            (evidence.coverage(), "within_boundary", 0, None, None, None)
+        }
         CheckResult::Exceeds(evidence) => (
-            evidence.scope(),
+            evidence.coverage(),
             "exceeds_boundary",
             1,
             Some(counterexample_json(evidence.counterexample())?),
@@ -319,7 +330,7 @@ fn result_envelope(result: &CheckResult, inputs: InputsJson) -> Result<Envelope<
             None,
         ),
         CheckResult::Unsupported(evidence) => (
-            evidence.scope(),
+            evidence.coverage(),
             "unsupported",
             3,
             None,
@@ -334,7 +345,7 @@ fn result_envelope(result: &CheckResult, inputs: InputsJson) -> Result<Envelope<
                     3
                 };
             (
-                evidence.scope(),
+                evidence.coverage(),
                 "inconclusive",
                 exit_code,
                 None,
@@ -347,7 +358,7 @@ fn result_envelope(result: &CheckResult, inputs: InputsJson) -> Result<Envelope<
         schema_version: 1,
         prover_version: env!("CARGO_PKG_VERSION"),
         check: "boundary",
-        scope: Some(scope_json(scope)),
+        coverage: Some(coverage_json(coverage)),
         result: result_name,
         exit_code,
         inputs,
@@ -357,16 +368,36 @@ fn result_envelope(result: &CheckResult, inputs: InputsJson) -> Result<Envelope<
     })
 }
 
-fn scope_json(scope: &CheckScope) -> ScopeJson<'_> {
-    ScopeJson {
-        model_version: scope.model_version,
-        policy_version: scope.policy_version,
-        domains: scope.domains.iter().map(|domain| domain.as_str()).collect(),
+fn coverage_json(coverage: &CheckCoverage) -> CoverageJson<'_> {
+    CoverageJson {
+        domains: coverage
+            .domains
+            .iter()
+            .map(|domain| domain.as_str())
+            .collect(),
     }
 }
 
 fn counterexample_json(counterexample: &Counterexample) -> Result<CounterexampleJson<'_>, String> {
     let converted = match counterexample {
+        Counterexample::Process {
+            field,
+            boundary,
+            candidate,
+            ..
+        } => CounterexampleJson::Process {
+            field,
+            boundary,
+            candidate,
+        },
+        Counterexample::Landlock {
+            boundary,
+            candidate,
+            ..
+        } => CounterexampleJson::Landlock {
+            boundary,
+            candidate,
+        },
         Counterexample::Filesystem { access, path, .. } => CounterexampleJson::Filesystem {
             access: access.as_str(),
             path,
@@ -376,6 +407,8 @@ fn counterexample_json(counterexample: &Counterexample) -> Result<Counterexample
             ancestor_binary,
             binary_identity_required,
             host,
+            destination_ip,
+            trusted_gateway,
             port,
             protocol,
             method,
@@ -386,6 +419,8 @@ fn counterexample_json(counterexample: &Counterexample) -> Result<Counterexample
             ancestor_binary: ancestor_binary.as_deref(),
             binary_identity_required: *binary_identity_required,
             host,
+            destination_ip: destination_ip.to_string(),
+            trusted_gateway: *trusted_gateway,
             port: *port,
             protocol: protocol.as_str(),
             method: method.as_deref(),
@@ -412,18 +447,14 @@ fn render(output: OutputFormat, envelope: &Envelope<'_>) -> Result<(), String> {
 fn render_text(mut writer: impl Write, envelope: &Envelope<'_>) -> Result<(), String> {
     writeln!(writer, "result: {}", envelope.result)
         .map_err(|error| format!("failed to write output: {error}"))?;
-    if let Some(scope) = &envelope.scope {
-        writeln!(
-            writer,
-            "scope: model={} policy={} domains={}",
-            escape_terminal(scope.model_version),
-            scope.policy_version,
-            scope.domains.join(",")
-        )
-        .map_err(|error| format!("failed to write output: {error}"))?;
+    if let Some(coverage) = &envelope.coverage {
+        writeln!(writer, "coverage: domains={}", coverage.domains.join(","))
+            .map_err(|error| format!("failed to write output: {error}"))?;
     }
     if let Some(counterexample) = &envelope.counterexample {
         match counterexample {
+            CounterexampleJson::Process { field, boundary, candidate } => writeln!(writer, "counterexample: process {} boundary={} candidate={}", escape_terminal(field), escape_terminal(boundary), escape_terminal(candidate)),
+            CounterexampleJson::Landlock { boundary, candidate } => writeln!(writer, "counterexample: landlock boundary={} candidate={}", escape_terminal(boundary), escape_terminal(candidate)),
             CounterexampleJson::Filesystem { access, path } => writeln!(
                 writer,
                 "counterexample: filesystem {access} {}",
@@ -434,18 +465,22 @@ fn render_text(mut writer: impl Write, envelope: &Envelope<'_>) -> Result<(), St
                 ancestor_binary,
                 binary_identity_required,
                 host,
+                destination_ip,
+                trusted_gateway,
                 port,
                 protocol,
                 method,
                 path,
             } => writeln!(
                 writer,
-                "counterexample: network binary={} ancestor_binary={} binary_identity_required={} host={}:{} protocol={} method={} path={}",
+                "counterexample: network binary={} ancestor_binary={} binary_identity_required={} host={}:{} destination_ip={} trusted_gateway={} protocol={} method={} path={}",
                 binary.map_or("-".to_owned(), escape_terminal),
                 ancestor_binary.map_or("-".to_owned(), escape_terminal),
                 binary_identity_required,
                 escape_terminal(host),
                 port,
+                destination_ip,
+                trusted_gateway,
                 escape_terminal(protocol),
                 method.map_or("-".to_owned(), escape_terminal),
                 path.map_or("-".to_owned(), escape_terminal),
@@ -557,7 +592,7 @@ mod tests {
             schema_version: 1,
             prover_version: env!("CARGO_PKG_VERSION"),
             check: "boundary",
-            scope: None,
+            coverage: None,
             result: "within_boundary",
             exit_code: 0,
             inputs: InputsJson {

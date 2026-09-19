@@ -252,15 +252,12 @@ Common findings:
 - A workdir rejected as a special filesystem or OpenShell control-path collision cannot be made valid with permissions. Move the image workdir away from kernel-backed mounts and the concrete supervisor, TLS, token, runtime, and socket paths named in the error.
 - Local Docker gateway setup cannot copy `openshell-sandbox` after exporting a supervisor image: the sandbox runtime and supervisor are separate artifacts. The runtime image must provide `/openshell-sandbox`; the supervisor image provides `/openshell-supervisor`.
 - Docker driver cannot initialize because it cannot find `openshell-sandbox`: verify the sibling binary next to `openshell-gateway`, or that the configured `sandbox_runtime_image` contains `/openshell-sandbox`.
-- Sandbox never registers: check gateway logs and supervisor callback endpoint.
+- Sandbox never registers: check gateway logs and the supervisor's gateway endpoint.
 - Calls to an external tool server fail while the sandbox is Ready: inspect `Tool server connections` in `openshell sandbox get <name>`. For configured MCP-over-HTTP endpoints, JSON output exposes each address together with `last_result` and `last_reported_at` in `endpoint_statuses`. Select the endpoint by host, path, and ports, then check the reported failure boundary. `last_reported_at` records gateway acceptance time and can advance when retained evidence is accepted after a reset. Results do not expire or prove current availability; `HttpResponseReceived` can still contain a tool error. If several paths share a host and port, a failure before the path is known remains in logs. Verify the actual operation when current tool availability matters.
-- On macOS, repeated `Policy fetch failed after 5 attempts` messages with a
-  Homebrew gateway bound to `[::1]:17670` indicate that the Docker
-  `host-gateway` IPv4 route has no matching callback listener. Current releases
-  leave `bind_address` unset in the Homebrew config, use the built-in
-  `127.0.0.1:17670` primary listener, and reuse it for authenticated sandbox
-  callbacks. On an older release, set `bind_address = "127.0.0.1:17670"` or
-  upgrade.
+- On Docker Desktop, repeated `Policy fetch failed after 5 attempts` messages
+  can mean host networking is disabled. Enable host networking in Docker
+  Desktop, ensure Enhanced Container Isolation is disabled, and verify the
+  gateway's primary endpoint is reachable from a host-networked container.
 - Sandbox runtime image exits before printing `openshell-sandbox --version`: verify the configured image contains a static executable at `/openshell-sandbox`.
 - A sandbox with explicit `protocol: tcp` endpoints fails before workload readiness: confirm the selected isolation backend advertises TCP mediation, then inspect the sandbox and supervisor logs for protected-channel setup or listener failures. A driver that cannot supply the required outer egress fence and authenticated runtime channel must reject the policy before starting the agent.
 - Supervisor runtime validation fails: verify `supervisor_image` contains a static `/openshell-supervisor` executable from the same release as the sandbox runtime.
@@ -291,26 +288,18 @@ Common findings:
 - Rootless networking unavailable: inspect Podman network configuration.
 - Sandbox image missing or pull denied: verify image reference and registry credentials.
 - Sandbox fails before readiness with an identity-resolution error: inspect the image's OCI `USER` and matching `/etc/passwd` and `/etc/group` entries, or explicitly set both process identity fields in policy. Numeric workload identities `1` through `4294967294` are accepted; root, the invalid identity sentinel, and missing identities are rejected.
-- Supervisor cannot call back: check callback endpoint and gateway logs.
+- Supervisor cannot connect: check its gateway endpoint and gateway logs.
 - Inspect both Podman containers for the sandbox: the `sandbox` isolation role
-  must have network mode `none`; the `supervisor` role owns gateway callbacks
+  must have network mode `none`; the `supervisor` role owns the gateway session
   and egress. Both run non-root with all capabilities dropped. Check the private
   channel volume and shared user-namespace mapping if authentication fails.
 - If a sandbox fails before readiness, inspect its unprivileged enforcement
   probe and the companion supervisor's private health check. Do not add
   capabilities, attach a workload network, or disable the runtime seccomp
   profile. There is no sandbox nftables or nested-network setup to repair.
-- Gateway exits before becoming healthy with a callback-listener discovery
-  error: inspect `podman info --debug`, the configured Podman network, and the
-  host's IPv4 default route. Rootless pasta uses the private source address
-  selected by that route; rootful Podman uses the bridge gateway address.
-- Current gateways reuse the primary listener when it covers Podman's callback
-  address. If the primary does not cover that address, inspect the gateway
-  startup logs for the additional callback-only listener and its provenance.
-- Rootless slirp4netns, another named helper, or missing helper metadata
-  requires an explicitly remote `grpc_endpoint`. An explicit `host_gateway_ip`
-  cannot bypass slirp4netns host-loopback isolation. Do not work around
-  discovery failures by broadening the primary gateway listener to `0.0.0.0`.
+- On Linux, verify that the host-networked Podman supervisor can reach the
+  gateway's primary loopback endpoint. On macOS, verify Podman Machine's
+  host-loopback forwarding or configure an explicit `grpc_endpoint`.
 
 When `userns` is configured (e.g. `userns = "auto"` or `userns = "keep-id"`):
 
@@ -759,7 +748,7 @@ Use the VM driver logs and host diagnostics available in the user's environment.
   upper layer, prepared rootfs, explicit config, or current image. Do not assign
   `10001:10001` unless the persisted state reports that legacy identity.
 - Host virtualization support is enabled.
-- The sandbox supervisor can establish its callback connection to the gateway.
+- The sandbox supervisor can establish its authenticated gateway session.
 
 Then run:
 
@@ -799,9 +788,7 @@ credential failures.
 | `openshell status` fails | Gateway endpoint unreachable or auth mismatch | `openshell gateway info`, gateway logs |
 | `BatchSpanProcessor.ExportError` repeatedly reports connection refused on `127.0.0.1:4317` | The local gateway started with OTLP configured but the collector forwarding task later stopped, or the config was created manually | Restart `gateway:docker`, `gateway:podman`, or `gateway:vm` so it re-detects the listener; inspect the generated `gateway.toml` for `[openshell.gateway.otlp]` |
 | Gateway starts but sandbox create fails | Compute driver cannot reach runtime | Docker/Podman/Kubernetes/VM driver logs |
-| Gateway exits while resolving compute-driver listener requirements | The callback hostname is unsupported, the Podman network cannot be inspected, or the selected address is not private/authorized | Gateway startup error, `podman info --debug`, Podman network inspection, host IPv4 default route |
-| Admin, health, reflection, or HTTP request is denied on an additional Docker/Podman callback-only listener | Additional callback listeners intentionally expose only sandbox-callable gRPC methods | Retry through the gateway's primary endpoint; inspect the listener-purpose startup log if the address was unexpected |
-| Docker or Podman sandbox never registers | Wrong callback endpoint or supervisor startup failure | Gateway logs and sandbox container logs |
+| Docker or Podman sandbox never registers | Wrong gateway endpoint, unavailable host networking, or supervisor startup failure | Gateway logs and supervisor container logs |
 | Docker GPU sandbox fails before startup | NVIDIA CDI specs are missing or Docker has not discovered them | `docker info --format '{{json .DiscoveredDevices}}'`, `/etc/cdi`, `/var/run/cdi`, `nvidia-cdi-refresh.service` |
 | Kubernetes gateway pod pending | PVC unbound, taint, selector, or insufficient resources | `kubectl -n openshell describe pod <pod>` |
 | Kubernetes sandbox pod stuck pending, workspace PVC unbound | Cluster has no default `StorageClass` and OpenShell does not set `storageClassName` on the workspace PVC (clusters with a default `StorageClass` bind fine without it) | `kubectl -n openshell describe pvc`; set `server.workspaceStorageClass` (gateway config `workspace_storage_class`) to a valid `StorageClass` |

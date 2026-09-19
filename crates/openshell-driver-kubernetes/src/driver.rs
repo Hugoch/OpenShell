@@ -6334,7 +6334,7 @@ fn status_from_object(obj: &DynamicObject) -> Option<SandboxStatus> {
         .unwrap_or_default();
 
     Some(SandboxStatus {
-        sandbox_name: status_obj
+        name: status_obj
             .get("sandboxName")
             .and_then(|val| val.as_str())
             .unwrap_or_default()

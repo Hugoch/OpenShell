@@ -7,7 +7,7 @@
 //! to either the gRPC service or HTTP endpoints based on the request headers.
 
 use bytes::{Bytes, BytesMut};
-use http::{Extensions, HeaderValue, Request, Response, StatusCode};
+use http::{Extensions, HeaderValue, Request, Response};
 use http_body::Body;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited, StreamBody};
 use hyper::body::Incoming;
@@ -48,8 +48,7 @@ use crate::{
     auth::identity::Identity,
     auth::oidc::{self, OidcAuthenticator},
     auth::principal::{Principal, UserPrincipal},
-    auth::workspace_authz::{MinWorkspaceRole, authorize_workspace_selector},
-    gateway_listener::GatewayListenerScope,
+    auth::workspace_authz::{MinWorkspaceRole, authorize_workspace},
     http_router, service_http_router,
 };
 
@@ -220,22 +219,7 @@ impl MultiplexService {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        self.serve_on_listener(stream, GatewayListenerScope::Primary)
-            .await
-    }
-
-    /// Serve a connection and preserve its listener scope in request
-    /// extensions for downstream routing and policy decisions.
-    pub(crate) async fn serve_on_listener<S>(
-        &self,
-        stream: S,
-        listener_scope: GatewayListenerScope,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
-        self.serve_with_peer_identity_on_listener(stream, None, listener_scope)
-            .await
+        self.serve_with_peer_identity(stream, None).await
     }
 
     /// Serve a TLS connection with an optional mTLS peer identity.
@@ -243,25 +227,6 @@ impl MultiplexService {
         &self,
         stream: S,
         peer_identity: Option<Identity>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
-        self.serve_with_peer_identity_on_listener(
-            stream,
-            peer_identity,
-            GatewayListenerScope::Primary,
-        )
-        .await
-    }
-
-    /// Serve a TLS connection and preserve its listener scope in request
-    /// extensions for downstream routing and policy decisions.
-    pub(crate) async fn serve_with_peer_identity_on_listener<S>(
-        &self,
-        stream: S,
-        peer_identity: Option<Identity>,
-        listener_scope: GatewayListenerScope,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -299,10 +264,7 @@ impl MultiplexService {
         let grpc_service = request_id_middleware!(grpc_service);
         let http_service = request_id_middleware!(http_service);
 
-        let service = GatewayListenerContextService::new(
-            MultiplexedService::new(grpc_service, http_service),
-            listener_scope,
-        );
+        let service = MultiplexedService::new(grpc_service, http_service);
 
         let mut builder = Builder::new(TokioExecutor::new());
         // Server-side HTTP/2 keepalive: supervisors hold long-lived sessions, and without
@@ -331,62 +293,15 @@ impl MultiplexService {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        self.serve_service_http_on_listener(stream, GatewayListenerScope::Primary)
-            .await
-    }
-
-    /// Serve a plaintext service HTTP connection and preserve its listener
-    /// scope in request extensions.
-    pub(crate) async fn serve_service_http_on_listener<S>(
-        &self,
-        stream: S,
-        listener_scope: GatewayListenerScope,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    {
-        let http_service = GatewayListenerContextService::new(
-            TowerToHyperService::new(request_id_middleware!(service_http_router(
-                self.state.clone()
-            ))),
-            listener_scope,
-        );
+        let http_service = TowerToHyperService::new(request_id_middleware!(service_http_router(
+            self.state.clone()
+        )));
 
         Builder::new(TokioExecutor::new())
             .serve_connection_with_upgrades(TokioIo::new(stream), http_service)
             .await?;
 
         Ok(())
-    }
-}
-
-/// Adds the immutable listener authorization scope to every served request.
-#[derive(Clone)]
-struct GatewayListenerContextService<S> {
-    inner: S,
-    listener_scope: GatewayListenerScope,
-}
-
-impl<S> GatewayListenerContextService<S> {
-    fn new(inner: S, listener_scope: GatewayListenerScope) -> Self {
-        Self {
-            inner,
-            listener_scope,
-        }
-    }
-}
-
-impl<S, B> hyper::service::Service<Request<B>> for GatewayListenerContextService<S>
-where
-    S: hyper::service::Service<Request<B>>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn call(&self, mut request: Request<B>) -> Self::Future {
-        request.extensions_mut().insert(self.listener_scope);
-        self.inner.call(request)
     }
 }
 
@@ -565,11 +480,11 @@ async fn hydrate_update_provider_identity(
 
     let principal =
         principal.ok_or_else(|| tonic::Status::unauthenticated("authentication required"))?;
-    let authorized = authorize_workspace_selector(
+    let authorized = authorize_workspace(
         state.store.as_ref(),
         &state.admin_role,
         principal,
-        request.workspace_scope.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
@@ -1153,38 +1068,6 @@ impl<G, H> MultiplexedService<G, H> {
     }
 }
 
-fn listener_allows_request(
-    listener_scope: Option<&GatewayListenerScope>,
-    is_grpc: bool,
-    path: &str,
-) -> bool {
-    match listener_scope {
-        Some(GatewayListenerScope::ComputeDriverCallback) => {
-            is_grpc && crate::auth::sandbox_methods::is_sandbox_callable(path)
-        }
-        Some(GatewayListenerScope::Primary) | None => true,
-    }
-}
-
-fn callback_listener_rejection(is_grpc: bool) -> Response<BoxBody> {
-    if is_grpc {
-        let response: Response<tonic::body::Body> = tonic::Status::permission_denied(
-            "compute-driver callback listeners accept sandbox callback RPCs only",
-        )
-        .into_http();
-        let (parts, body) = response.into_parts();
-        let body = body.map_err(Into::into).boxed_unsync();
-        Response::from_parts(parts, BoxBody(body))
-    } else {
-        Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body(boxed_body_from_bytes(Bytes::from_static(
-                b"compute-driver callback listeners accept gRPC callbacks only",
-            )))
-            .expect("static callback listener rejection response must be valid")
-    }
-}
-
 impl<G, H, GBody, HBody> hyper::service::Service<Request<Incoming>> for MultiplexedService<G, H>
 where
     G: tower::Service<Request<BoxBody>, Response = Response<GBody>> + Clone + Send + 'static,
@@ -1207,15 +1090,6 @@ where
             .headers()
             .get("content-type")
             .is_some_and(|v| v.as_bytes().starts_with(b"application/grpc"));
-
-        if !listener_allows_request(
-            req.extensions().get::<GatewayListenerScope>(),
-            is_grpc,
-            req.uri().path(),
-        ) {
-            let response = callback_listener_rejection(is_grpc);
-            return Box::pin(async move { Ok(response) });
-        }
 
         if is_grpc {
             let method = grpc_method_from_path(req.uri().path());
@@ -1400,6 +1274,7 @@ impl Body for BoxBody {
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use http::StatusCode;
     use http_body_util::Empty;
     use openshell_core::GatewayInterceptorConfig;
     use openshell_core::proto::CreateSandboxRequest;
@@ -1414,113 +1289,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio_stream::wrappers::TcpListenerStream;
     use tower::Service;
-
-    #[tokio::test]
-    async fn listener_context_service_preserves_listener_scope() {
-        let observed = Arc::new(Mutex::new(None));
-        let captured = observed.clone();
-        let inner = hyper::service::service_fn(move |request: Request<Empty<Bytes>>| {
-            *captured.lock().unwrap() = request.extensions().get::<GatewayListenerScope>().copied();
-            async move { Ok::<_, Infallible>(Response::new(Empty::<Bytes>::new())) }
-        });
-        let service = GatewayListenerContextService::new(inner, GatewayListenerScope::Primary);
-        hyper::service::Service::call(&service, Request::new(Empty::<Bytes>::new()))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            *observed.lock().unwrap(),
-            Some(GatewayListenerScope::Primary)
-        );
-    }
-
-    fn callback_listener_scope() -> GatewayListenerScope {
-        GatewayListenerScope::ComputeDriverCallback
-    }
-
-    #[test]
-    fn callback_listener_allows_sandbox_callback_rpcs() {
-        let scope = callback_listener_scope();
-        let callback_paths = [
-            "/openshell.v1.OpenShell/ConnectSupervisor",
-            "/openshell.v1.OpenShell/RelayStream",
-            "/openshell.v1.OpenShell/GetSandboxConfig",
-            "/openshell.v1.OpenShell/ReportPolicyStatus",
-            "/openshell.v1.OpenShell/PushSandboxLogs",
-            "/openshell.v1.OpenShell/GetSandboxProviderEnvironment",
-            "/openshell.v1.OpenShell/SubmitPolicyAnalysis",
-            "/openshell.v1.OpenShell/RefreshSandboxToken",
-        ];
-
-        for path in callback_paths {
-            assert!(
-                listener_allows_request(Some(&scope), true, path),
-                "callback listener should allow {path}"
-            );
-        }
-    }
-
-    #[test]
-    fn callback_listener_surface_matches_rpc_auth_metadata() {
-        let scope = callback_listener_scope();
-
-        for path in crate::auth::method_authz::all_paths() {
-            assert_eq!(
-                listener_allows_request(Some(&scope), true, path),
-                crate::auth::method_authz::is_sandbox_callable(path),
-                "callback listener exposure must follow rpc_auth metadata for {path}"
-            );
-        }
-    }
-
-    #[test]
-    fn callback_listener_rejects_non_callback_routes() {
-        let scope = callback_listener_scope();
-        let rejected_grpc_paths = [
-            "/grpc.health.v1.Health/Check",
-            "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
-            "/openshell.v1.OpenShell/ListSandboxes",
-            "/openshell.v1.OpenShell/DeleteSandbox",
-            "/openshell.v1.OpenShell/CreateProvider",
-        ];
-
-        for path in rejected_grpc_paths {
-            assert!(
-                !listener_allows_request(Some(&scope), true, path),
-                "callback listener should reject {path}"
-            );
-        }
-        assert!(!listener_allows_request(Some(&scope), false, "/health"));
-        assert!(!listener_allows_request(Some(&scope), false, "/service"));
-    }
-
-    #[test]
-    fn primary_listener_routing_is_unchanged() {
-        let primary = GatewayListenerScope::Primary;
-        let paths = [
-            "/grpc.health.v1.Health/Check",
-            "/openshell.v1.OpenShell/ListSandboxes",
-            "/health",
-            "/service",
-        ];
-
-        for path in paths {
-            assert!(listener_allows_request(Some(&primary), true, path));
-            assert!(listener_allows_request(Some(&primary), false, path));
-            assert!(listener_allows_request(None, true, path));
-            assert!(listener_allows_request(None, false, path));
-        }
-    }
-
-    #[test]
-    fn callback_listener_rejections_use_protocol_appropriate_statuses() {
-        let grpc = callback_listener_rejection(true);
-        assert_eq!(grpc.status(), StatusCode::OK);
-        assert_eq!(grpc.headers().get("grpc-status").unwrap(), "7");
-
-        let http = callback_listener_rejection(false);
-        assert_eq!(http.status(), StatusCode::FORBIDDEN);
-    }
 
     #[derive(Clone)]
     struct PostCommitTestInterceptor;
@@ -1624,12 +1392,6 @@ mod tests {
     }
 
     async fn start_http_server_with_middleware() -> std::net::SocketAddr {
-        start_http_server_with_middleware_on_listener(GatewayListenerScope::Primary).await
-    }
-
-    async fn start_http_server_with_middleware_on_listener(
-        listener_scope: GatewayListenerScope,
-    ) -> std::net::SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
@@ -1637,7 +1399,6 @@ mod tests {
         let http_service = request_id_middleware!(http_service);
 
         let service = MultiplexedService::new(http_service.clone(), http_service);
-        let service = GatewayListenerContextService::new(service, listener_scope);
 
         tokio::spawn(async move {
             loop {
@@ -1687,39 +1448,6 @@ mod tests {
         headers: &[(&str, &str)],
     ) -> Response<Incoming> {
         http1_request(addr, "GET", path, headers).await
-    }
-
-    #[tokio::test]
-    async fn callback_listener_filter_is_applied_before_route_dispatch() {
-        let addr = start_http_server_with_middleware_on_listener(callback_listener_scope()).await;
-
-        let health = http1_get(addr, "/healthz", &[]).await;
-        assert_eq!(health.status(), StatusCode::FORBIDDEN);
-
-        let admin = http1_request(
-            addr,
-            "POST",
-            "/openshell.v1.OpenShell/ListSandboxes",
-            &[("content-type", "application/grpc")],
-        )
-        .await;
-        assert_eq!(admin.status(), StatusCode::OK);
-        assert_eq!(admin.headers().get("grpc-status").unwrap(), "7");
-
-        let callback = http1_request(
-            addr,
-            "POST",
-            "/openshell.v1.OpenShell/ConnectSupervisor",
-            &[("content-type", "application/grpc")],
-        )
-        .await;
-        assert_ne!(
-            callback
-                .headers()
-                .get("grpc-status")
-                .and_then(|value| value.to_str().ok()),
-            Some("7")
-        );
     }
 
     #[tokio::test]
@@ -1987,7 +1715,9 @@ mod tests {
         let input = CreateSandboxRequest {
             name: "client-original".into(),
             request_id: uuid::Uuid::new_v4().to_string(),
-            workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+            workspace_scope: Some(openshell_core::proto::workspace_selector(
+                "default".to_string(),
+            )),
             spec: Some(SandboxSpec::default()),
             ..Default::default()
         };
