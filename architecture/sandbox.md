@@ -339,9 +339,10 @@ the registry. Public custom-CA PEM travels with the stable registration.
 
 The slots live in a supervisor-owned `ExtensionCredentialStore` shared by every
 gateway connection the supervisor opens, so the registry's clients and the
-background loop that rotates them observe the same credentials. The loop rotates
-only when a credential is missing or has passed four fifths of its lifetime,
-and bounds its sleep by the soonest rotation deadline.
+configuration loop that rotates them observe the same credentials. Its wakeup
+interval is far shorter than credential lifetimes, so the loop rotates only
+when a credential is missing or has passed four fifths of its lifetime, and
+bounds its sleep by the soonest rotation deadline.
 
 Middleware cannot observe injected credentials, introduce credential
 placeholders, or mutate supervisor-owned credential, routing, or framing

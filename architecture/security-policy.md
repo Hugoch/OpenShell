@@ -220,9 +220,10 @@ A candidate rejected during validation does not replace the active engine or adv
 
 The gateway stores sandbox-authored policy revisions separately from derived
 effective sandbox configuration. Effective configuration can include
-gateway-global policy overrides and provider-profile policy layers. The gateway
-streams complete configuration snapshots to the supervisor, which validates and
-loads dynamic policy into the in-process OPA engine. CLI reads of the latest
+gateway-global policy overrides and provider-profile policy layers. The
+gateway streams complete configuration snapshots to the supervisor, which
+validates and loads dynamic policy into the in-process OPA engine and
+acknowledges the exact revision. CLI reads of the latest
 sandbox policy use the same effective configuration path.
 
 The OPA loader checks the object and list shapes of raw policy data before injecting runtime fields, normalizing values, or expanding access presets. It rejects the first malformed container with a fixed structural error that excludes authored keys and values. This check preserves valid versionless OPA data and runtime-only fields. A rejected OPA engine reload leaves that engine's installed policy, generation, and decisions unchanged; the supervisor separately applies its configured runtime rejection mode.
