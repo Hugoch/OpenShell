@@ -405,7 +405,7 @@ RETURNING resource_version, created_at_ms, updated_at_ms
             .sandbox_id
             .clone();
         lock_sandbox_config_fence(&mut tx, &sandbox_id).await?;
-        let operation_record =
+        let mut operation_record =
             operation_with_current_policy_target(&mut tx, operation_record).await?;
         let row = match condition {
             WriteCondition::MustCreate => sqlx::query(
@@ -471,7 +471,11 @@ FOR UPDATE
             let sandbox_payload: Vec<u8> = row.get("payload");
             let current_version: i64 = row.try_get("resource_version").unwrap_or(1);
             let current_version = current_version.max(1).cast_unsigned();
-            let (sandbox, changed) = projection.apply(&sandbox_payload, current_version)?;
+            let (sandbox, changed) = projection.apply_and_sync_operation_response(
+                &sandbox_payload,
+                current_version,
+                &mut operation_record,
+            )?;
             if changed {
                 let result = sqlx::query(
                     r"

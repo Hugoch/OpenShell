@@ -38,10 +38,11 @@ pub struct AtomicSandboxProjection<'a> {
 }
 
 impl AtomicSandboxProjection<'_> {
-    fn apply(
+    fn apply_and_sync_operation_response(
         &self,
         payload: &[u8],
         current_resource_version: u64,
+        operation_record: &mut crate::storage_proto::StoredConfigUpdateOperation,
     ) -> PersistenceResult<(openshell_core::proto::Sandbox, bool)> {
         use openshell_core::SetResourceVersion as _;
         use prost::Message as _;
@@ -70,6 +71,9 @@ impl AtomicSandboxProjection<'_> {
                 changed = true;
             }
         }
+        operation_record
+            .response_annotations
+            .clone_from(&metadata.annotations);
         Ok((sandbox, changed))
     }
 }

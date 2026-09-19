@@ -1417,11 +1417,12 @@ async fn settings_projection_uses_locked_sandbox_version(store: Store) {
     let sandbox = policy_test_sandbox(&sandbox_id, &sandbox_name);
     store.put_message(&sandbox).await.unwrap();
 
-    let mut concurrent = store
+    let stale = store
         .get_message::<Sandbox>(&sandbox_id)
         .await
         .unwrap()
         .unwrap();
+    let mut concurrent = stale.clone();
     concurrent
         .metadata
         .as_mut()
@@ -1435,8 +1436,22 @@ async fn settings_projection_uses_locked_sandbox_version(store: Store) {
         .unwrap()
         .unwrap();
     let before_version = before.metadata.as_ref().unwrap().resource_version;
-    let operation = config_operation_for(&before, 0, 1);
     let requested = StdHashMap::from([("requested".to_string(), "applied".to_string())]);
+    let operation = new_record(
+        &stale,
+        "default",
+        "",
+        OperationTarget {
+            policy_version: 0,
+            settings_revision: 1,
+        },
+        CommittedResponse {
+            settings_revision: 1,
+            annotations: requested.clone(),
+            ..Default::default()
+        },
+    );
+    let operation_id = operation.operation.as_ref().unwrap().operation_id.clone();
 
     store
         .put_if_with_operation(
@@ -1471,6 +1486,14 @@ async fn settings_projection_uses_locked_sandbox_version(store: Store) {
         metadata.annotations.get("requested").map(String::as_str),
         Some("applied")
     );
+
+    let stored_operation = store
+        .get_message::<crate::storage_proto::StoredConfigUpdateOperation>(&operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let response = crate::config_update_operation::response_from_record(&stored_operation).unwrap();
+    assert_eq!(response.annotations, metadata.annotations);
 }
 
 #[tokio::test]

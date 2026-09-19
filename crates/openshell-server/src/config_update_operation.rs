@@ -48,24 +48,32 @@ struct OperationSubscription {
     bus: OperationWatchBus,
     operation_id: String,
     sender: tokio::sync::broadcast::Sender<()>,
-    receiver: tokio::sync::broadcast::Receiver<()>,
+    receiver: Option<tokio::sync::broadcast::Receiver<()>>,
 }
 
 impl OperationSubscription {
     async fn recv(&mut self) -> Result<(), tokio::sync::broadcast::error::RecvError> {
-        self.receiver.recv().await
+        self.receiver
+            .as_mut()
+            .expect("operation subscription receiver is available")
+            .recv()
+            .await
     }
 }
 
 impl Drop for OperationSubscription {
     fn drop(&mut self) {
+        // Receiver fields normally drop after this method returns. Drop ours
+        // first so concurrent teardown observes the actual remaining waiter
+        // count while deciding whether to remove the channel.
+        drop(self.receiver.take());
         let mut inner = self
             .bus
             .inner
             .lock()
             .expect("operation watch bus lock poisoned");
         let remove = inner.get(&self.operation_id).is_some_and(|current| {
-            current.same_channel(&self.sender) && self.sender.receiver_count() == 1
+            current.same_channel(&self.sender) && self.sender.receiver_count() == 0
         });
         if remove {
             inner.remove(&self.operation_id);
@@ -97,7 +105,7 @@ impl OperationWatchBus {
         OperationSubscription {
             bus: self.clone(),
             operation_id: operation_id.to_string(),
-            receiver: sender.subscribe(),
+            receiver: Some(sender.subscribe()),
             sender,
         }
     }
@@ -1111,6 +1119,35 @@ mod tests {
         assert_eq!(bus.len(), 1);
 
         drop(replacement);
+        assert_eq!(bus.len(), 0);
+    }
+
+    #[test]
+    fn concurrent_watch_subscription_drop_removes_empty_channel() {
+        let bus = OperationWatchBus::new();
+        let first = bus.subscribe("operation");
+        let second = bus.subscribe("operation");
+        let sender = first.sender.clone();
+        assert_eq!(sender.receiver_count(), 2);
+
+        // Keep both destructors outside the map lock until they have dropped
+        // their receivers. This makes the teardown overlap deterministic.
+        let guard = bus.inner.lock().expect("operation watch bus lock poisoned");
+        let first_drop = std::thread::spawn(move || drop(first));
+        let second_drop = std::thread::spawn(move || drop(second));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while sender.receiver_count() != 0 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let receivers_dropped_before_lock = sender.receiver_count() == 0;
+        drop(guard);
+        first_drop.join().unwrap();
+        second_drop.join().unwrap();
+
+        assert!(
+            receivers_dropped_before_lock,
+            "both receivers must drop before either teardown inspects the map"
+        );
         assert_eq!(bus.len(), 0);
     }
 
