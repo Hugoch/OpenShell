@@ -4714,7 +4714,9 @@ struct ForwardRelayOptions<'a> {
     secret_resolver: Option<&'a SecretResolver>,
     request_body_credential_rewrite: bool,
     deny_uninspected_credentials: bool,
-    post_credentials: Option<crate::l7::post_credentials::PostCredentialsMiddleware<'a>>,
+    credential_signing: crate::l7::CredentialSigning,
+    signing_service: &'a str,
+    signing_region: &'a str,
     host: &'a str,
     port: u16,
     response_middleware: Option<ForwardResponseMiddleware<'a>>,
@@ -4772,7 +4774,9 @@ where
             websocket_extensions: options.websocket_extensions,
             request_body_credential_rewrite: options.request_body_credential_rewrite,
             deny_uninspected_credentials: options.deny_uninspected_credentials,
-            post_credentials: options.post_credentials,
+            credential_signing: options.credential_signing,
+            signing_service: options.signing_service,
+            signing_region: options.signing_region,
             host: options.host,
             port: options.port,
         },
@@ -6103,15 +6107,17 @@ async fn handle_forward_proxy(
         return Ok(());
     }
 
-    let post_credentials = forward_upgrade_config.as_ref().and_then(|config| {
-        crate::l7::post_credentials::PostCredentialsMiddleware::from_endpoint(
-            config.credential_signing,
-            &config.signing_service,
-            &config.signing_region,
-            &host_lc,
-            port,
-        )
-    });
+    let credential_signing = forward_upgrade_config
+        .as_ref()
+        .map_or(crate::l7::CredentialSigning::None, |config| {
+            config.credential_signing
+        });
+    let signing_service = forward_upgrade_config
+        .as_ref()
+        .map_or("", |config| config.signing_service.as_str());
+    let signing_region = forward_upgrade_config
+        .as_ref()
+        .map_or("", |config| config.signing_region.as_str());
     let outcome_result = relay_rewritten_forward_request(
         method,
         &upstream_target,
@@ -6126,7 +6132,9 @@ async fn handle_forward_proxy(
             body_classifier: endpoint_credentials.body_classifier.as_deref(),
             request_body_credential_rewrite,
             deny_uninspected_credentials,
-            post_credentials,
+            credential_signing,
+            signing_service,
+            signing_region,
             host: &host_lc,
             port,
             response_middleware: response_selection.as_ref().map(|exchange| {
@@ -6693,6 +6701,7 @@ process:
                             seconds: 1,
                             nanos: 0,
                         }),
+                        ..Default::default()
                     }],
                     expected_audience: String::new(),
                 },
@@ -6773,6 +6782,10 @@ process:
                     phase: openshell_core::proto::SupervisorMiddlewarePhase::PreReturn as i32,
                     max_payload_bytes: 8192,
                     request_timeout: None,
+                    http_protocol_version: 1,
+                    supported_http_body_modes: vec![
+                        openshell_core::proto::HttpBodyMode::Buffered as i32,
+                    ],
                 }],
                 expected_audience: String::new(),
             }
@@ -6788,8 +6801,8 @@ process:
 
         async fn open_http_response_pre_return(
             &self,
-            mut requests: mpsc::Receiver<openshell_core::proto::HttpResponseEvent>,
-        ) -> std::result::Result<openshell_core::middleware::HttpResponseResultStream, tonic::Status>
+            mut requests: mpsc::Receiver<openshell_core::proto::HttpEvent>,
+        ) -> std::result::Result<openshell_core::middleware::HttpResultStream, tonic::Status>
         {
             let (sender, receiver) = mpsc::channel(2);
             let expected_path = self.expected_path.clone();
@@ -6798,21 +6811,36 @@ process:
             tokio::spawn(async move {
                 while let Some(event) = requests.recv().await {
                     match event.event {
-                        Some(openshell_core::proto::http_response_event::Event::Preflight(
-                            preflight,
-                        )) => {
-                            let target = preflight.target.expect("response target");
+                        Some(openshell_core::proto::http_event::Event::Preflight(preflight)) => {
+                            let Some(openshell_core::proto::http_preflight::Head::Response(head)) =
+                                preflight.head
+                            else {
+                                panic!("response head")
+                            };
+                            let target = head.target.expect("response target");
                             assert_eq!(target.path, expected_path);
                             assert!(!target.path.contains(&forbidden_path_fragment));
-                            let action = if block {
-                                openshell_core::proto::http_response_preflight_result::Action::BlockDelivery(
-                                    openshell_core::proto::HttpResponseBlockDelivery {},
-                                )
+                            let result = if block {
+                                openshell_core::proto::HttpResult {
+                                    result: Some(
+                                        openshell_core::proto::http_result::Result::Reject(
+                                            openshell_core::proto::HttpReject {
+                                                diagnostics: Some(
+                                                    openshell_core::proto::MiddlewareDiagnostics {
+                                                        reason_code: "query_guard".into(),
+                                                        ..Default::default()
+                                                    },
+                                                ),
+                                            },
+                                        ),
+                                    ),
+                                }
                             } else {
-                                openshell_core::proto::http_response_preflight_result::Action::Inspect(
-                                    openshell_core::proto::HttpResponsePreflightInspect {
-                                        body_mode: openshell_core::proto::HttpResponseBodyMode::HeadersOnly as i32,
-                                        header_mutations: vec![openshell_core::proto::HeaderMutation {
+                                openshell_core::proto::HttpResult {
+                                    result: Some(openshell_core::proto::http_result::Result::PreflightResult(
+                                        openshell_core::proto::HttpPreflightResult {
+                                            decision: Some(openshell_core::proto::http_preflight_result::Decision::ContinueWithoutBody(openshell_core::proto::HttpContinue::default())),
+                                            header_mutations: vec![openshell_core::proto::HeaderMutation {
                                             operation: Some(
                                                 openshell_core::proto::header_mutation::Operation::Write(
                                                     openshell_core::proto::WriteHeader {
@@ -6823,30 +6851,18 @@ process:
                                                 ),
                                             ),
                                         }],
-                                    },
-                                )
-                            };
-                            let result = openshell_core::proto::HttpResponseEventResult {
-                                result: Some(
-                                    openshell_core::proto::http_response_event_result::Result::PreflightResult(
-                                        openshell_core::proto::HttpResponsePreflightResult {
-                                            action: Some(action),
-                                            reason_code: if block {
-                                                "query_guard".into()
-                                            } else {
-                                                String::new()
-                                            },
                                             ..Default::default()
                                         },
-                                    ),
-                                ),
+                                    )),
+                                }
                             };
                             if sender.send(Ok(result)).await.is_err() {
                                 break;
                             }
                         }
-                        Some(openshell_core::proto::http_response_event::Event::SessionEnd(_))
-                        | None => break,
+                        Some(openshell_core::proto::http_event::Event::SessionEnd(_)) | None => {
+                            break;
+                        }
                         Some(_) => panic!("headers-only response received an unexpected event"),
                     }
                 }
@@ -6869,6 +6885,10 @@ process:
                     phase: openshell_core::proto::SupervisorMiddlewarePhase::PreCredentials as i32,
                     max_payload_bytes: 8192,
                     request_timeout: None,
+                    http_protocol_version: 1,
+                    supported_http_body_modes: vec![
+                        openshell_core::proto::HttpBodyMode::Buffered as i32,
+                    ],
                 }],
                 expected_audience: String::new(),
             }
@@ -6884,20 +6904,19 @@ process:
 
         async fn open_http_request_pre_credentials(
             &self,
-            mut requests: mpsc::Receiver<openshell_core::proto::HttpRequestEvent>,
-        ) -> std::result::Result<openshell_core::middleware::HttpRequestResultStream, tonic::Status>
+            mut requests: mpsc::Receiver<openshell_core::proto::HttpEvent>,
+        ) -> std::result::Result<openshell_core::middleware::HttpResultStream, tonic::Status>
         {
             let entered = Arc::clone(&self.entered);
             let release = Arc::clone(&self.release);
             let (sender, receiver) = mpsc::channel(2);
             tokio::spawn(async move {
                 use openshell_core::proto::{
-                    HttpRequestBodyMode, HttpRequestEventResult, HttpRequestPreflightInspect,
-                    HttpRequestPreflightResult, http_request_event, http_request_event_result,
-                    http_request_preflight_result,
+                    HttpEvent, HttpPreflightResult, HttpResult, http_event, http_preflight_result,
+                    http_result,
                 };
-                let Some(openshell_core::proto::HttpRequestEvent {
-                    event: Some(http_request_event::Event::Preflight(_)),
+                let Some(HttpEvent {
+                    event: Some(http_event::Event::Preflight(_)),
                 }) = requests.recv().await
                 else {
                     return;
@@ -6905,18 +6924,13 @@ process:
                 entered.notify_one();
                 release.notified().await;
                 let _ = sender
-                    .send(Ok(HttpRequestEventResult {
-                        result: Some(http_request_event_result::Result::PreflightResult(
-                            HttpRequestPreflightResult {
-                                action: Some(http_request_preflight_result::Action::Inspect(
-                                    HttpRequestPreflightInspect {
-                                        body_mode: HttpRequestBodyMode::HeadersOnly as i32,
-                                        header_mutations: Vec::new(),
-                                    },
-                                )),
-                                ..Default::default()
-                            },
-                        )),
+                    .send(Ok(HttpResult {
+                        result: Some(http_result::Result::PreflightResult(HttpPreflightResult {
+                            decision: Some(http_preflight_result::Decision::ContinueWithoutBody(
+                                openshell_core::proto::HttpContinue::default(),
+                            )),
+                            ..Default::default()
+                        })),
                     }))
                     .await;
                 while requests.recv().await.is_some() {}
@@ -8638,7 +8652,9 @@ network_policies:
                 secret_resolver: None,
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                post_credentials: None,
+                credential_signing: crate::l7::CredentialSigning::None,
+                signing_service: "",
+                signing_region: "",
                 host: "api.example.test",
                 port: 80,
                 response_middleware: Some(ForwardResponseMiddleware {
@@ -8725,7 +8741,9 @@ network_policies:
                 secret_resolver: None,
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                post_credentials: None,
+                credential_signing: crate::l7::CredentialSigning::None,
+                signing_service: "",
+                signing_region: "",
                 host: "api.example.test",
                 port: 80,
                 response_middleware: Some(ForwardResponseMiddleware {
@@ -8845,7 +8863,9 @@ network_policies:
                 secret_resolver: resolver,
                 request_body_credential_rewrite,
                 deny_uninspected_credentials: body_classifier.is_some(),
-                post_credentials: None,
+                credential_signing: crate::l7::CredentialSigning::None,
+                signing_service: "",
+                signing_region: "",
                 host: "",
                 port: 0,
                 response_middleware: None,
@@ -9110,7 +9130,9 @@ network_policies:
                     secret_resolver: None,
                     request_body_credential_rewrite: false,
                     deny_uninspected_credentials: false,
-                    post_credentials: None,
+                    credential_signing: crate::l7::CredentialSigning::None,
+                    signing_service: "",
+                    signing_region: "",
                     host: "",
                     port: 0,
                     response_middleware: None,
@@ -11656,7 +11678,9 @@ network_policies:
                 secret_resolver: Some(&resolver),
                 request_body_credential_rewrite: true,
                 deny_uninspected_credentials: false,
-                post_credentials: None,
+                credential_signing: crate::l7::CredentialSigning::None,
+                signing_service: "",
+                signing_region: "",
                 host: "",
                 port: 0,
                 response_middleware: None,
@@ -11738,14 +11762,9 @@ network_policies:
                 secret_resolver: Some(&resolver),
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                post_credentials:
-                    crate::l7::post_credentials::PostCredentialsMiddleware::from_endpoint(
-                        crate::l7::CredentialSigning::SigV4NoBody,
-                        "execute-api",
-                        "us-west-2",
-                        "api.example.com",
-                        80,
-                    ),
+                credential_signing: crate::l7::CredentialSigning::SigV4NoBody,
+                signing_service: "execute-api",
+                signing_region: "us-west-2",
                 host: "api.example.com",
                 port: 80,
                 response_middleware: None,
@@ -11834,7 +11853,9 @@ network_policies:
                 secret_resolver: None,
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                post_credentials: None,
+                credential_signing: crate::l7::CredentialSigning::None,
+                signing_service: "",
+                signing_region: "",
                 host: "",
                 port: 0,
                 response_middleware: None,
@@ -11885,7 +11906,9 @@ network_policies:
                 secret_resolver: None,
                 request_body_credential_rewrite: false,
                 deny_uninspected_credentials: false,
-                post_credentials: None,
+                credential_signing: crate::l7::CredentialSigning::None,
+                signing_service: "",
+                signing_region: "",
                 host: "",
                 port: 0,
                 response_middleware: None,

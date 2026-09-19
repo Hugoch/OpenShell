@@ -14,7 +14,6 @@ pub mod jsonrpc;
 pub(crate) mod mcp;
 pub(crate) mod middleware;
 pub mod path;
-pub(crate) mod post_credentials;
 pub mod provider;
 pub mod relay;
 pub mod rest;

@@ -14,14 +14,14 @@ use std::sync::LazyLock;
 
 use miette::{Result, miette};
 use openshell_core::proto::{
-    Decision, Finding, MiddlewareBinding, SupervisorMiddlewareOperation, SupervisorMiddlewarePhase,
-    WebSocketMessageResult, web_socket_message_result,
+    Decision, Finding, HttpBodyMode, MiddlewareBinding, SupervisorMiddlewareOperation,
+    SupervisorMiddlewarePhase, WebSocketMessageResult, web_socket_message_result,
 };
 use regex::Regex;
 use serde::Deserialize;
 
 pub const NAME: &str = "openshell/regex";
-const MAX_PAYLOAD_BYTES: u64 = 256 * 1024;
+pub const MAX_PAYLOAD_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -56,12 +56,16 @@ pub fn describe() -> Vec<MiddlewareBinding> {
             phase: SupervisorMiddlewarePhase::PreCredentials as i32,
             max_payload_bytes: MAX_PAYLOAD_BYTES,
             request_timeout: None,
+            http_protocol_version: 1,
+            supported_http_body_modes: vec![HttpBodyMode::Buffered as i32],
         },
         MiddlewareBinding {
             operation: SupervisorMiddlewareOperation::WebsocketMessage as i32,
             phase: SupervisorMiddlewarePhase::PreCredentials as i32,
             max_payload_bytes: MAX_PAYLOAD_BYTES,
             request_timeout: None,
+            http_protocol_version: 0,
+            supported_http_body_modes: Vec::new(),
         },
     ]
 }

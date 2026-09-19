@@ -6,7 +6,7 @@ V1 includes event-oriented HTTP request and response streams plus a forward-text
 
 ## Request streaming
 
-`HttpRequestPreCredentials.Evaluate` is bidirectional streaming. Preflight selects header-only, whole-body, lockstep stream, or owned-stream processing. OpenShell normalizes HTTP/1 fixed and chunked bodies into bounded units, carries validated trailers as a separate event, and rebuilds transport framing after evaluation.
+`HttpRequestPreCredentials.EvaluateHttp` is bidirectional streaming. Preflight continues without a body, rejects, or selects BUFFERED or STREAM. OpenShell normalizes HTTP/1 fixed and chunked bodies into bounded units, carries validated trailers at body end, and rebuilds transport framing after evaluation.
 
 ### Transport streaming vs processing streaming
 
@@ -17,30 +17,30 @@ These are different concepts and are easy to conflate:
 
 Selecting a stream mode governs processing semantics; using the streaming RPC alone does not promise incremental processing.
 
-### Full-body guards still buffer
+### Full-body guards choose storage deliberately
 
-Many guards need the entire body to do anything: a JSON-aware redactor must parse the whole document, and a PII scan may need all of it. Such a guard selects `WHOLE_BODY_BYTES` when the body fits the advertised limit. A transformation such as Git signing that needs complete input larger than one protobuf message selects fail-closed `OWNED_STREAM_BYTES`, spools accepted units, and emits output only after final input. Incremental guards select `STREAM_BYTES` and account for each unit without retaining input across results.
+Many guards need the entire body to do anything: a JSON-aware redactor must parse the whole document, and a signer may need all bytes before emitting its output head. A guard selects BUFFERED when the complete body fits the negotiated RAM bound. Otherwise it selects STREAM, owns its working storage and cleanup, consumes input independently, and delays output until ready. Incremental guards also select STREAM but may emit output early.
 
 ### What streaming provides
 
-The request stream provides two important properties:
+The request stream provides three important properties:
 
 - It removes the requirement that a complete request fit in one gRPC message. OpenShell caps request units at 64 KiB.
-- Owned mode lets the service spool a larger finite transformation without OpenShell retaining a replay copy. Input and output are each bounded at 1 GiB and failure is always closed after ownership begins.
+- Independent pumps let the service change chunk cardinality, retain lookahead, or wait for complete input without blocking OpenShell from continuing to deliver input.
+- STREAM assigns output responsibility at preflight without OpenShell retaining a replay copy.
 
-For a chain made only of `STREAM_BYTES` stages, OpenShell may forward each approved unit upstream before the request ends. A later denial or failure terminates that upload but cannot retract prior bytes, so the relay never retries or replays it. Whole-body and owned stages, body-aware policy re-evaluation, request-body credential rewriting, and body-dependent signing retain a hold barrier. OpenShell rebuilds framing for both paths and can stop a live upload when the upstream responds early.
+For a chain made only of STREAM stages, OpenShell may forward output upstream before the request ends. A later rejection or failure terminates that upload but cannot retract prior bytes, so the relay never retries or replays it. BUFFERED stages, body-aware policy re-evaluation, and request-body credential rewriting retain a bounded in-memory hold barrier. OpenShell rebuilds framing for both paths and can stop a live upload when the upstream responds early.
 
-The state machine requires one preflight, contiguous input sequences, one result for each input unit, an optional owned-output phase with contiguous sequences and exact final accounting, one trailers exchange for active body stages, and a terminal notification. Invalid modes, sequences, actions, diagnostics, or finalization follow `on_error`, except that owned stages cannot fail open.
+The state machine requires one preflight and, after selection, one Begin. BUFFERED has one body and one result. STREAM has nonempty input chunks plus one input end, independent output start/chunks, and finish after input end. Input and output cardinality do not correspond. Unknown, duplicate, missing, or out-of-order events fail closed. A best-effort terminal notification ends the session.
 
 ## Additional operation phases
 
 > **Update in PR #2477 - WebSocket middleware:** This section now records `WEBSOCKET_MESSAGE/PRE_CREDENTIALS` as implemented. It keeps `WEBSOCKET_MESSAGE/PRE_RETURN` as a reserved future operation.
 
-V1 supports `HTTP_REQUEST/PRE_CREDENTIALS`, `HTTP_RESPONSE/PRE_RETURN`, and forward-text `WEBSOCKET_MESSAGE/PRE_CREDENTIALS`. It also implements restricted built-in-only `HTTP_REQUEST/POST_CREDENTIALS`. Each operation and phase pair encodes a different position in the proxy flow:
+V1 supports `HTTP_REQUEST/PRE_CREDENTIALS`, `HTTP_RESPONSE/PRE_RETURN`, and forward-text `WEBSOCKET_MESSAGE/PRE_CREDENTIALS`. Each operation and phase pair encodes a different position in the proxy flow:
 
 - `Connection/before_policy` / `HttpRequest/before_policy` - *before* network/L7 policy admits the request, for earlier classification. Riskier, because request content reaches a service before policy has allowed the request.
 - `HTTP_REQUEST/PRE_CREDENTIALS` (v1) - after policy admits the request, before credential injection.
-- `HTTP_REQUEST/POST_CREDENTIALS` (v1 restricted) - after credential resolution, immediately before the relay writes the request upstream. This hook is credential-visible, so it is built-in-only: OpenShell rejects any externally registered middleware that advertises it. `openshell/sigv4` strips placeholder-signed AWS headers and signs the finalized request with supervisor-resolved credentials.
 - `HttpResponse/completed` - after an upstream request completes, emit metadata such as status, content length, selected route, selected model, and model usage if available. This is notification-only: no body, no transformation, and no allow/deny verdict. It would let reservation-style budget middleware reconcile a pre-dispatch decision without introducing response-body inspection.
 - `HTTP_RESPONSE/PRE_RETURN` (v1) - on the return path, after the upstream responds and before the response reaches the sandbox; inspect, redact, or block upstream responses.
 - `WEBSOCKET_MESSAGE/PRE_CREDENTIALS` (v1 forward text) - after a WebSocket upgrade, on each complete client text message before credential placeholder rewriting. Before upstream contact, a concurrent preflight lets each selected stage inspect, voluntarily skip, or authoritatively deny the upgrade. Explicit denial takes precedence over failures and is enforced independently of `on_error`; OpenShell best-effort ends every still-writable opened stage stream with the typed terminal reason. An attached implementation without this binding is not selected and records coverage rather than applying `on_error`. Binary messages pass without inspection, consume a logical sequence, and record unsupported-message coverage for active stages.

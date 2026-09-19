@@ -4,29 +4,23 @@
 //! First-party in-process supervisor middleware implementations.
 
 mod regex;
-pub mod sigv4;
 
 use std::sync::Arc;
 
 use miette::{Result, miette};
-use openshell_core::middleware::{
-    HttpRequestResultStream, InProcessMiddleware, WebSocketResponseStream,
-};
+use openshell_core::middleware::{HttpResultStream, InProcessMiddleware, WebSocketResponseStream};
 use openshell_core::proto::{
-    HttpRequestBodyMode, HttpRequestBodyPassThrough, HttpRequestBodyResult,
-    HttpRequestBodyTransform, HttpRequestEvent, HttpRequestEventResult,
-    HttpRequestPreflightInspect, HttpRequestPreflightResult, HttpRequestTrailersResult,
-    MiddlewareManifest, SupervisorMiddlewarePhase, WebSocketPreflightAction,
-    WebSocketPreflightDecision, WebSocketSessionEvent, WebSocketSessionEventResult,
-    http_request_body_result, http_request_body_transform, http_request_body_unit,
-    http_request_event, http_request_event_result, http_request_preflight_result,
-    web_socket_message, web_socket_session_event, web_socket_session_event_result,
+    HttpBodyMode, HttpBufferedMode, HttpBufferedResult, HttpEvent, HttpInspect,
+    HttpPreflightResult, HttpResult, HttpUnchanged, MiddlewareDiagnostics, MiddlewareManifest,
+    SupervisorMiddlewarePhase, WebSocketPreflightAction, WebSocketPreflightDecision,
+    WebSocketSessionEvent, WebSocketSessionEventResult, http_buffered_result, http_event,
+    http_inspect, http_preflight, http_preflight_result, http_result, web_socket_message,
+    web_socket_session_event, web_socket_session_event_result,
 };
 use tokio_stream::{Stream, StreamExt};
 use tonic::Status;
 
 pub use regex::{NAME as BUILTIN_REGEX, RegexConfig, RegexMode};
-pub use sigv4::NAME as BUILTIN_SIGV4;
 
 /// Return the first-party services that the gateway and supervisor install.
 pub fn services() -> Vec<Arc<dyn InProcessMiddleware>> {
@@ -49,13 +43,11 @@ pub fn validate_config(implementation: &str, config: &prost_types::Struct) -> Re
 pub struct BuiltinMiddlewareService;
 
 impl BuiltinMiddlewareService {
-    fn request_stream(
-        mut requests: tokio::sync::mpsc::Receiver<HttpRequestEvent>,
-    ) -> HttpRequestResultStream {
+    fn request_stream(mut requests: tokio::sync::mpsc::Receiver<HttpEvent>) -> HttpResultStream {
         let (responses_tx, responses_rx) = tokio::sync::mpsc::channel(4);
         tokio::spawn(async move {
             let mut config = None;
-            let mut inspected_body = false;
+            let mut began = false;
             while let Some(request) = requests.recv().await {
                 let Some(event) = request.event else {
                     let _ = responses_tx
@@ -64,88 +56,79 @@ impl BuiltinMiddlewareService {
                     break;
                 };
                 let result = match event {
-                    http_request_event::Event::Preflight(preflight) if config.is_none() => {
-                        if preflight.middleware_name != BUILTIN_REGEX {
+                    http_event::Event::Preflight(preflight) if config.is_none() => {
+                        let Some(http_preflight::Head::Request(head)) = preflight.head else {
+                            let _ = responses_tx
+                                .send(Err(Status::invalid_argument("request head required")))
+                                .await;
+                            break;
+                        };
+                        if head.middleware_name != BUILTIN_REGEX {
                             Err(Status::invalid_argument(format!(
                                 "middleware implementation '{}' is not a registered OpenShell built-in",
-                                preflight.middleware_name
+                                head.middleware_name
                             )))
                         } else if !preflight
                             .permitted_body_modes
-                            .contains(&(HttpRequestBodyMode::WholeBodyBytes as i32))
+                            .contains(&(HttpBodyMode::Buffered as i32))
                         {
                             Err(Status::failed_precondition(
-                                "openshell/regex requires whole-body request inspection",
+                                "openshell/regex requires BUFFERED request inspection",
                             ))
                         } else {
-                            let selected = preflight.config.unwrap_or_default();
+                            let selected = head.config.unwrap_or_default();
                             match regex::validate_config(&selected) {
                                 Ok(()) => {
                                     config = Some(selected);
-                                    Ok(HttpRequestEventResult {
-                                        result: Some(
-                                            http_request_event_result::Result::PreflightResult(
-                                                HttpRequestPreflightResult {
-                                                    action: Some(
-                                                        http_request_preflight_result::Action::Inspect(
-                                                            HttpRequestPreflightInspect {
-                                                                body_mode: HttpRequestBodyMode::WholeBodyBytes as i32,
-                                                                header_mutations: Vec::new(),
-                                                            },
-                                                        ),
+                                    Ok(HttpResult {
+                                        result: Some(http_result::Result::PreflightResult(
+                                            HttpPreflightResult {
+                                                decision: Some(
+                                                    http_preflight_result::Decision::Inspect(
+                                                        HttpInspect {
+                                                            mode: Some(
+                                                                http_inspect::Mode::Buffered(
+                                                                    HttpBufferedMode {
+                                                                        max_body_bytes:
+                                                                            regex::MAX_PAYLOAD_BYTES,
+                                                                    },
+                                                                ),
+                                                            ),
+                                                        },
                                                     ),
-                                                    ..Default::default()
-                                                },
-                                            ),
-                                        ),
+                                                ),
+                                                ..Default::default()
+                                            },
+                                        )),
                                     })
                                 }
                                 Err(error) => Err(Status::invalid_argument(error.to_string())),
                             }
                         }
                     }
-                    http_request_event::Event::Body(body)
-                        if config.is_some() && !inspected_body && body.end_of_stream =>
-                    {
-                        let Some(http_request_body_unit::Payload::Data(data)) = body.payload else {
-                            let _ = responses_tx
-                                .send(Err(Status::invalid_argument(
-                                    "missing request body payload",
-                                )))
-                                .await;
-                            break;
-                        };
-                        inspected_body = true;
+                    http_event::Event::Begin(_) if config.is_some() && !began => {
+                        began = true;
+                        continue;
+                    }
+                    http_event::Event::BufferedBody(body) if config.is_some() && began => {
                         match regex::evaluate_http_body(
                             config.as_ref().expect("validated request config"),
-                            &data,
+                            &body.data,
                         ) {
                             Ok(evaluation) => {
-                                let action = evaluation.replacement.map_or_else(
-                                    || {
-                                        http_request_body_result::Action::PassThrough(
-                                            HttpRequestBodyPassThrough {},
-                                        )
-                                    },
-                                    |replacement| {
-                                        http_request_body_result::Action::Transform(
-                                            HttpRequestBodyTransform {
-                                                replacement: Some(
-                                                    http_request_body_transform::Replacement::Data(
-                                                        replacement,
-                                                    ),
-                                                ),
-                                            },
-                                        )
-                                    },
+                                let body = evaluation.replacement.map_or_else(
+                                    || http_buffered_result::Body::Unchanged(HttpUnchanged {}),
+                                    http_buffered_result::Body::Replacement,
                                 );
-                                Ok(HttpRequestEventResult {
-                                    result: Some(http_request_event_result::Result::BodyResult(
-                                        HttpRequestBodyResult {
-                                            sequence: body.sequence,
-                                            action: Some(action),
-                                            findings: evaluation.findings,
-                                            metadata: evaluation.metadata,
+                                Ok(HttpResult {
+                                    result: Some(http_result::Result::BufferedResult(
+                                        HttpBufferedResult {
+                                            body: Some(body),
+                                            diagnostics: Some(MiddlewareDiagnostics {
+                                                findings: evaluation.findings,
+                                                metadata: evaluation.metadata,
+                                                ..Default::default()
+                                            }),
                                             ..Default::default()
                                         },
                                     )),
@@ -154,14 +137,7 @@ impl BuiltinMiddlewareService {
                             Err(error) => Err(Status::invalid_argument(error.to_string())),
                         }
                     }
-                    http_request_event::Event::Trailers(_) if inspected_body => {
-                        Ok(HttpRequestEventResult {
-                            result: Some(http_request_event_result::Result::TrailersResult(
-                                HttpRequestTrailersResult::default(),
-                            )),
-                        })
-                    }
-                    http_request_event::Event::SessionEnd(_) if config.is_some() => break,
+                    http_event::Event::SessionEnd(_) if config.is_some() => break,
                     _ => Err(Status::failed_precondition(
                         "invalid built-in HTTP request lifecycle",
                     )),
@@ -339,8 +315,8 @@ impl InProcessMiddleware for BuiltinMiddlewareService {
 
     async fn open_http_request_pre_credentials(
         &self,
-        requests: tokio::sync::mpsc::Receiver<HttpRequestEvent>,
-    ) -> std::result::Result<HttpRequestResultStream, Status> {
+        requests: tokio::sync::mpsc::Receiver<HttpEvent>,
+    ) -> std::result::Result<HttpResultStream, Status> {
         Ok(Self::request_stream(requests))
     }
 

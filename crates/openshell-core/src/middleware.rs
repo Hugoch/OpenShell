@@ -11,20 +11,13 @@ use tokio::sync::mpsc;
 use tonic::{Request, Response, Status};
 
 use crate::proto::{
-    HttpRequestEvent, HttpRequestEventResult, HttpResponseEvent, HttpResponseEventResult,
-    MiddlewareManifest, ValidateConfigRequest, ValidateConfigResponse, WebSocketSessionEvent,
-    WebSocketSessionEventResult,
+    HttpEvent, HttpResult, MiddlewareManifest, ValidateConfigRequest, ValidateConfigResponse,
+    WebSocketSessionEvent, WebSocketSessionEventResult,
 };
 
-/// Transport-neutral result stream for one HTTP request middleware stage.
-pub type HttpRequestResultStream = Pin<
-    Box<dyn tokio_stream::Stream<Item = Result<HttpRequestEventResult, Status>> + Send + 'static>,
->;
-
-/// Transport-neutral result stream for one HTTP response middleware stage.
-pub type HttpResponseResultStream = Pin<
-    Box<dyn tokio_stream::Stream<Item = Result<HttpResponseEventResult, Status>> + Send + 'static>,
->;
+/// Transport-neutral result stream for one HTTP middleware stage.
+pub type HttpResultStream =
+    Pin<Box<dyn tokio_stream::Stream<Item = Result<HttpResult, Status>> + Send + 'static>>;
 
 /// Transport-neutral response stream for one WebSocket middleware stage.
 pub type WebSocketResponseStream = Pin<
@@ -50,8 +43,8 @@ pub trait SupervisorMiddlewareEndpoint: Send + Sync {
 
     async fn open_http_request_pre_credentials(
         &self,
-        _requests: mpsc::Receiver<HttpRequestEvent>,
-    ) -> Result<HttpRequestResultStream, Status> {
+        _requests: mpsc::Receiver<HttpEvent>,
+    ) -> Result<HttpResultStream, Status> {
         Err(Status::unimplemented(
             "middleware does not implement HTTP request pre-credentials evaluation",
         ))
@@ -68,8 +61,8 @@ pub trait SupervisorMiddlewareEndpoint: Send + Sync {
 
     async fn open_http_response_pre_return(
         &self,
-        _requests: mpsc::Receiver<HttpResponseEvent>,
-    ) -> Result<HttpResponseResultStream, Status> {
+        _requests: mpsc::Receiver<HttpEvent>,
+    ) -> Result<HttpResultStream, Status> {
         Err(Status::unimplemented(
             "middleware does not implement HTTP response pre-return evaluation",
         ))
@@ -101,7 +94,7 @@ pub trait SupervisorMiddlewareEndpoint: Send + Sync {
 /// use miette::Result;
 /// use openshell_core::middleware::InProcessMiddleware;
 /// use openshell_core::proto::{
-///     MiddlewareBinding, MiddlewareManifest, SupervisorMiddlewareOperation,
+///     HttpBodyMode, MiddlewareBinding, MiddlewareManifest, SupervisorMiddlewareOperation,
 ///     SupervisorMiddlewarePhase,
 /// };
 /// use prost_types::Struct;
@@ -119,6 +112,8 @@ pub trait SupervisorMiddlewareEndpoint: Send + Sync {
 ///                 phase: SupervisorMiddlewarePhase::PreCredentials as i32,
 ///                 max_payload_bytes: 1024,
 ///                 request_timeout: None,
+///                 http_protocol_version: 1,
+///                 supported_http_body_modes: vec![HttpBodyMode::Buffered as i32],
 ///             }],
 ///             expected_audience: String::new(),
 ///         }
@@ -156,8 +151,8 @@ pub trait InProcessMiddleware: Send + Sync {
     /// Open one HTTP request pre-credentials stream.
     async fn open_http_request_pre_credentials(
         &self,
-        _requests: mpsc::Receiver<HttpRequestEvent>,
-    ) -> std::result::Result<HttpRequestResultStream, Status> {
+        _requests: mpsc::Receiver<HttpEvent>,
+    ) -> std::result::Result<HttpResultStream, Status> {
         Err(Status::unimplemented(
             "middleware does not implement HTTP request pre-credentials evaluation",
         ))
@@ -180,8 +175,8 @@ pub trait InProcessMiddleware: Send + Sync {
     /// Request-only implementations may keep the default unsupported response.
     async fn open_http_response_pre_return(
         &self,
-        _requests: mpsc::Receiver<HttpResponseEvent>,
-    ) -> std::result::Result<HttpResponseResultStream, Status> {
+        _requests: mpsc::Receiver<HttpEvent>,
+    ) -> std::result::Result<HttpResultStream, Status> {
         Err(Status::unimplemented(
             "middleware does not implement HTTP response pre-return evaluation",
         ))

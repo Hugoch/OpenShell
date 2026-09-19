@@ -3,15 +3,14 @@
 
 use miette::{IntoDiagnostic, Result, WrapErr};
 use openshell_core::middleware::{
-    HttpRequestResultStream, HttpResponseResultStream, SupervisorMiddlewareEndpoint,
-    WebSocketResponseStream,
+    HttpResultStream, SupervisorMiddlewareEndpoint, WebSocketResponseStream,
 };
 use openshell_core::proto::middleware::v1::http_request_pre_credentials_client::HttpRequestPreCredentialsClient;
 use openshell_core::proto::middleware::v1::http_response_pre_return_client::HttpResponsePreReturnClient;
 use openshell_core::proto::middleware::v1::supervisor_middleware_client::SupervisorMiddlewareClient;
 use openshell_core::proto::{
-    HttpRequestEvent, HttpResponseEvent, MiddlewareManifest, ValidateConfigRequest,
-    ValidateConfigResponse, WebSocketSessionEvent,
+    HttpEvent, MiddlewareManifest, ValidateConfigRequest, ValidateConfigResponse,
+    WebSocketSessionEvent,
 };
 use openshell_extension_core::{
     BearerTokenInterceptor, BearerTokenSlot, ExtensionChannelConfig, ExtensionServerTrust,
@@ -53,12 +52,6 @@ impl GrpcMiddlewareService {
         })
     }
 
-    /// Wrap a protobuf-shaped service used by transport-boundary tests.
-    #[cfg(test)]
-    pub fn from_service(service: Arc<dyn SupervisorMiddlewareEndpoint>) -> Self {
-        Self { service }
-    }
-
     /// Forward a manifest request through the protobuf service contract.
     pub async fn describe(&self) -> std::result::Result<Response<MiddlewareManifest>, Status> {
         self.service.describe(Request::new(())).await
@@ -81,8 +74,8 @@ impl GrpcMiddlewareService {
     /// Open a remote HTTP request pre-credentials stream through the adapter.
     pub async fn open_http_request_pre_credentials(
         &self,
-        receiver: tokio::sync::mpsc::Receiver<HttpRequestEvent>,
-    ) -> std::result::Result<HttpRequestResultStream, Status> {
+        receiver: tokio::sync::mpsc::Receiver<HttpEvent>,
+    ) -> std::result::Result<HttpResultStream, Status> {
         self.service
             .open_http_request_pre_credentials(receiver)
             .await
@@ -99,8 +92,8 @@ impl GrpcMiddlewareService {
     /// Open a remote HTTP response pre-return stream through the gRPC adapter.
     pub async fn open_http_response_pre_return(
         &self,
-        receiver: tokio::sync::mpsc::Receiver<HttpResponseEvent>,
-    ) -> std::result::Result<HttpResponseResultStream, Status> {
+        receiver: tokio::sync::mpsc::Receiver<HttpEvent>,
+    ) -> std::result::Result<HttpResultStream, Status> {
         self.service.open_http_response_pre_return(receiver).await
     }
 }
@@ -170,11 +163,11 @@ impl SupervisorMiddlewareEndpoint for RemoteMiddlewareService {
 
     async fn open_http_request_pre_credentials(
         &self,
-        receiver: tokio::sync::mpsc::Receiver<HttpRequestEvent>,
-    ) -> std::result::Result<HttpRequestResultStream, Status> {
+        receiver: tokio::sync::mpsc::Receiver<HttpEvent>,
+    ) -> std::result::Result<HttpResultStream, Status> {
         let mut client = self.request_client.clone();
         let responses = client
-            .evaluate(Request::new(tokio_stream::wrappers::ReceiverStream::new(
+            .evaluate_http(Request::new(tokio_stream::wrappers::ReceiverStream::new(
                 receiver,
             )))
             .await?
@@ -198,11 +191,11 @@ impl SupervisorMiddlewareEndpoint for RemoteMiddlewareService {
 
     async fn open_http_response_pre_return(
         &self,
-        receiver: tokio::sync::mpsc::Receiver<HttpResponseEvent>,
-    ) -> std::result::Result<HttpResponseResultStream, Status> {
+        receiver: tokio::sync::mpsc::Receiver<HttpEvent>,
+    ) -> std::result::Result<HttpResultStream, Status> {
         let mut client = self.response_client.clone();
         let responses = client
-            .evaluate(Request::new(tokio_stream::wrappers::ReceiverStream::new(
+            .evaluate_http(Request::new(tokio_stream::wrappers::ReceiverStream::new(
                 receiver,
             )))
             .await?

@@ -3569,6 +3569,7 @@ network_policies:
                         seconds: 1,
                         nanos: 0,
                     }),
+                    ..Default::default()
                 }],
                 expected_audience: String::new(),
             }))
