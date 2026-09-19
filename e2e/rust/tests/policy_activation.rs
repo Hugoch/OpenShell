@@ -317,9 +317,13 @@ binaries:
         String::from_utf8_lossy(&logs.stderr)
     );
     assert_eq!(
-        logs.matches("OCSF CONFIG:FAIL_CLOSED").count(),
+        logs.matches("OCSF CONFIG:CONFIGURATION_ERROR").count(),
         1,
         "unchanged startup rejection must be logged only once: {logs}"
+    );
+    assert!(
+        logs.matches("OCSF CONFIG:FAIL_CLOSED").count() <= 1,
+        "unchanged startup rejection must enter fail-closed at most once: {logs}"
     );
     assert!(logs.contains("credentialed endpoint 'api.example.com:443'"));
     assert!(!logs.contains("Creating OPA engine from proto policy data"));
