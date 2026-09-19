@@ -31,13 +31,6 @@ service ComputeDriver {
   rpc AuthenticateSandbox(AuthenticateSandboxRequest)
       returns (AuthenticateSandboxResponse);
 
-  // Report additional gateway listeners required by this driver instance.
-  //
-  // A requirement is not authorization to expose the gateway. The gateway
-  // owns validation, authorization, and the authoritative bind.
-  rpc GetGatewayListenerRequirements(GetGatewayListenerRequirementsRequest)
-      returns (GetGatewayListenerRequirementsResponse);
-
   // Validate a sandbox before create-time provisioning.
   rpc ValidateSandboxCreate(ValidateSandboxCreateRequest)
       returns (ValidateSandboxCreateResponse);
@@ -136,32 +129,6 @@ message GpuResourceCapabilities {
   bool default_selection_supported = 1;
   // The driver accepts an explicit `gpu.count` request.
   bool count_selection_supported = 2;
-}
-
-message GetGatewayListenerRequirementsRequest {}
-
-message GatewayListenerRequirement {
-  // Untrusted human-readable driver rationale for diagnostics.
-  string reason = 1;
-
-  oneof selector {
-    // Concrete IP:port address requested by the driver. The port must match
-    // the gateway's configured primary listener port.
-    string exact_bind_address = 2;
-    // Ask the gateway to bind the IPv4 address selected by its default route.
-    // This matches rootless pasta's default upstream-interface selection.
-    GatewayDefaultRouteInterfaceRequirement default_route_interface = 3;
-    // Ask the gateway to ensure an IPv4 loopback listener is present. This
-    // covers runtimes whose host forwarder terminates on gateway loopback.
-    GatewayLoopbackInterfaceRequirement loopback_interface = 4;
-  }
-}
-
-message GatewayDefaultRouteInterfaceRequirement {}
-message GatewayLoopbackInterfaceRequirement {}
-
-message GetGatewayListenerRequirementsResponse {
-  repeated GatewayListenerRequirement requirements = 1;
 }
 
 // Driver-owned sandbox model used for create requests and platform observations.
@@ -324,7 +291,7 @@ message DriverResourceRequirements {
 // conditions plus `deleting`.
 message DriverSandboxStatus {
   // Compute-platform sandbox object name.
-  string sandbox_name = 1;
+  string name = 1;
   // Platform-assigned instance identifier for the compute unit running the
   // sandbox agent (e.g. Kubernetes pod name, VM instance ID, hostname).
   // The gateway uses this to correlate incoming connections back to a sandbox.
@@ -390,7 +357,7 @@ message GetSandboxRequest {
   // Stable sandbox ID stored by the gateway.
   string sandbox_id = 1;
   // Compute-runtime name used by the driver.
-  string sandbox_name = 2;
+  string name = 2;
 }
 
 message GetSandboxResponse {
@@ -416,7 +383,7 @@ message StopSandboxRequest {
   // Stable sandbox ID stored by the gateway.
   string sandbox_id = 1;
   // Compute-runtime name used by the driver.
-  string sandbox_name = 2;
+  string name = 2;
 }
 
 message StopSandboxResponse {}
@@ -425,7 +392,7 @@ message StartSandboxRequest {
   // Stable sandbox ID stored by the gateway.
   string sandbox_id = 1;
   // Compute-runtime name used by the driver.
-  string sandbox_name = 2;
+  string name = 2;
   // Fresh launch credentials for start-from-stopped. Empty only for drivers
   // that do not implement the OpenShell Sandbox Protocol.
   bytes launch_authentication = 3 [(openshell.options.v1.secret) = true];
@@ -440,7 +407,7 @@ message DeleteSandboxRequest {
   // Stable sandbox ID stored by the gateway.
   string sandbox_id = 1;
   // Compute-runtime name used by the driver.
-  string sandbox_name = 2;
+  string name = 2;
 }
 
 message DeleteSandboxResponse {

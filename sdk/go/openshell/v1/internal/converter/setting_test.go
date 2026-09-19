@@ -429,7 +429,7 @@ func TestConfigUpdateToProto(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, req)
-	assert.Equal(t, "my-sandbox", req.Name)
+	assert.Equal(t, "my-sandbox", req.GetSandbox())
 	assert.Equal(t, "timeout", req.SettingKey)
 	require.NotNil(t, req.SettingValue)
 	assert.Equal(t, int64(60), req.SettingValue.GetIntValue())
@@ -495,7 +495,7 @@ func TestConfigUpdateToProto_GlobalScope(t *testing.T) {
 
 	require.NotNil(t, req)
 	assert.True(t, req.Global)
-	assert.Empty(t, req.Name)
+	assert.Empty(t, req.GetSandbox())
 }
 
 func TestConfigUpdateToProto_NilSettingValue(t *testing.T) {
@@ -600,8 +600,7 @@ func TestPolicyMergeOperationToProto_MultipleSet(t *testing.T) {
 func TestPolicyMergeOperationToProto_AddRule(t *testing.T) {
 	op := &v1.PolicyMergeOperation{
 		AddRule: &v1.AddNetworkRule{
-			RuleName: "allow-api",
-			Rule: v1.NetworkPolicyRule{
+			RuleName: "allow-api", Rule: v1.NetworkPolicyRule{
 				Name: "allow-api",
 				Endpoints: []v1.PolicyNetworkEndpoint{
 					{Host: "api.example.com", Port: 443, Protocol: "tcp"},
@@ -632,9 +631,8 @@ func TestPolicyMergeOperationToProto_AddRule(t *testing.T) {
 func TestPolicyMergeOperationToProto_RemoveEndpoint(t *testing.T) {
 	op := &v1.PolicyMergeOperation{
 		RemoveEndpoint: &v1.RemoveNetworkEndpoint{
-			RuleName: "allow-api",
-			Host:     "old.example.com",
-			Port:     8080,
+			RuleName: "allow-api", Host: "old.example.com",
+			Port: 8080,
 		},
 	}
 
@@ -652,8 +650,7 @@ func TestPolicyMergeOperationToProto_RemoveEndpoint(t *testing.T) {
 func TestPolicyMergeOperationToProto_RemoveRule(t *testing.T) {
 	op := &v1.PolicyMergeOperation{
 		RemoveRule: &v1.RemoveNetworkRule{
-			RuleName: "obsolete-rule",
-		},
+			RuleName: "obsolete-rule"},
 	}
 
 	pmo, err := PolicyMergeOperationToProto(op)
@@ -670,8 +667,7 @@ func TestPolicyMergeOperationToProto_AddDenyRules(t *testing.T) {
 	op := &v1.PolicyMergeOperation{
 		AddDenyRules: &v1.AddDenyRules{
 			Target: &v1.L7RuleTarget{
-				RuleName: "blocked-api",
-				Host:     "blocked.example.com",
+				RuleName: "blocked-api", Host: "blocked.example.com",
 				Ports:    []uint32{443, 8443},
 				Path:     &path,
 				Binaries: []v1.PolicyNetworkBinary{{Path: "/usr/bin/curl"}, {Path: "/usr/bin/wget"}},
@@ -716,8 +712,7 @@ func TestPolicyMergeOperationToProto_AddAllowRules(t *testing.T) {
 	op := &v1.PolicyMergeOperation{
 		AddAllowRules: &v1.AddAllowRules{
 			Target: &v1.L7RuleTarget{
-				RuleName:  "public-api",
-				Host:      "api.example.com",
+				RuleName: "public-api", Host: "api.example.com",
 				Ports:     []uint32{443},
 				AnyBinary: true,
 			},
@@ -756,8 +751,7 @@ func TestPolicyMergeOperationToProto_L7TargetDeepCopy(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			path := ""
 			target := &v1.L7RuleTarget{
-				RuleName: "api",
-				Host:     "api.example.com",
+				RuleName: "api", Host: "api.example.com",
 				Ports:    []uint32{443, 8443},
 				Path:     &path,
 				Binaries: []v1.PolicyNetworkBinary{{Path: "/usr/bin/curl"}},
@@ -836,8 +830,7 @@ func TestPolicyMergeOperationToProto_L7TargetDoesNotInferScope(t *testing.T) {
 func TestPolicyMergeOperationToProto_RemoveBinary(t *testing.T) {
 	op := &v1.PolicyMergeOperation{
 		RemoveBinary: &v1.RemoveNetworkBinary{
-			RuleName:   "allow-api",
-			BinaryPath: "/usr/bin/wget",
+			RuleName: "allow-api", BinaryPath: "/usr/bin/wget",
 		},
 	}
 
@@ -862,8 +855,7 @@ func TestConfigUpdateToProto_WithMergeOperations(t *testing.T) {
 			},
 			{
 				AddRule: &v1.AddNetworkRule{
-					RuleName: "new-rule",
-					Rule: v1.NetworkPolicyRule{
+					RuleName: "new-rule", Rule: v1.NetworkPolicyRule{
 						Name: "new-rule",
 						Endpoints: []v1.PolicyNetworkEndpoint{
 							{Host: "svc.local", Port: 8080},
@@ -873,8 +865,7 @@ func TestConfigUpdateToProto_WithMergeOperations(t *testing.T) {
 			},
 			{
 				RemoveBinary: &v1.RemoveNetworkBinary{
-					RuleName:   "new-rule",
-					BinaryPath: "/tmp/bad",
+					RuleName: "new-rule", BinaryPath: "/tmp/bad",
 				},
 			},
 		},
@@ -884,7 +875,7 @@ func TestConfigUpdateToProto_WithMergeOperations(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, req)
-	assert.Equal(t, "my-sandbox", req.GetName())
+	assert.Equal(t, "my-sandbox", req.GetSandbox())
 	require.Len(t, req.GetMergeOperations(), 3)
 
 	// First: RemoveRule

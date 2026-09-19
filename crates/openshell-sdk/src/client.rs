@@ -606,9 +606,9 @@ impl OpenShellClient {
     /// For streaming output, drop down to [`OpenShellClient::raw_grpc`] and
     /// call `exec_sandbox` directly.
     pub async fn exec(&self, name: &str, cmd: &[String], opts: ExecOptions) -> Result<ExecResult> {
-        let sandbox = self.get_sandbox(name).await?;
         let request = proto::ExecSandboxRequest {
-            sandbox_id: sandbox.id,
+            sandbox: name.to_string(),
+            workspace_scope: Some(proto::workspace_selector("default")),
             command: cmd.to_vec(),
             workdir: opts.workdir.unwrap_or_default(),
             environment: opts.environment,
@@ -1066,9 +1066,9 @@ impl WorkspaceScopedClient {
 
     /// Run a command inside a sandbox and buffer stdout/stderr.
     pub async fn exec(&self, name: &str, cmd: &[String], opts: ExecOptions) -> Result<ExecResult> {
-        let sandbox = self.get_sandbox(name).await?;
         let request = proto::ExecSandboxRequest {
-            sandbox_id: sandbox.id,
+            sandbox: name.to_string(),
+            workspace_scope: Some(proto::workspace_selector(&self.workspace)),
             command: cmd.to_vec(),
             workdir: opts.workdir.unwrap_or_default(),
             environment: opts.environment,
@@ -1202,7 +1202,7 @@ fn create_sandbox_request(spec: SandboxSpec) -> proto::CreateSandboxRequest {
         annotations: HashMap::new(),
         workspace_scope: Some(proto::workspace_selector("default")),
         await_main_process_attachment: false,
-        workload_template_name: String::new(),
+        workload_template: String::new(),
     }
 }
 
@@ -1231,7 +1231,7 @@ fn create_sandbox_from_template_request(
         labels,
         annotations: HashMap::new(),
         workspace_scope: Some(proto::workspace_selector("default")),
-        workload_template_name: template_name,
+        workload_template: template_name,
         await_main_process_attachment: false,
     }
 }

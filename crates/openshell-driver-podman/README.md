@@ -60,10 +60,9 @@ The channel contains the sandbox bootstrap and sandbox-side TLS identity only.
 Supervisor private keys and the runtime descriptor stay in the supervisor's private filesystem.
 Landlock denies agent access to the top-level `/.openshell` control hierarchy.
 The driver verifies Podman's reported `network=none` fence before launch and
-restart. `host.containers.internal` and callback networking apply to the
-supervisor, not the agent.
+restart. Host networking applies to the supervisor, not the agent.
 
-Gateway callbacks use the existing sandbox JWT and optional configured mTLS
+Gateway sessions use the existing sandbox JWT and optional configured mTLS
 bundle. The sandbox/supervisor channel always uses its separate, per-sandbox
 mutual TLS material. These are distinct authentication relationships.
 
@@ -112,7 +111,7 @@ operator's `enable_bind_mounts` opt-in. Reserved control paths and the workspace
 root cannot be replaced. User-owned volumes are never created or deleted.
 
 See [gateway configuration](../../docs/reference/gateway-config.mdx) for
-operator settings and [NETWORKING.md](NETWORKING.md) for callback networking.
+operator settings and [NETWORKING.md](NETWORKING.md) for supervisor networking.
 The supervisor uses Podman's host network and owns the upstream proxy settings.
 Omit `health_check_interval_secs` to disable Podman's periodic health command.
 Explicit zero is invalid. OpenShell still gates readiness on the supervisor's

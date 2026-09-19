@@ -79,6 +79,8 @@ describe('deletion outcomes', () => {
 });
 
 type ScopedRequest = {
+  name?: string;
+  sandbox?: string;
   workspaceScope?: { selection?: { case?: string; value?: unknown } };
 };
 
@@ -87,14 +89,17 @@ function selectedWorkspace(req: ScopedRequest): string | undefined {
   return selection?.case === 'workspace' && typeof selection.value === 'string' ? selection.value : undefined;
 }
 
+function requestSandbox(req: ScopedRequest): string | undefined {
+  return req.name ?? req.sandbox;
+}
+
 function selectsAllWorkspaces(req: ScopedRequest): boolean {
   return req.workspaceScope?.selection?.case === 'allWorkspaces';
 }
 
 describe('exec / execStream', () => {
   it('resolves the id via get, frames tty:false, and buffers the result (backward compat)', async () => {
-    let execReq: {
-      sandboxId?: string;
+    let execReq: ScopedRequest & {
       tty?: boolean;
       command?: string[];
       executionTimeout?: { seconds: bigint; nanos: number };
@@ -112,7 +117,7 @@ describe('exec / execStream', () => {
     });
 
     const result = await sandbox.exec('sb', ['/bin/sh', '-c', 'echo hi']);
-    expect(execReq.sandboxId).toBe('sb-id-1');
+    expect(requestSandbox(execReq)).toBe('sb');
     expect(execReq.tty).toBe(false);
     expect(execReq.command).toEqual(['/bin/sh', '-c', 'echo hi']);
     expect(execReq.executionTimeout).toBeUndefined();
@@ -329,9 +334,9 @@ describe('create', () => {
 
   it('createFromTemplate sends the workload template name with governance fields only', async () => {
     let created: {
-      workloadTemplateName?: string;
+      workloadTemplate?: string;
       name?: string;
-      workspaceScope?: ScopedRequest['workspaceScope'];
+      workspace?: string;
       labels?: Record<string, string>;
       spec?: {
         policy?: { version?: number };
@@ -350,7 +355,7 @@ describe('create', () => {
     const ref = await sandbox.createFromTemplate({
       name: 'job-1',
       workspace: 'staging',
-      templateName: 'gpu-kata',
+      workloadTemplate: 'gpu-kata',
       labels: { team: 'runtime' },
       providers: ['github'],
       command: ['/opt/worker', '--serve'],
@@ -358,7 +363,7 @@ describe('create', () => {
       policy: { version: 1, networkPolicies: {} },
     });
 
-    expect(created.workloadTemplateName).toBe('gpu-kata');
+    expect(created.workloadTemplate).toBe('gpu-kata');
     expect(created.name).toBe('job-1');
     expect(selectedWorkspace(created)).toBe('staging');
     expect(created.labels).toEqual({ team: 'runtime' });
@@ -394,13 +399,14 @@ describe('create', () => {
       },
       getSandbox: (req) => {
         const workspace = selectedWorkspace(req);
-        if (req.name === 'exec') observed.execGet = workspace;
-        else if (req.name === 'interactive') observed.interactiveGet = workspace;
-        else if (req.name === 'ssh') observed.sshGet = workspace;
-        else if (req.name === 'forward') observed.forwardGet = workspace;
-        else if (req.name === 'config' && workspace) observed.configGets.push(workspace);
+        const name = requestSandbox(req);
+        if (name === 'exec') observed.execGet = workspace;
+        else if (name === 'interactive') observed.interactiveGet = workspace;
+        else if (name === 'ssh') observed.sshGet = workspace;
+        else if (name === 'forward') observed.forwardGet = workspace;
+        else if (name === 'config' && workspace) observed.configGets.push(workspace);
         else observed.get = req;
-        return readySandbox(req.name, `${req.name}-id`, 7n, undefined, workspace ?? 'default');
+        return readySandbox(name ?? '', `${name}-id`, 7n, undefined, workspace ?? 'default');
       },
       listSandboxes: (req) => {
         observed.list = req;
@@ -426,16 +432,26 @@ describe('create', () => {
       attachSandboxProvider: (req) => {
         observed.attach = req;
         return {
-          sandbox: readySandbox(req.sandboxName, 'attach-id', 7n, undefined, selectedWorkspace(req) ?? 'default')
-            .sandbox,
+          sandbox: readySandbox(
+            requestSandbox(req) ?? '',
+            'attach-id',
+            7n,
+            undefined,
+            selectedWorkspace(req) ?? 'default',
+          ).sandbox,
           attached: true,
         };
       },
       detachSandboxProvider: (req) => {
         observed.detach = req;
         return {
-          sandbox: readySandbox(req.sandboxName, 'detach-id', 7n, undefined, selectedWorkspace(req) ?? 'default')
-            .sandbox,
+          sandbox: readySandbox(
+            requestSandbox(req) ?? '',
+            'detach-id',
+            7n,
+            undefined,
+            selectedWorkspace(req) ?? 'default',
+          ).sandbox,
           detached: true,
         };
       },
@@ -467,7 +483,7 @@ describe('create', () => {
         yield { payload: { case: 'exit', value: { exitCode: 0 } } };
       },
       createSshSession: (req) => ({
-        sandboxId: req.sandboxId,
+        sandboxId: `${requestSandbox(req) ?? ''}-id`,
         token: 'tok',
         gatewayHost: 'gw',
         gatewayPort: 443,
@@ -572,7 +588,7 @@ describe('create', () => {
 
   it('createFromTemplate rejects an empty template name locally', async () => {
     const sandbox = client({});
-    await expect(sandbox.createFromTemplate({ templateName: ' ' })).rejects.toMatchObject({
+    await expect(sandbox.createFromTemplate({ workloadTemplate: ' ' })).rejects.toMatchObject({
       code: 'invalid_config',
     });
   });
@@ -912,7 +928,7 @@ describe('Pushable', () => {
 describe('execInteractive', () => {
   it('sends start first with tty/cols/rows, streams output, and resolves done', async () => {
     const cases: string[] = [];
-    let started: { tty?: boolean; cols?: number; rows?: number; sandboxId?: string } | undefined;
+    let started: (ScopedRequest & { tty?: boolean; cols?: number; rows?: number }) | undefined;
     const sandbox = client({
       getSandbox: () => readySandbox('sb', 'sb-id-9'),
       execSandboxInteractive: async function* (requests) {
@@ -956,7 +972,7 @@ describe('execInteractive', () => {
     expect(started?.tty).toBe(true);
     expect(started?.cols).toBe(120);
     expect(started?.rows).toBe(40);
-    expect(started?.sandboxId).toBe('sb-id-9');
+    expect(requestSandbox(started ?? {})).toBe('sb');
     expect(out.join('')).toContain('ready\n');
     expect(out.join('')).toContain('echo hi');
   });
@@ -1020,8 +1036,9 @@ describe('exec done settlement', () => {
 describe('providers', () => {
   it('attach/detach assemble the request and map the changed flag + sandbox ref', async () => {
     let attachReq: {
-      sandboxName?: string;
-      providerName?: string;
+      sandbox?: string;
+      workspace?: string;
+      provider?: string;
       expectedResourceVersion?: bigint;
     } = {};
     let detachReq: { expectedResourceVersion?: bigint } = {};
@@ -1040,8 +1057,8 @@ describe('providers', () => {
     });
 
     const attach = await sandbox.attachProvider('sb', 'claude');
-    expect(attachReq.sandboxName).toBe('sb');
-    expect(attachReq.providerName).toBe('claude');
+    expect(requestSandbox(attachReq)).toBe('sb');
+    expect(attachReq.provider).toBe('claude');
     expect(attachReq.expectedResourceVersion).toBe(0n);
     expect(attach.changed).toBe(true);
     expect(attach.sandbox.resourceVersion).toBe('7');
@@ -1117,7 +1134,8 @@ describe('config / policy', () => {
 
   it('setPolicy sends global=false + version pin and (wait) polls until the hash matches', async () => {
     let updateReq: {
-      name?: string;
+      sandbox?: string;
+      workspace?: string;
       global?: boolean;
       expectedResourceVersion?: bigint;
       policy?: unknown;
@@ -1158,7 +1176,7 @@ describe('config / policy', () => {
       },
       { wait: true, expectedResourceVersion: '7' },
     );
-    expect(updateReq.name).toBe('sb');
+    expect(requestSandbox(updateReq)).toBe('sb');
     expect(updateReq.global).toBe(false);
     expect(updateReq.expectedResourceVersion).toBe(7n);
     expect(updateReq.policy).toBeDefined();
@@ -1191,7 +1209,8 @@ describe('config / policy', () => {
 
   it('setSetting upserts a single sandbox-scoped setting (global=false)', async () => {
     let req: {
-      name?: string;
+      sandbox?: string;
+      workspace?: string;
       settingKey?: string;
       global?: boolean;
       settingValue?: unknown;
@@ -1210,7 +1229,7 @@ describe('config / policy', () => {
     const result = await sandbox.setSetting('sb', 'feature.enabled', {
       value: { case: 'boolValue', value: true },
     });
-    expect(req.name).toBe('sb');
+    expect(requestSandbox(req)).toBe('sb');
     expect(req.settingKey).toBe('feature.enabled');
     expect(req.global).toBe(false);
     expect(req.settingValue).toMatchObject({
@@ -1327,9 +1346,9 @@ describe('ssh sessions', () => {
 
 describe('forward', () => {
   it('binds a local port and relays bytes both ways, minting + revoking a token', async () => {
-    let sshReq: { sandboxId?: string } = {};
+    let sshReq: ScopedRequest = {};
     let revokedToken: string | undefined;
-    let initFrame: { sandboxId?: string; authorizationToken?: string; target?: unknown } | undefined;
+    let initFrame: (ScopedRequest & { authorizationToken?: string; target?: unknown }) | undefined;
     const sandbox = client({
       getSandbox: () => readySandbox('sb', 'sb-id-forward'),
       createSshSession: (req) => {
@@ -1380,8 +1399,8 @@ describe('forward', () => {
     });
 
     expect(echoed).toBe('ping-through-forward');
-    expect(sshReq.sandboxId).toBe('sb-id-forward');
-    expect(initFrame?.sandboxId).toBe('sb-id-forward');
+    expect(requestSandbox(sshReq)).toBe('sb');
+    expect(requestSandbox(initFrame ?? {})).toBe('sb');
     expect(initFrame?.authorizationToken).toBe('fwd-tok');
     expect(initFrame?.target).toMatchObject({
       case: 'tcp',
@@ -1622,7 +1641,8 @@ describe('raw escape hatch', () => {
       },
     });
     await sandbox.raw.updateConfig({
-      name: 'sb',
+      sandbox: 'sb',
+      workspaceScope: { selection: { case: 'workspace', value: 'default' } },
       mergeOperations: [
         {
           operation: {
@@ -1643,7 +1663,12 @@ describe('raw escape hatch', () => {
           operation: {
             case: 'addDenyRules',
             value: {
-              target: { ruleName: 'public_api', host: 'api.example.com', ports: [443], anyBinary: true },
+              target: {
+                ruleName: 'public_api',
+                host: 'api.example.com',
+                ports: [443],
+                anyBinary: true,
+              },
               denyRules: [{ method: 'POST', path: '/admin/private' }],
             },
           },
@@ -1681,7 +1706,10 @@ describe('raw escape hatch', () => {
 
     // raw returns the full generated message: the enum stays numeric, where the
     // curated get() would lowercase status.phase to 'ready'.
-    const resp = await sandbox.raw.getSandbox({ name: 'sb' });
+    const resp = await sandbox.raw.getSandbox({
+      name: 'sb',
+      workspaceScope: { selection: { case: 'workspace', value: 'default' } },
+    });
     expect(resp.sandbox?.status?.phase).toBe(SandboxPhase.READY);
     expect(resp.sandbox?.metadata?.name).toBe('sb');
 

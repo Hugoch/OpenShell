@@ -56,6 +56,13 @@ def _request_selects_all_workspaces(request: Any) -> bool:
     return request.workspace_scope.WhichOneof("selection") == "all_workspaces"
 
 
+def _request_sandbox(request: Any) -> str:
+    name = getattr(request, "name", "")
+    if name:
+        return cast("str", name)
+    return cast("str", request.sandbox)
+
+
 def _client_credentials_fixture() -> dict[str, Any]:
     return json.loads(
         (
@@ -434,7 +441,12 @@ def test_exec_sends_stdin_payload() -> None:
     stub = _FakeStub()
     client = _client_with_fake_stub(stub)
 
-    result = client.exec("sandbox-1", ["python", "-c", "print('ok')"], stdin=b"payload")
+    result = client.exec(
+        "sandbox-1",
+        ["python", "-c", "print('ok')"],
+        workspace="default",
+        stdin=b"payload",
+    )
 
     assert result.exit_code == 0
     assert stub.request is not None
@@ -448,7 +460,7 @@ def test_exec_python_serializes_callable_payload() -> None:
     def add(a: int, b: int) -> int:
         return a + b
 
-    result = client.exec_python("sandbox-1", add, args=(2, 3))
+    result = client.exec_python("sandbox-1", add, workspace="default", args=(2, 3))
 
     assert result.exit_code == 0
     assert stub.request is not None
@@ -2002,7 +2014,7 @@ class _FakeSandboxStub:
         return SimpleNamespace(
             sandbox=_make_sandbox_proto(
                 "sandbox-1",
-                request.name,
+                _request_sandbox(request),
                 workspace=_request_workspace(request) or "default",
             )
         )
@@ -2026,7 +2038,7 @@ class _FakeSandboxStub:
         return SimpleNamespace(
             sandbox=_make_sandbox_proto(
                 "sandbox-1",
-                request.name,
+                _request_sandbox(request),
                 phase=openshell_pb2.SANDBOX_PHASE_STOPPED,
                 workspace=_request_workspace(request) or "default",
             )
@@ -2042,7 +2054,7 @@ class _FakeSandboxStub:
         return SimpleNamespace(
             sandbox=_make_sandbox_proto(
                 "sandbox-1",
-                request.name,
+                _request_sandbox(request),
                 phase=openshell_pb2.SANDBOX_PHASE_STARTING,
                 workspace=_request_workspace(request) or "default",
             )
@@ -2153,14 +2165,14 @@ class _RecordingHighLevelClient:
         self,
         *,
         workspace: str,
-        template_name: str,
+        workload_template: str,
         spec: Any = None,
         name: str | None = None,
         labels: Any = None,
     ) -> Any:
         self.create_template_kwargs = {
             "workspace": workspace,
-            "template_name": template_name,
+            "workload_template": workload_template,
             "spec": spec,
             "name": name,
             "labels": labels,
@@ -2193,7 +2205,7 @@ def test_create_forwards_name_and_labels() -> None:
     assert dict(ref.labels) == {"aiq": "deep-research"}
 
 
-def test_create_from_template_forwards_workload_template_name() -> None:
+def test_create_from_template_forwards_workload_template() -> None:
     stub = _FakeSandboxStub()
     client = _client_with_fake_stub(stub)
     spec = openshell_pb2.SandboxSpec(
@@ -2204,7 +2216,7 @@ def test_create_from_template_forwards_workload_template_name() -> None:
 
     ref = client.create_from_template(
         workspace="default",
-        template_name="gpu-kata",
+        workload_template="gpu-kata",
         spec=spec,
         name="job-1",
         labels={"team": "runtime"},
@@ -2212,7 +2224,7 @@ def test_create_from_template_forwards_workload_template_name() -> None:
 
     assert stub.create_request is not None
     assert stub.create_request.name == "job-1"
-    assert stub.create_request.workload_template_name == "gpu-kata"
+    assert stub.create_request.workload_template == "gpu-kata"
     assert dict(stub.create_request.labels) == {"team": "runtime"}
     assert list(stub.create_request.spec.providers) == ["github"]
     assert list(stub.create_request.spec.command) == ["/opt/worker", "--serve"]
@@ -2220,12 +2232,12 @@ def test_create_from_template_forwards_workload_template_name() -> None:
     assert dict(ref.labels) == {"team": "runtime"}
 
 
-def test_create_from_template_rejects_empty_template_name() -> None:
+def test_create_from_template_rejects_empty_workload_template() -> None:
     stub = _FakeSandboxStub()
     client = _client_with_fake_stub(stub)
 
     with pytest.raises(SandboxError):
-        client.create_from_template(workspace="default", template_name=" ")
+        client.create_from_template(workspace="default", workload_template=" ")
 
     assert stub.create_request is None
 
@@ -2448,13 +2460,13 @@ def test_stop_and_start_forward_workspace_and_return_phase() -> None:
 
     stopped = client.stop("job-1", workspace="team-a")
     assert stub.stop_request is not None
-    assert stub.stop_request.name == "job-1"
+    assert _request_sandbox(stub.stop_request) == "job-1"
     assert _request_workspace(stub.stop_request) == "team-a"
     assert stopped.phase == openshell_pb2.SANDBOX_PHASE_STOPPED
 
     starting = client.start("job-1", workspace="team-a")
     assert stub.start_request is not None
-    assert stub.start_request.name == "job-1"
+    assert _request_sandbox(stub.start_request) == "job-1"
     assert _request_workspace(stub.start_request) == "team-a"
     assert starting.phase == openshell_pb2.SANDBOX_PHASE_STARTING
 
@@ -2479,7 +2491,7 @@ def test_wait_ready_handles_terminal_main_process_results(
             return SimpleNamespace(
                 sandbox=_make_sandbox_proto(
                     "sandbox-1",
-                    request.name,
+                    _request_sandbox(request),
                     phase=phase,
                     workspace=_request_workspace(request) or "default",
                 )
@@ -2736,7 +2748,7 @@ def test_high_level_creation_forwards_name_and_labels(
     }
 
 
-def test_high_level_template_creation_forwards_template_name(
+def test_high_level_template_creation_forwards_workload_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recording = _RecordingHighLevelClient()
@@ -2753,7 +2765,7 @@ def test_high_level_template_creation_forwards_template_name(
     )
     sandbox = Sandbox(
         workspace="staging",
-        template_name="gpu-kata",
+        workload_template="gpu-kata",
         spec=spec,
         name="job-1",
         labels={"team": "runtime"},
@@ -2763,7 +2775,7 @@ def test_high_level_template_creation_forwards_template_name(
 
     assert recording.create_template_kwargs == {
         "workspace": "staging",
-        "template_name": "gpu-kata",
+        "workload_template": "gpu-kata",
         "spec": spec,
         "name": "job-1",
         "labels": {"team": "runtime"},
@@ -2794,9 +2806,9 @@ def test_high_level_attach_rejects_labels() -> None:
         sandbox.__enter__()
 
 
-def test_high_level_attach_rejects_template_name() -> None:
+def test_high_level_attach_rejects_workload_template() -> None:
     sandbox = Sandbox(
-        workspace="default", sandbox="existing-sandbox", template_name="gpu-kata"
+        workspace="default", sandbox="existing-sandbox", workload_template="gpu-kata"
     )
 
     with pytest.raises(SandboxError):

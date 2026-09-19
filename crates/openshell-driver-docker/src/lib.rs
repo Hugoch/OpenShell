@@ -13,8 +13,8 @@ use bollard::errors::Error as BollardError;
 use bollard::models::{
     ContainerCreateBody, ContainerState, ContainerStateStatusEnum, ContainerSummary,
     ContainerSummaryStateEnum, CreateImageInfo, DeviceRequest, HealthConfig, HealthStatusEnum,
-    HostConfig, Mount, MountTmpfsOptions, MountTypeEnum, MountVolumeOptions, NetworkCreateRequest,
-    ProgressDetail, SystemInfo, VolumeCreateRequest,
+    HostConfig, Mount, MountTmpfsOptions, MountTypeEnum, MountVolumeOptions, ProgressDetail,
+    SystemInfo, VolumeCreateRequest,
 };
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, CreateImageOptions, DownloadFromContainerOptionsBuilder,
@@ -26,11 +26,10 @@ use futures::{Stream, StreamExt};
 use openshell_core::config::DEFAULT_STOP_TIMEOUT_SECS;
 use openshell_core::driver_mounts;
 use openshell_core::driver_utils::{
-    CONDITION_EXITED, CONDITION_RUNTIME_RESTART, GatewayCallbackRoute, LABEL_MANAGED_BY,
-    LABEL_MANAGED_BY_VALUE, LABEL_SANDBOX_ID, LABEL_SANDBOX_NAME, LABEL_SANDBOX_NAMESPACE,
-    LABEL_SANDBOX_WORKSPACE, SANDBOX_RUNTIME_IMAGE_BINARY_PATH, extract_first_tar_entry,
-    gateway_callback_endpoint, supervisor_image_should_refresh, temp_extract_container_name,
-    validate_linux_elf_binary,
+    CONDITION_EXITED, CONDITION_RUNTIME_RESTART, LABEL_MANAGED_BY, LABEL_MANAGED_BY_VALUE,
+    LABEL_SANDBOX_ID, LABEL_SANDBOX_NAME, LABEL_SANDBOX_NAMESPACE, LABEL_SANDBOX_WORKSPACE,
+    SANDBOX_RUNTIME_IMAGE_BINARY_PATH, extract_first_tar_entry, supervisor_image_should_refresh,
+    temp_extract_container_name, validate_linux_elf_binary,
 };
 use openshell_core::gpu::{
     CdiGpuDefaultSelector, CdiGpuInventory, CdiGpuSelectionError, driver_gpu_requirements,
@@ -44,16 +43,14 @@ use openshell_core::proto::compute::v1::{
     CpuResourceCapabilities, CreateSandboxRequest, CreateSandboxResponse, DeleteSandboxRequest,
     DeleteSandboxResponse, DeleteWorkspaceRequest, DeleteWorkspaceResponse, DriverCondition,
     DriverPlatformEvent, DriverSandbox, DriverSandboxStatus, DriverSandboxTemplate,
-    EnsureWorkspaceRequest, EnsureWorkspaceResponse, GatewayListenerRequirement,
-    GetCapabilitiesRequest, GetCapabilitiesResponse, GetGatewayListenerRequirementsRequest,
-    GetGatewayListenerRequirementsResponse, GetSandboxRequest, GetSandboxResponse,
-    GpuResourceCapabilities, GpuResourceRequirements, ListSandboxesRequest, ListSandboxesResponse,
+    EnsureWorkspaceRequest, EnsureWorkspaceResponse, GetCapabilitiesRequest,
+    GetCapabilitiesResponse, GetSandboxRequest, GetSandboxResponse, GpuResourceCapabilities,
+    GpuResourceRequirements, ListSandboxesRequest, ListSandboxesResponse,
     MemoryResourceCapabilities, ResourceCapabilities, StartSandboxRequest, StartSandboxResponse,
     StopSandboxRequest, StopSandboxResponse, ValidateSandboxCreateRequest,
     ValidateSandboxCreateResponse, WatchSandboxesDeletedEvent, WatchSandboxesEvent,
     WatchSandboxesPlatformEvent, WatchSandboxesRequest, WatchSandboxesSandboxEvent,
-    compute_driver_server::ComputeDriver, gateway_listener_requirement::Selector,
-    watch_sandboxes_event,
+    compute_driver_server::ComputeDriver, watch_sandboxes_event,
 };
 use openshell_core::proto_struct::{
     deserialize_optional_non_empty_string_list, struct_to_json_value,
@@ -128,9 +125,8 @@ const BOUNDARY_CERTIFICATE_FILE: &str = "boundary-server.crt";
 const BOUNDARY_PRIVATE_KEY_FILE: &str = "boundary-server.key";
 const SUPERVISOR_AUTH_BUNDLE_FILE: &str = "supervisor-auth.json";
 const START_GENERATION_FILE: &str = "start-generation";
-const HOST_OPENSHELL_INTERNAL: &str = "host.openshell.internal";
+const HOST_OPEN_SHELL_INTERNAL: &str = "host.openshell.internal";
 const HOST_DOCKER_INTERNAL: &str = "host.docker.internal";
-const DOCKER_NETWORK_DRIVER: &str = "bridge";
 
 fn provisioning_span(
     parent: &opentelemetry::Context,
@@ -196,12 +192,6 @@ pub struct DockerComputeConfig {
     /// Host-side private key for Docker sandbox mTLS.
     pub guest_tls_key: Option<PathBuf>,
 
-    /// Docker bridge network that sandbox containers join.
-    pub network_name: String,
-
-    /// Host gateway IP used for sandbox host aliases.
-    pub host_gateway_ip: String,
-
     /// Unix socket path used for interactive sandbox access.
     pub ssh_socket_path: String,
 
@@ -251,7 +241,6 @@ impl DockerComputeConfig {
             openshell_core::driver_utils::validate_provider_spiffe_unix_socket(socket)
                 .map_err(Error::config)?;
         }
-        parse_optional_host_gateway_ip(&self.host_gateway_ip)?;
         if gateway_bind_address.port() == 0 {
             return Err(Error::config(
                 "docker compute driver requires a fixed non-zero gateway bind port",
@@ -275,8 +264,6 @@ impl Default for DockerComputeConfig {
             guest_tls_ca: None,
             guest_tls_cert: None,
             guest_tls_key: None,
-            network_name: DEFAULT_DOCKER_NETWORK_NAME.to_string(),
-            host_gateway_ip: String::new(),
             ssh_socket_path: openshell_core::container_paths::SSH_SOCKET_PATH.to_string(),
             sandbox_pids_limit: openshell_core::config::default_sandbox_pids_limit(),
             enable_bind_mounts: false,
@@ -299,15 +286,11 @@ struct DockerDriverRuntimeConfig {
     default_image: String,
     image_pull_policy: ImagePullPolicy,
     sandbox_namespace: String,
-    network_name: String,
-    gateway_route: DockerGatewayRoute,
-    gateway_callback_bind_address: Option<SocketAddr>,
     stop_timeout_secs: u32,
     log_level: String,
     sandbox_binary: Arc<Vec<u8>>,
     supervisor_image_id: String,
     supervisor_grpc_endpoint: String,
-    gateway_tls_server_name: Option<String>,
     ssh_socket_path: String,
     guest_tls: Option<DockerGuestTlsPaths>,
     daemon_version: String,
@@ -323,12 +306,6 @@ struct DockerDriverRuntimeConfig {
 struct DockerGpuRuntimeCapabilities {
     cdi_supported: bool,
     wsl_all_gpu_fallback_enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DockerGatewayRoute {
-    Bridge { bind_address: SocketAddr },
-    HostGateway,
 }
 
 #[derive(Clone)]
@@ -883,46 +860,20 @@ impl DockerComputeDriver {
                 "docker compute driver requires a fixed non-zero gateway bind port",
             ));
         }
-        let network_name = docker_network_name(docker_config);
-        let bridge_gateway_ip = ensure_bridge_network(&docker, &network_name).await?;
-        let host_gateway_ip = parse_optional_host_gateway_ip(&docker_config.host_gateway_ip)?;
-        let gateway_route =
-            docker_gateway_route(&info, bridge_gateway_ip, gateway_port, host_gateway_ip);
-        let gateway_callback_bind_address =
-            docker_gateway_callback_bind_address(&gateway_route, gateway_bind_address);
         let mut docker_config = docker_config.clone();
         if docker_config.grpc_endpoint.trim().is_empty() {
-            docker_config.grpc_endpoint = gateway_callback_endpoint(
-                GatewayCallbackRoute::Docker,
+            docker_config.grpc_endpoint = default_docker_supervisor_grpc_endpoint(
                 gateway_port,
                 docker_guest_tls_configured(&docker_config),
             );
         }
-        let host_grpc_endpoint =
-            docker_host_openshell_endpoint(&docker_config.grpc_endpoint, &gateway_route)?;
-        let original_gateway_url = Url::parse(&docker_config.grpc_endpoint).map_err(|error| {
+        Url::parse(&docker_config.grpc_endpoint).map_err(|error| {
             Error::config(format!(
                 "invalid docker grpc_endpoint '{}': {error}",
                 docker_config.grpc_endpoint
             ))
         })?;
-        let host_gateway_url = Url::parse(&host_grpc_endpoint).map_err(|error| {
-            Error::config(format!(
-                "invalid normalized Docker host grpc_endpoint '{host_grpc_endpoint}': {error}"
-            ))
-        })?;
-        let gateway_tls_server_name = (original_gateway_url.scheme() == "https"
-            && original_gateway_url.host_str() != host_gateway_url.host_str())
-        .then(|| {
-            original_gateway_url
-                .host_str()
-                .unwrap_or_default()
-                .to_string()
-        });
-        let supervisor_grpc_endpoint = match &gateway_route {
-            DockerGatewayRoute::Bridge { .. } => host_grpc_endpoint,
-            DockerGatewayRoute::HostGateway => docker_config.grpc_endpoint.clone(),
-        };
+        let supervisor_grpc_endpoint = docker_config.grpc_endpoint.clone();
         let supervisor_image = docker_config
             .supervisor_image
             .clone()
@@ -961,15 +912,11 @@ impl DockerComputeDriver {
                 default_image: docker_config.default_image.clone(),
                 image_pull_policy: docker_config.image_pull_policy,
                 sandbox_namespace: docker_config.sandbox_label.clone(),
-                network_name,
-                gateway_route,
-                gateway_callback_bind_address,
                 stop_timeout_secs: DEFAULT_STOP_TIMEOUT_SECS,
                 log_level: gateway_log_level.to_string(),
                 sandbox_binary,
                 supervisor_image_id,
                 supervisor_grpc_endpoint,
-                gateway_tls_server_name,
                 ssh_socket_path: docker_config.ssh_socket_path.clone(),
                 guest_tls,
                 daemon_version: version.version.unwrap_or_else(|| "unknown".to_string()),
@@ -2915,18 +2862,6 @@ impl ComputeDriver for ComputeDriverService {
             .await
     }
 
-    async fn get_gateway_listener_requirements(
-        &self,
-        request: Request<GetGatewayListenerRequirementsRequest>,
-    ) -> Result<Response<GetGatewayListenerRequirementsResponse>, Status> {
-        self.rpc_tracer
-            .trace(
-                openshell_otel::rpc::GET_GATEWAY_LISTENER_REQUIREMENTS,
-                ComputeDriver::get_gateway_listener_requirements(&self.driver, request),
-            )
-            .await
-    }
-
     async fn validate_sandbox_create(
         &self,
         request: Request<ValidateSandboxCreateRequest>,
@@ -3072,28 +3007,6 @@ impl ComputeDriver for DockerComputeDriver {
         Ok(Response::new(self.capabilities()))
     }
 
-    async fn get_gateway_listener_requirements(
-        &self,
-        _request: Request<GetGatewayListenerRequirementsRequest>,
-    ) -> Result<Response<GetGatewayListenerRequirementsResponse>, Status> {
-        let requirements =
-            self.config
-                .gateway_callback_bind_address
-                .map_or_else(Vec::new, |bind_address| {
-                    vec![GatewayListenerRequirement {
-                        reason: match self.config.gateway_route {
-                            DockerGatewayRoute::Bridge { .. } => "docker managed bridge gateway",
-                            DockerGatewayRoute::HostGateway => "docker host-gateway IPv4 loopback",
-                        }
-                        .to_string(),
-                        selector: Some(Selector::ExactBindAddress(bind_address.to_string())),
-                    }]
-                });
-        Ok(Response::new(GetGatewayListenerRequirementsResponse {
-            requirements,
-        }))
-    }
-
     async fn validate_sandbox_create(
         &self,
         request: Request<ValidateSandboxCreateRequest>,
@@ -3120,10 +3033,10 @@ impl ComputeDriver for DockerComputeDriver {
         request: Request<GetSandboxRequest>,
     ) -> Result<Response<GetSandboxResponse>, Status> {
         let request = request.into_inner();
-        require_sandbox_identifier(&request.sandbox_id, &request.sandbox_name)?;
+        require_sandbox_identifier(&request.sandbox_id, &request.name)?;
 
         let sandbox = self
-            .get_sandbox_snapshot(&request.sandbox_id, &request.sandbox_name)
+            .get_sandbox_snapshot(&request.sandbox_id, &request.name)
             .await?
             .ok_or_else(|| Status::not_found("sandbox not found"))?;
 
@@ -3177,7 +3090,7 @@ impl ComputeDriver for DockerComputeDriver {
             otel.name = "docker.stop_sandbox",
             otel.status_code = tracing::field::Empty,
             sandbox.id = %request.get_ref().sandbox_id,
-            sandbox.name = %request.get_ref().sandbox_name,
+            sandbox.name = %request.get_ref().name,
         )
     )]
     async fn stop_sandbox(
@@ -3186,24 +3099,24 @@ impl ComputeDriver for DockerComputeDriver {
     ) -> Result<Response<StopSandboxResponse>, Status> {
         let span_status = openshell_otel::ErrorStatusGuard::current();
         let request = request.into_inner();
-        require_sandbox_identifier(&request.sandbox_id, &request.sandbox_name)?;
+        require_sandbox_identifier(&request.sandbox_id, &request.name)?;
 
         self.lifecycle_event_fences
-            .request_stop(&request.sandbox_id, &request.sandbox_name);
+            .request_stop(&request.sandbox_id, &request.name);
         if let Err(error) = self
-            .stop_sandbox_inner(&request.sandbox_id, &request.sandbox_name)
+            .stop_sandbox_inner(&request.sandbox_id, &request.name)
             .await
         {
             self.lifecycle_event_fences
-                .clear_stop(&request.sandbox_id, &request.sandbox_name);
+                .clear_stop(&request.sandbox_id, &request.name);
             return Err(error);
         }
         if let Err(error) = self
-            .publish_container_snapshot(&request.sandbox_id, &request.sandbox_name)
+            .publish_container_snapshot(&request.sandbox_id, &request.name)
             .await
         {
             self.lifecycle_event_fences
-                .clear_stop(&request.sandbox_id, &request.sandbox_name);
+                .clear_stop(&request.sandbox_id, &request.name);
             return Err(error);
         }
         span_status.finish(Ok(Response::new(StopSandboxResponse {})))
@@ -3217,7 +3130,7 @@ impl ComputeDriver for DockerComputeDriver {
         if !Box::pin(Self::start_sandbox(
             self,
             &request.sandbox_id,
-            &request.sandbox_name,
+            &request.name,
             &request.generation_id,
             &request.launch_authentication,
         ))
@@ -3225,7 +3138,7 @@ impl ComputeDriver for DockerComputeDriver {
         {
             return Err(Status::not_found("sandbox not found"));
         }
-        self.publish_container_snapshot(&request.sandbox_id, &request.sandbox_name)
+        self.publish_container_snapshot(&request.sandbox_id, &request.name)
             .await?;
         Ok(Response::new(StartSandboxResponse {}))
     }
@@ -3237,7 +3150,7 @@ impl ComputeDriver for DockerComputeDriver {
             otel.name = "docker.delete_sandbox",
             otel.status_code = tracing::field::Empty,
             sandbox.id = %request.get_ref().sandbox_id,
-            sandbox.name = %request.get_ref().sandbox_name,
+            sandbox.name = %request.get_ref().name,
         )
     )]
     async fn delete_sandbox(
@@ -3246,14 +3159,14 @@ impl ComputeDriver for DockerComputeDriver {
     ) -> Result<Response<DeleteSandboxResponse>, Status> {
         let span_status = openshell_otel::ErrorStatusGuard::current();
         let request = request.into_inner();
-        require_sandbox_identifier(&request.sandbox_id, &request.sandbox_name)?;
+        require_sandbox_identifier(&request.sandbox_id, &request.name)?;
 
         let event_sandbox_id = request.sandbox_id.clone();
         let deleted = self
-            .delete_sandbox_inner(&request.sandbox_id, &request.sandbox_name)
+            .delete_sandbox_inner(&request.sandbox_id, &request.name)
             .await?;
         self.lifecycle_event_fences
-            .remove(&event_sandbox_id, &request.sandbox_name);
+            .remove(&event_sandbox_id, &request.name);
         if deleted && !event_sandbox_id.is_empty() {
             let _ = self.events.send(WatchSandboxesEvent {
                 payload: Some(watch_sandboxes_event::Payload::Deleted(
@@ -3361,7 +3274,7 @@ fn pending_sandbox_snapshot(
         namespace: namespace.to_string(),
         spec: None,
         status: Some(DriverSandboxStatus {
-            sandbox_name: sandbox.name.clone(),
+            name: sandbox.name.clone(),
             instance_id: String::new(),
             agent_fd: String::new(),
             sandbox_fd: String::new(),
@@ -4400,7 +4313,6 @@ async fn prepare_docker_boundary_files(
             Status::failed_precondition("Docker sandbox launch authentication is required")
         })
         .and_then(|spec| decode_docker_launch_authentication(&spec.launch_authentication))?;
-    let host_gateway_ip = docker_boundary_host_gateway_ip(&config.gateway_route);
     let session_id = launch_authentication.supervisor.session_id;
     let tls = generate_sandbox_tls_material(session_id)
         .map_err(|error| Status::internal(format!("generate Docker boundary TLS: {error}")))?;
@@ -4429,7 +4341,11 @@ async fn prepare_docker_boundary_files(
             server_name: tls.server_name.clone(),
             trust_anchor_pem: tls.trust_anchor_pem.clone(),
         },
-        host_gateway_ip,
+        // Pin the reserved host alias to the same address used by the
+        // host-networked supervisor. This is normally loopback, but container
+        // CI reaches the gateway and host fixtures through the job
+        // container's bridge address.
+        host_gateway_ip: docker_supervisor_host_address(&config.supervisor_grpc_endpoint),
         workload_identity: workload_identity.clone(),
         child_env: docker_child_environment(sandbox),
     }
@@ -4814,6 +4730,63 @@ fn docker_auxiliary_container_labels(
     ])
 }
 
+fn docker_supervisor_host_config(mounts: Vec<Mount>, grpc_endpoint: &str) -> HostConfig {
+    HostConfig {
+        // The supervisor is trusted infrastructure and originates every
+        // approved upstream connection. Host networking lets it reach the
+        // configured gateway and host-side services directly; the workload
+        // remains fenced by network=none.
+        network_mode: Some("host".to_string()),
+        extra_hosts: docker_supervisor_host_aliases(grpc_endpoint),
+        mounts: Some(mounts),
+        cap_drop: Some(vec!["ALL".to_string()]),
+        cap_add: None,
+        security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+        readonly_rootfs: Some(true),
+        tmpfs: Some(HashMap::from([
+            (
+                "/run".to_string(),
+                format!(
+                    "rw,noexec,nosuid,size=64m,uid={SUPERVISOR_UID},gid={SUPERVISOR_GID},mode=0700"
+                ),
+            ),
+            (
+                "/tmp".to_string(),
+                "rw,noexec,nosuid,size=64m,mode=1777".to_string(),
+            ),
+            (
+                "/var/log".to_string(),
+                format!(
+                    "rw,noexec,nosuid,size=64m,uid={SUPERVISOR_UID},gid={SUPERVISOR_GID},mode=0700"
+                ),
+            ),
+        ])),
+        restart_policy: None,
+        ..Default::default()
+    }
+}
+
+fn docker_supervisor_host_aliases(grpc_endpoint: &str) -> Option<Vec<String>> {
+    let address = docker_supervisor_host_address(grpc_endpoint)?;
+    Some(vec![
+        format!("{HOST_OPEN_SHELL_INTERNAL}:{address}"),
+        format!("{HOST_DOCKER_INTERNAL}:{address}"),
+    ])
+}
+
+fn docker_supervisor_host_address(grpc_endpoint: &str) -> Option<IpAddr> {
+    let endpoint = Url::parse(grpc_endpoint).ok()?;
+    match endpoint.host()? {
+        url::Host::Ipv4(address) => Some(IpAddr::V4(address)),
+        url::Host::Domain(domain) if domain.eq_ignore_ascii_case("localhost") => {
+            Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        }
+        // Docker's extra-host syntax for IPv6 differs across daemon versions.
+        // Leave IPv6 and named remote endpoints to normal name resolution.
+        url::Host::Ipv6(_) | url::Host::Domain(_) => None,
+    }
+}
+
 async fn spawn_docker_control_process(
     docker: &Docker,
     sandbox: &DriverSandbox,
@@ -4877,12 +4850,6 @@ async fn spawn_docker_control_process(
             openshell_core::telemetry::enabled_env_value()
         ),
     ];
-    if let Some(server_name) = config.gateway_tls_server_name.as_deref() {
-        environment.push(format!(
-            "{}={server_name}",
-            openshell_core::sandbox_env::GATEWAY_TLS_SERVER_NAME
-        ));
-    }
     if config.guest_tls.is_some() {
         environment.extend([
             format!(
@@ -4989,48 +4956,10 @@ async fn spawn_docker_control_process(
             start_period: Some(SUPERVISOR_HEALTH_START_PERIOD_NS),
             start_interval: Some(SUPERVISOR_HEALTH_INTERVAL_NS),
         }),
-        host_config: Some(HostConfig {
-            // The supervisor is trusted infrastructure and originates every
-            // approved upstream connection. The driver-owned bridge provides
-            // Docker DNS and service discovery while the workload remains
-            // fenced by network=none.
-            network_mode: Some(config.network_name.clone()),
-            mounts: Some(supervisor_mounts),
-            cap_drop: Some(vec!["ALL".to_string()]),
-            cap_add: None,
-            security_opt: Some(vec!["no-new-privileges:true".to_string()]),
-            readonly_rootfs: Some(true),
-            tmpfs: Some(HashMap::from([
-                (
-                    "/run".to_string(),
-                    format!(
-                        "rw,noexec,nosuid,size=64m,uid={SUPERVISOR_UID},gid={SUPERVISOR_GID},mode=0700"
-                    ),
-                ),
-                (
-                    "/tmp".to_string(),
-                    "rw,noexec,nosuid,size=64m,mode=1777".to_string(),
-                ),
-                (
-                    "/var/log".to_string(),
-                    format!(
-                        "rw,noexec,nosuid,size=64m,uid={SUPERVISOR_UID},gid={SUPERVISOR_GID},mode=0700"
-                    ),
-                ),
-            ])),
-            extra_hosts: Some(vec![
-                format!(
-                    "{HOST_OPENSHELL_INTERNAL}:{}",
-                    docker_supervisor_host_alias(&config.gateway_route)
-                ),
-                format!(
-                    "{HOST_DOCKER_INTERNAL}:{}",
-                    docker_supervisor_host_alias(&config.gateway_route)
-                ),
-            ]),
-            restart_policy: None,
-            ..Default::default()
-        }),
+        host_config: Some(docker_supervisor_host_config(
+            supervisor_mounts,
+            &config.supervisor_grpc_endpoint,
+        )),
         ..Default::default()
     };
     let created = docker
@@ -5665,252 +5594,6 @@ fn require_sandbox_identifier(sandbox_id: &str, sandbox_name: &str) -> Result<()
     Ok(())
 }
 
-fn docker_host_openshell_endpoint(
-    endpoint: &str,
-    route: &DockerGatewayRoute,
-) -> CoreResult<String> {
-    let mut url = Url::parse(endpoint)
-        .map_err(|error| Error::config(format!("invalid docker grpc_endpoint: {error}")))?;
-    if !matches!(
-        url.host_str(),
-        Some(HOST_OPENSHELL_INTERNAL | HOST_DOCKER_INTERNAL)
-    ) {
-        return Ok(url.to_string());
-    }
-    let host = match route {
-        DockerGatewayRoute::Bridge { bind_address, .. } => bind_address.ip(),
-        DockerGatewayRoute::HostGateway => IpAddr::V4(Ipv4Addr::LOCALHOST),
-    };
-    url.set_host(Some(&host.to_string())).map_err(|error| {
-        Error::config(format!(
-            "failed to map Docker gateway alias to its host listener: {error}"
-        ))
-    })?;
-    Ok(url.to_string())
-}
-
-fn docker_supervisor_host_alias(route: &DockerGatewayRoute) -> String {
-    match route {
-        DockerGatewayRoute::Bridge { bind_address } => bind_address.ip().to_string(),
-        DockerGatewayRoute::HostGateway => "host-gateway".to_string(),
-    }
-}
-
-fn docker_boundary_host_gateway_ip(route: &DockerGatewayRoute) -> Option<IpAddr> {
-    match route {
-        DockerGatewayRoute::Bridge { bind_address } => Some(bind_address.ip()),
-        // Docker resolves this special alias inside the supervisor container.
-        // Pinning it to loopback would target the daemon VM rather than the
-        // desktop host on Docker Desktop and compatible runtimes.
-        DockerGatewayRoute::HostGateway => None,
-    }
-}
-
-fn docker_network_name(config: &DockerComputeConfig) -> String {
-    let name = config.network_name.trim();
-    if name.is_empty() {
-        return DEFAULT_DOCKER_NETWORK_NAME.to_string();
-    }
-    name.to_string()
-}
-
-fn parse_optional_host_gateway_ip(value: &str) -> CoreResult<Option<IpAddr>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-
-    trimmed
-        .parse()
-        .map(Some)
-        .map_err(|err| Error::config(format!("invalid host_gateway_ip value '{trimmed}': {err}")))
-}
-
-fn docker_gateway_route(
-    info: &SystemInfo,
-    bridge_gateway_ip: IpAddr,
-    port: u16,
-    host_gateway_ip: Option<IpAddr>,
-) -> DockerGatewayRoute {
-    docker_gateway_route_for_host(
-        info,
-        bridge_gateway_ip,
-        port,
-        host_gateway_ip,
-        host_runtime_requires_host_gateway_alias(),
-    )
-}
-
-fn docker_gateway_route_for_host(
-    info: &SystemInfo,
-    bridge_gateway_ip: IpAddr,
-    port: u16,
-    host_gateway_ip: Option<IpAddr>,
-    host_requires_host_gateway_alias: bool,
-) -> DockerGatewayRoute {
-    if let Some(host_alias_ip) = host_gateway_ip {
-        return DockerGatewayRoute::Bridge {
-            bind_address: SocketAddr::new(host_alias_ip, port),
-        };
-    }
-
-    if host_requires_host_gateway_alias || uses_host_gateway_alias(info) {
-        DockerGatewayRoute::HostGateway
-    } else {
-        DockerGatewayRoute::Bridge {
-            bind_address: SocketAddr::new(bridge_gateway_ip, port),
-        }
-    }
-}
-
-fn docker_gateway_callback_bind_address(
-    route: &DockerGatewayRoute,
-    primary_bind_address: SocketAddr,
-) -> Option<SocketAddr> {
-    match route {
-        DockerGatewayRoute::Bridge { bind_address, .. } => Some(*bind_address),
-        DockerGatewayRoute::HostGateway => match primary_bind_address.ip() {
-            IpAddr::V4(ip) if ip.is_unspecified() || ip == Ipv4Addr::LOCALHOST => None,
-            _ => Some(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                primary_bind_address.port(),
-            )),
-        },
-    }
-}
-
-fn host_runtime_requires_host_gateway_alias() -> bool {
-    cfg!(target_os = "macos")
-}
-
-/// Detect Docker Desktop and behaviourally compatible runtimes - Colima,
-/// Lima, Rancher Desktop, and `OrbStack` - that share Docker Desktop's routing
-/// constraint: the bridge gateway IP is reachable from inside containers but
-/// not from the `OpenShell` server process running on the host, so callbacks
-/// must traverse `host-gateway`.
-///
-/// Each runtime is detected via the daemon's reported OS string or hostname,
-/// supplemented by labels where the runtime publishes them.
-fn uses_host_gateway_alias(info: &SystemInfo) -> bool {
-    let operating_system = info
-        .operating_system
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if operating_system.contains("docker desktop") {
-        return true;
-    }
-
-    let name = info
-        .name
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if name.starts_with("colima")
-        || name.starts_with("lima-")
-        || name.starts_with("rancher-desktop")
-        || name.starts_with("orbstack")
-    {
-        return true;
-    }
-
-    info.labels.as_ref().is_some_and(|labels| {
-        labels.iter().any(|label| {
-            label.starts_with("com.docker.desktop.")
-                || label.starts_with("dev.rancherdesktop.")
-                || label.starts_with("dev.orbstack.")
-        })
-    })
-}
-
-async fn ensure_bridge_network(docker: &Docker, network_name: &str) -> CoreResult<IpAddr> {
-    match docker.inspect_network(network_name, None).await {
-        Ok(network) => return validate_bridge_network(network_name, &network),
-        Err(err) if !is_not_found_error(&err) => {
-            return Err(Error::execution(format!(
-                "failed to inspect Docker network '{network_name}': {err}"
-            )));
-        }
-        Err(_) => {}
-    }
-
-    docker
-        .create_network(NetworkCreateRequest {
-            name: network_name.to_string(),
-            driver: Some(DOCKER_NETWORK_DRIVER.to_string()),
-            attachable: Some(true),
-            labels: Some(HashMap::from([(
-                LABEL_MANAGED_BY.to_string(),
-                LABEL_MANAGED_BY_VALUE.to_string(),
-            )])),
-            ..Default::default()
-        })
-        .await
-        .map(|_| ())
-        .or_else(|err| {
-            if is_conflict_error(&err) {
-                Ok(())
-            } else {
-                Err(Error::execution(format!(
-                    "failed to create Docker network '{network_name}': {err}"
-                )))
-            }
-        })?;
-
-    let network = docker
-        .inspect_network(network_name, None)
-        .await
-        .map_err(|err| {
-            Error::execution(format!(
-                "failed to inspect Docker network '{network_name}' after create: {err}"
-            ))
-        })?;
-    validate_bridge_network(network_name, &network)
-}
-
-fn validate_bridge_network(
-    network_name: &str,
-    network: &bollard::models::NetworkInspect,
-) -> CoreResult<IpAddr> {
-    if network.driver.as_deref() != Some(DOCKER_NETWORK_DRIVER) {
-        return Err(Error::config(format!(
-            "Docker network '{network_name}' must use the '{DOCKER_NETWORK_DRIVER}' driver, found '{}'",
-            network.driver.as_deref().unwrap_or("unknown")
-        )));
-    }
-
-    docker_bridge_gateway_ip(network_name, network)
-}
-
-fn docker_bridge_gateway_ip(
-    network_name: &str,
-    network: &bollard::models::NetworkInspect,
-) -> CoreResult<IpAddr> {
-    let Some(configs) = network.ipam.as_ref().and_then(|ipam| ipam.config.as_ref()) else {
-        return Err(Error::config(format!(
-            "Docker bridge network '{network_name}' does not expose IPAM gateway configuration"
-        )));
-    };
-
-    for config in configs {
-        let Some(gateway) = config.gateway.as_deref() else {
-            continue;
-        };
-        let ip = gateway.parse::<IpAddr>().map_err(|err| {
-            Error::config(format!(
-                "Docker bridge network '{network_name}' has invalid gateway '{gateway}': {err}"
-            ))
-        })?;
-        if matches!(ip, IpAddr::V4(_)) {
-            return Ok(ip);
-        }
-    }
-
-    Err(Error::config(format!(
-        "Docker bridge network '{network_name}' does not have an IPv4 IPAM gateway"
-    )))
-}
-
 fn docker_resource_limits(
     template: &DriverSandboxTemplate,
 ) -> Result<DockerResourceLimits, Status> {
@@ -6134,7 +5817,7 @@ fn driver_status_from_summary(
     let (ready, reason, message, deleting) = container_ready_condition(state);
 
     DriverSandboxStatus {
-        sandbox_name: summary_container_name(summary).unwrap_or_else(|| sandbox_name.to_string()),
+        name: summary_container_name(summary).unwrap_or_else(|| sandbox_name.to_string()),
         instance_id: summary.id.clone().unwrap_or_default(),
         agent_fd: String::new(),
         sandbox_fd: String::new(),
@@ -6531,6 +6214,11 @@ fn docker_guest_tls_configured(docker_config: &DockerComputeConfig) -> bool {
         && docker_config.guest_tls_key.is_some()
 }
 
+fn default_docker_supervisor_grpc_endpoint(gateway_port: u16, tls: bool) -> String {
+    let scheme = if tls { "https" } else { "http" };
+    format!("{scheme}://127.0.0.1:{gateway_port}")
+}
+
 pub(crate) fn docker_guest_tls_paths(
     docker_config: &DockerComputeConfig,
 ) -> CoreResult<Option<DockerGuestTlsPaths>> {
@@ -6592,16 +6280,6 @@ fn is_not_found_error(err: &BollardError) -> bool {
     )
 }
 
-fn is_conflict_error(err: &BollardError) -> bool {
-    matches!(
-        err,
-        BollardError::DockerResponseServerError {
-            status_code: 409,
-            ..
-        }
-    )
-}
-
 fn is_removal_in_progress_error(err: &BollardError) -> bool {
     matches!(
         err,
@@ -6642,4 +6320,3 @@ fn internal_status(operation: &str, err: BollardError) -> Status {
 
 #[cfg(test)]
 mod tests;
-pub const DEFAULT_DOCKER_NETWORK_NAME: &str = "openshell-docker";

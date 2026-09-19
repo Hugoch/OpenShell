@@ -413,7 +413,7 @@ The canonical main process receives the declared workload environment before
 supervisor-only values are stripped and provider placeholders are injected.
 Template environment is treated like user-provided sandbox environment. It can
 shape the workload child, but it cannot override driver-controlled identity,
-gateway callback, TLS, relay socket, proxy, provider, or supervisor coordination
+gateway endpoint, TLS, relay socket, proxy, provider, or supervisor coordination
 variables. Drivers and the supervisor rewrite those reserved values after image
 and template environment are considered.
 

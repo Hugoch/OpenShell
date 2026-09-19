@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::ServerState;
 use crate::auth::guard::{enforce_sandbox_scope, ensure_sandbox_principal_scope};
-use crate::auth::workspace_authz::{MinWorkspaceRole, authorize_workspace_selector};
+use crate::auth::workspace_authz::MinWorkspaceRole;
 use crate::config_update_operation;
 use crate::persistence::ObjectType;
 
@@ -180,7 +180,7 @@ pub(super) async fn record_provider_mutation(
     let receipt = ProviderMutationReceipt {
         receipt_id: Uuid::new_v4().to_string(),
         mutation_id: mutation_id.to_string(),
-        provider_name: provider_name.to_string(),
+        provider: provider_name.to_string(),
         workspace: sandbox.object_workspace().to_string(),
         kind: kind.into(),
         desired: Some(desired),
@@ -199,7 +199,7 @@ fn target_identity(sandbox: &Sandbox, provider: Option<(&str, u64)>) -> Provider
     // sandbox UUID. Every provider-set mutation atomically replaces the epoch.
     ProviderDesiredIdentity {
         sandbox_id: sandbox.object_id().to_string(),
-        sandbox_name: sandbox.object_name().to_string(),
+        sandbox: sandbox.object_name().to_string(),
         attachment_epoch: sandbox
             .spec
             .as_ref()
@@ -213,7 +213,7 @@ fn target_identity(sandbox: &Sandbox, provider: Option<(&str, u64)>) -> Provider
 
 fn same_authority(left: &ProviderDesiredIdentity, right: &ProviderDesiredIdentity) -> bool {
     left.sandbox_id == right.sandbox_id
-        && left.sandbox_name == right.sandbox_name
+        && left.sandbox == right.sandbox
         && left.attachment_epoch == right.attachment_epoch
         && left.provider_id == right.provider_id
         && left.provider_resource_version == right.provider_resource_version
@@ -299,33 +299,23 @@ pub(super) async fn handle_get_sandbox_provider_status(
 ) -> Result<Response<GetSandboxProviderStatusResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let request = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        request.workspace_scope.as_ref(),
+        &request.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(request.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
+    let workspace = sandbox.object_workspace().to_string();
     // Validate the selector before it can contribute to a durable observation.
-    if request.provider_name.len() > super::MAX_NAME_LEN {
-        return Err(Status::invalid_argument(
-            "provider_name exceeds maximum length",
-        ));
+    if request.provider.len() > super::MAX_NAME_LEN {
+        return Err(Status::invalid_argument("provider exceeds maximum length"));
     }
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &request.sandbox_name)
-        .await
-        .map_err(|_| registry_unavailable())?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
     let receipt_id = if request.receipt_id.is_empty() {
-        if request.provider_name.is_empty() {
+        if request.provider.is_empty() {
             return Err(Status::invalid_argument(
-                "provider_name or receipt_id is required",
+                "provider or receipt_id is required",
             ));
         }
         // Only existing workspace providers can create observation operations.
@@ -333,11 +323,11 @@ pub(super) async fn handle_get_sandbox_provider_status(
         // historical receipts remain queryable after the provider is deleted.
         state
             .store
-            .get_by_name(Provider::object_type(), &workspace, &request.provider_name)
+            .get_by_name(Provider::object_type(), &workspace, &request.provider)
             .await
             .map_err(|_| registry_unavailable())?
             .ok_or_else(|| Status::not_found("provider not found"))?;
-        let current = current_target_identity(state, &sandbox, &request.provider_name).await?;
+        let current = current_target_identity(state, &sandbox, &request.provider).await?;
         let provider = (!current.provider_id.is_empty()).then_some((
             current.provider_id.as_str(),
             current.provider_resource_version,
@@ -345,7 +335,7 @@ pub(super) async fn handle_get_sandbox_provider_status(
         record_provider_mutation(
             state,
             &sandbox,
-            &request.provider_name,
+            &request.provider,
             ProviderMutationKind::Observe,
             provider,
             &Uuid::new_v4().to_string(),
@@ -368,27 +358,25 @@ pub(super) async fn handle_get_sandbox_provider_status(
             .desired
             .as_ref()
             .is_none_or(|desired| desired.sandbox_id != sandbox.object_id())
-        || (!request.provider_name.is_empty() && receipt.provider_name != request.provider_name)
+        || (!request.provider.is_empty() && receipt.provider != request.provider)
     {
         return Err(Status::not_found("provider receipt not found"));
     }
-    let current_authority =
-        current_target_identity(state, &sandbox, &receipt.provider_name).await?;
-    let (current, current_reason) = if let Ok(snapshot) =
-        load_current_snapshot(state, &sandbox, &receipt.provider_name).await
-    {
-        snapshot
-    } else {
-        // A temporarily unreadable config cannot prove supersession or
-        // completion. Metadata changes remain comparable independently.
-        let mut fallback = current_authority;
-        if let Some(desired) = receipt.desired.as_ref() {
-            fallback.provider_env_revision = desired.provider_env_revision;
-            fallback.config_revision = desired.config_revision;
-            fallback.policy_hash.clone_from(&desired.policy_hash);
-        }
-        (fallback, ProviderReadinessReason::CredentialsWithheld)
-    };
+    let current_authority = current_target_identity(state, &sandbox, &receipt.provider).await?;
+    let (current, current_reason) =
+        if let Ok(snapshot) = load_current_snapshot(state, &sandbox, &receipt.provider).await {
+            snapshot
+        } else {
+            // A temporarily unreadable config cannot prove supersession or
+            // completion. Metadata changes remain comparable independently.
+            let mut fallback = current_authority;
+            if let Some(desired) = receipt.desired.as_ref() {
+                fallback.provider_env_revision = desired.provider_env_revision;
+                fallback.config_revision = desired.config_revision;
+                fallback.policy_hash.clone_from(&desired.policy_hash);
+            }
+            (fallback, ProviderReadinessReason::CredentialsWithheld)
+        };
     // Refresh lifecycle identity after configuration reads. Another gateway
     // replica may have accepted a new supervisor while this replica retained
     // the predecessor's local connection and installation evidence.
@@ -579,7 +567,7 @@ pub(super) async fn handle_report_provider_readiness(
     request: Request<ReportProviderReadinessRequest>,
 ) -> Result<Response<ReportProviderReadinessResponse>, Status> {
     let sandbox_id = request.get_ref().sandbox_id.clone();
-    let principal = authorize_provider_readiness(&request, &sandbox_id)?;
+    authorize_provider_readiness(&request, &sandbox_id)?;
     canonical_uuid(&sandbox_id)?;
     let observation = request
         .into_inner()
@@ -589,8 +577,12 @@ pub(super) async fn handle_report_provider_readiness(
     // A valid session must still belong to an existing sandbox. The registry
     // performs the final current-session check atomically with accepting evidence,
     // so a reconnect during this read cannot publish into its replacement.
-    let sandbox =
-        super::sandbox::fetch_and_authorize_sandbox(state, &principal, &sandbox_id).await?;
+    let sandbox = state
+        .store
+        .get_message::<Sandbox>(&sandbox_id)
+        .await
+        .map_err(|_| registry_unavailable())?
+        .ok_or_else(|| Status::not_found("sandbox not found"))?;
     if sandbox.phase() != SandboxPhase::Ready as i32 {
         return Err(Status::failed_precondition(
             "sandbox supervisor is not ready",

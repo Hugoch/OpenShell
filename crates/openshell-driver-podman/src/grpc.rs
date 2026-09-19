@@ -7,12 +7,11 @@ use futures::{Stream, StreamExt};
 use openshell_core::proto::compute::v1::{
     CreateSandboxRequest, CreateSandboxResponse, DeleteSandboxRequest, DeleteSandboxResponse,
     DeleteWorkspaceRequest, DeleteWorkspaceResponse, EnsureWorkspaceRequest,
-    EnsureWorkspaceResponse, GetCapabilitiesRequest, GetCapabilitiesResponse,
-    GetGatewayListenerRequirementsRequest, GetGatewayListenerRequirementsResponse,
-    GetSandboxRequest, GetSandboxResponse, ListSandboxesRequest, ListSandboxesResponse,
-    StartSandboxRequest, StartSandboxResponse, StopSandboxRequest, StopSandboxResponse,
-    ValidateSandboxCreateRequest, ValidateSandboxCreateResponse, WatchSandboxesEvent,
-    WatchSandboxesRequest, compute_driver_server::ComputeDriver,
+    EnsureWorkspaceResponse, GetCapabilitiesRequest, GetCapabilitiesResponse, GetSandboxRequest,
+    GetSandboxResponse, ListSandboxesRequest, ListSandboxesResponse, StartSandboxRequest,
+    StartSandboxResponse, StopSandboxRequest, StopSandboxResponse, ValidateSandboxCreateRequest,
+    ValidateSandboxCreateResponse, WatchSandboxesEvent, WatchSandboxesRequest,
+    compute_driver_server::ComputeDriver,
 };
 use std::pin::Pin;
 use tonic::{Request, Response, Status};
@@ -76,25 +75,6 @@ impl ComputeDriver for ComputeDriverService {
                     .map(Response::new)
                     .map_err(Status::from)
             })
-            .await
-    }
-
-    async fn get_gateway_listener_requirements(
-        &self,
-        _request: Request<GetGatewayListenerRequirementsRequest>,
-    ) -> Result<Response<GetGatewayListenerRequirementsResponse>, Status> {
-        self.rpc_tracer
-            .trace(
-                openshell_otel::rpc::GET_GATEWAY_LISTENER_REQUIREMENTS,
-                async {
-                    Ok(Response::new(GetGatewayListenerRequirementsResponse {
-                        requirements: self
-                            .driver
-                            .gateway_listener_requirements()
-                            .map_err(Status::from)?,
-                    }))
-                },
-            )
             .await
     }
 
@@ -666,7 +646,7 @@ mod tests {
             &service,
             Request::new(DeleteSandboxRequest {
                 sandbox_id: String::new(),
-                sandbox_name: "demo".to_string(),
+                name: "demo".to_string(),
             }),
         )
         .await
@@ -697,7 +677,7 @@ mod tests {
             &service,
             Request::new(DeleteSandboxRequest {
                 sandbox_id: sandbox_id.to_string(),
-                sandbox_name: "demo".to_string(),
+                name: "demo".to_string(),
             }),
         )
         .await

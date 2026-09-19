@@ -1451,7 +1451,7 @@ impl ChainRunner {
         let context = RequestContext {
             request_id,
             sandbox_id,
-            sandbox_name,
+            sandbox: sandbox_name,
             workspace,
             originating_process: None,
         };

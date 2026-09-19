@@ -1019,9 +1019,9 @@ impl MutationReceipt {
         let desired = &receipt["desired"];
         let mutation_id = nonempty_string(&body, "mutation_id")?;
         if receipt["mutation_id"] != mutation_id
-            || receipt["provider_name"] != provider
+            || receipt["provider"] != provider
             || receipt["kind"] != kind
-            || desired["sandbox_name"] != sandbox.name
+            || desired["sandbox"] != sandbox.name
             || status["state"] != "persisted"
             || status["wait_outcome"] != "not_requested"
         {
@@ -1059,10 +1059,10 @@ impl MutationReceipt {
         let preceding = &previous.receipt["desired"];
         if self.mutation_id == previous.mutation_id
             || self.receipt["receipt_id"] == previous.receipt["receipt_id"]
-            || self.receipt["provider_name"] != previous.receipt["provider_name"]
+            || self.receipt["provider"] != previous.receipt["provider"]
             || self.receipt["workspace"] != previous.receipt["workspace"]
             || desired["sandbox_id"] != preceding["sandbox_id"]
-            || desired["sandbox_name"] != preceding["sandbox_name"]
+            || desired["sandbox"] != preceding["sandbox"]
             || desired["provider_env_revision"] == preceding["provider_env_revision"]
         {
             return Err(
