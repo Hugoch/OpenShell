@@ -988,6 +988,7 @@ pub fn restrictive_default_policy() -> SandboxPolicy {
         filesystem: Some(FilesystemPolicy {
             include_workdir: true,
             read_only: vec![
+                "/bin".into(),
                 "/usr".into(),
                 "/lib".into(),
                 "/proc".into(),
@@ -2128,6 +2129,10 @@ network_policies:
         let policy = restrictive_default_policy();
         let fs = policy.filesystem.expect("must have filesystem policy");
         assert!(fs.include_workdir);
+        assert!(
+            fs.read_only.iter().any(|p| p == "/bin"),
+            "read_only should contain /bin"
+        );
         assert!(
             fs.read_only.iter().any(|p| p == "/usr"),
             "read_only should contain /usr"

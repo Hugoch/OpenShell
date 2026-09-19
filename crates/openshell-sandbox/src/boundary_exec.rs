@@ -69,12 +69,13 @@ impl LocalBoundaryExec {
         let (session_user, session_home) =
             crate::process::session_user_and_home(&self.policy, effective_workdir);
         let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
+        let shell = openshell_core::shell::detect_login_shell();
         command
             .env_clear()
             .env(openshell_core::sandbox_env::SANDBOX, "1")
             .env("HOME", session_home)
             .env("USER", session_user)
-            .env("SHELL", "/bin/bash")
+            .env("SHELL", shell)
             .env("PATH", path)
             .env("TERM", if spec.pty { "xterm-256color" } else { "dumb" });
         for (key, value) in &self.user_environment {
