@@ -12,8 +12,7 @@ use openshell_core::proto::compute::v1::{
     AuthenticateSandboxRequest, AuthenticateSandboxResponse, CreateSandboxRequest,
     CreateSandboxResponse, DeleteSandboxRequest, DeleteSandboxResponse, DeleteWorkspaceRequest,
     DeleteWorkspaceResponse, EnsureWorkspaceRequest, EnsureWorkspaceResponse,
-    GetCapabilitiesRequest, GetCapabilitiesResponse, GetGatewayListenerRequirementsRequest,
-    GetGatewayListenerRequirementsResponse, GetSandboxRequest, GetSandboxResponse,
+    GetCapabilitiesRequest, GetCapabilitiesResponse, GetSandboxRequest, GetSandboxResponse,
     ListSandboxesRequest, ListSandboxesResponse, StartSandboxRequest, StartSandboxResponse,
     StopSandboxRequest, StopSandboxResponse, ValidateSandboxCreateRequest,
     ValidateSandboxCreateResponse, WatchSandboxesEvent, WatchSandboxesRequest,
@@ -49,17 +48,6 @@ impl ComputeDriver for ComputeDriverService {
         Err(Status::unimplemented(
             "mxc does not authenticate sandbox credentials",
         ))
-    }
-
-    async fn get_gateway_listener_requirements(
-        &self,
-        _request: Request<GetGatewayListenerRequirementsRequest>,
-    ) -> Result<Response<GetGatewayListenerRequirementsResponse>, Status> {
-        // MXC is an in-process, single-host driver: it needs no extra gateway
-        // listeners (no relay/surrogate/remote endpoint), so it reports none.
-        Ok(Response::new(GetGatewayListenerRequirementsResponse {
-            requirements: Vec::new(),
-        }))
     }
 
     async fn validate_sandbox_create(

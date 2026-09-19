@@ -255,6 +255,7 @@ impl ObjectWorkspace for StoredProviderCredentialRefreshStateV2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openshell_core::proto::{SandboxPhase, SandboxStatus};
     use prost::Message;
     use prost_types::{DescriptorProto, EnumDescriptorProto, FileDescriptorSet};
     use sha2::{Digest, Sha256};
@@ -263,11 +264,11 @@ mod tests {
     const STORAGE_V1_SCHEMA_SHA256: &str =
         "1df02ba6a9656566dea0388ba9fbcf84bb56895db7ec97ffa2d44fa0636e4fd4";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "6e6acb6894034d986e6de0c2f7bb0b649751de7ef85c78f30b07d5625f27e800";
+        "2c601672270745be88fc78cf24338b714ba2e6ea0c7b137aab468f864e9cb684";
     const DURABLE_SCHEMA_SHA256: &str =
-        "e8d7ba901cdd1cb027eb34d75adb430172f1abc7c60f28cfa820c1d5eacde83e";
+        "23c871a4cb4390be6e7d3ba7bfde3284f803927eac72f19a0e52286457edce7d";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
-        "b440eace76e44b002f7c16426ac83962eda1d1c959472ae307ee08b5041f1df7";
+        "6070da18b3775d62302d78837d22e4888b0e82a1ee638c09906b0d438efde24e";
     // A persisted Sandbox without endpoint status retains its lifecycle fields;
     // the absent repeated field decodes empty and needs no database rewrite.
     const SANDBOX_WITHOUT_ENDPOINT_STATUS: &str = "0a1e0a0a73616e64626f782d6964120773616e64626f783a0764656661756c741a2b0a0773616e64626f782a0d0a05526561647912045472756530023807420d73757065727669736f722d6964";
@@ -283,6 +284,10 @@ mod tests {
         "0a0472756c651a07666978747572652d0000403f3a0b6578616d706c652e636f6d40bb035002";
     const V0_0_116_POLICY_RECORD: &str = "0a09706f6c6963792d6964120a73616e64626f782d6964180222030102032a0673686132353632066c6f616465643a046e6f6e6540fa0148ac0252110a06736f75726365120766697874757265";
     const V0_0_116_DRAFT_RECORD: &str = "0a086368756e6b2d6964120a73616e64626f782d69641802220770656e64696e672a0472756c65320204053a076669787475726549000000000000e83f50de02589003620b6578616d706c652e636f6d68bb037801";
+    // SandboxStatus encoded before its redundant parent sandbox name was removed.
+    // Field 1 is ignored while the remaining durable status fields retain their tags.
+    const PRE_CANONICAL_SANDBOX_REFERENCE_STATUS: &str =
+        "0a0b6c65676163792d6e616d6512056167656e7430023807";
     const STORAGE_MESSAGE_NAMES: [&str; 13] = [
         "DraftChunkPayload",
         "PolicyRevisionPayload",
@@ -662,7 +667,7 @@ mod tests {
         }
         assert_eq!(
             compiled_method_count,
-            102 + PROVIDER_READINESS_RPC_SIGNATURES.len(),
+            101 + PROVIDER_READINESS_RPC_SIGNATURES.len(),
             "classify every compiled RPC"
         );
         assert_eq!(
@@ -719,9 +724,9 @@ mod tests {
                 overlap_hash.as_str(),
             ),
             (
-                (327, 21),
-                (92, 16),
-                (75, 16),
+                (327, 24),
+                (92, 19),
+                (75, 19),
                 PUBLIC_RPC_SCHEMA_SHA256,
                 DURABLE_SCHEMA_SHA256,
                 PUBLIC_DURABLE_OVERLAP_SHA256
@@ -776,7 +781,6 @@ mod tests {
         assert_eq!(metadata.name, "sandbox");
         assert_eq!(metadata.workspace, "default");
         let status = sandbox.status.expect("sandbox status");
-        assert_eq!(status.sandbox_name, "sandbox");
         assert_eq!(status.phase(), SandboxPhase::Ready);
         assert_eq!(status.current_policy_version, 7);
         assert_eq!(status.main_process_instance_id, "supervisor-id");
@@ -960,6 +964,17 @@ network_policies:
         assert_eq!(draft.host, "example.com");
         assert_eq!(draft.port, 443);
         assert_eq!(draft.hit_count, 1);
+    }
+
+    #[test]
+    fn sandbox_status_without_parent_reference_decodes_previous_payload() {
+        let status =
+            SandboxStatus::decode(legacy_bytes(PRE_CANONICAL_SANDBOX_REFERENCE_STATUS).as_slice())
+                .expect("previous sandbox status must decode");
+
+        assert_eq!(status.agent_pod, "agent");
+        assert_eq!(status.phase, SandboxPhase::Ready as i32);
+        assert_eq!(status.current_policy_version, 7);
     }
 
     #[tokio::test]

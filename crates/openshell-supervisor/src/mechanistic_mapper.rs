@@ -14,7 +14,8 @@
 
 use openshell_core::net::{is_always_blocked_ip, is_internal_ip, is_known_metadata_hostname};
 use openshell_core::proto::{
-    DenialSummary, L7Allow, L7Rule, NetworkBinary, NetworkEndpoint, NetworkPolicyRule, PolicyChunk,
+    DenialSummary, L7Allow, L7Rule, NetworkBinary, NetworkEndpoint, NetworkEnforcementMode,
+    NetworkPolicyRule, PolicyChunk,
 };
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -133,7 +134,7 @@ pub fn generate_proposals(summaries: &[DenialSummary]) -> Vec<PolicyChunk> {
                 port: *port,
                 ports: vec![*port],
                 protocol: "rest".to_string(),
-                enforcement: "enforce".to_string(),
+                enforcement: NetworkEnforcementMode::Enforce as i32,
                 rules: l7_rules,
                 advisor_proposed: true,
                 ..Default::default()

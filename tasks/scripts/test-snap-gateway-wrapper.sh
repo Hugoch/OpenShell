@@ -19,6 +19,9 @@ mkdir -p "$snap/bin" "$common"
 cat >"$snap/bin/openshell-gateway" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_GATEWAY_LOG"
+if [ "${1:-}" = generate-certs ]; then
+  exit 0
+fi
 printf 'env:%s|%s|%s\n' \
   "${OPENSHELL_GATEWAY_CONFIG:-}" \
   "${OPENSHELL_DB_URL:-}" \
@@ -63,7 +66,9 @@ run_wrapper() {
 }
 
 assert_log() {
-  printf '%s\n' "$1" >"$expected"
+  printf '%s\n' \
+    "generate-certs --output-dir $common/tls --server-san host.openshell.internal" \
+    "$1" >"$expected"
   if ! cmp -s "$expected" "$log"; then
     echo "FAIL: unexpected call sequence" >&2
     diff -u "$expected" "$log" >&2

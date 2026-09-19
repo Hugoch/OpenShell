@@ -22,10 +22,7 @@ pub use endpoint_status::{
 
 use crate::ServerState;
 use crate::auth::principal::Principal;
-use crate::auth::workspace_authz::{
-    MinWorkspaceRole, authorize_sandbox_workspace, authorize_workspace_selector,
-    require_platform_admin, selected_workspace_name,
-};
+use crate::auth::workspace_authz::{MinWorkspaceRole, require_platform_admin};
 use crate::pagination::Pagination;
 use crate::persistence::{
     DraftChunkRecord, ObjectId, ObjectListQuery, ObjectName, ObjectType, ObjectWorkspace,
@@ -470,14 +467,24 @@ fn summarize_endpoint(endpoint: &NetworkEndpoint) -> String {
     if !endpoint.protocol.is_empty() {
         parts.push(format!("protocol={}", endpoint.protocol));
     }
-    if !endpoint.access.is_empty() {
-        parts.push(format!("access={}", endpoint.access));
+    if endpoint.access != 0 {
+        parts.push(format!(
+            "access={}",
+            openshell_policy::network_access_preset_to_str(endpoint.access).unwrap_or("unknown")
+        ));
     }
-    if !endpoint.enforcement.is_empty() {
-        parts.push(format!("enforcement={}", endpoint.enforcement));
+    if endpoint.enforcement != 0 {
+        parts.push(format!(
+            "enforcement={}",
+            openshell_policy::network_enforcement_mode_to_str(endpoint.enforcement)
+                .unwrap_or("unknown")
+        ));
     }
-    if !endpoint.tls.is_empty() {
-        parts.push(format!("tls={}", endpoint.tls));
+    if endpoint.tls != 0 {
+        parts.push(format!(
+            "tls={}",
+            openshell_policy::network_tls_mode_to_str(endpoint.tls).unwrap_or("unknown")
+        ));
     }
     if endpoint.websocket_credential_rewrite {
         parts.push("websocket_credential_rewrite=true".to_string());
@@ -2412,7 +2419,7 @@ fn validate_sandbox_caller_update(req: &UpdateConfigRequest) -> Result<(), Statu
             "sandbox callers cannot delete settings",
         ));
     }
-    if req.name.trim().is_empty() {
+    if req.sandbox.is_empty() {
         return Err(Status::permission_denied(
             "sandbox callers may only perform sandbox policy sync",
         ));
@@ -2563,7 +2570,13 @@ pub(super) async fn handle_get_sandbox_config(
     request: Request<GetSandboxConfigRequest>,
 ) -> Result<Response<GetSandboxConfigResponse>, Status> {
     let principal = super::extract_principal(&request)?;
-    let sandbox_id = request.get_ref().sandbox_id.clone();
+    let sandbox_name = request.get_ref().name.clone();
+    let workspace = match (&principal, request.get_ref().workspace_scope.as_ref()) {
+        (Principal::Sandbox(_), None) => String::new(),
+        (_, selector) => {
+            crate::auth::workspace_authz::selected_workspace_name(selector)?.to_string()
+        }
+    };
     let result = handle_get_sandbox_config_inner(state, request).await;
     match result {
         Err(error)
@@ -2576,8 +2589,14 @@ pub(super) async fn handle_get_sandbox_config(
             // A malformed stored candidate must not prevent a supervisor
             // from registering its startup fence and waiting for repair.
             // Do not expose parser payloads or copy malformed policy history.
-            let sandbox =
-                super::sandbox::fetch_and_authorize_sandbox(state, &principal, &sandbox_id).await?;
+            let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+                state,
+                &principal,
+                &sandbox_name,
+                &workspace,
+                MinWorkspaceRole::User,
+            )
+            .await?;
             Ok(Response::new(GetSandboxConfigResponse {
                 configuration_admitted: false,
                 configuration_error: configuration_failure_diagnostic(&error).to_string(),
@@ -2599,12 +2618,19 @@ async fn handle_get_sandbox_config_inner(
     request: Request<GetSandboxConfigRequest>,
 ) -> Result<Response<GetSandboxConfigResponse>, Status> {
     let principal = super::extract_principal(&request)?;
-    let sandbox_id = request.get_ref().sandbox_id.clone();
-    crate::auth::guard::enforce_sandbox_scope(&request, &sandbox_id)?;
-    drop(request);
-
-    let sandbox =
-        super::sandbox::fetch_and_authorize_sandbox(state, &principal, &sandbox_id).await?;
+    let req = request.into_inner();
+    let workspace = match &principal {
+        Principal::Sandbox(_) if req.workspace_scope.is_none() => "",
+        _ => crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
+    };
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
+        &principal,
+        &req.name,
+        workspace,
+        MinWorkspaceRole::User,
+    )
+    .await?;
     Ok(Response::new(load_sandbox_config(state, &sandbox).await?))
 }
 
@@ -3285,7 +3311,7 @@ fn find_uninspected_credentialed_endpoint(
 
             let mode = if endpoint.protocol.trim().is_empty() {
                 "L4-only"
-            } else if endpoint.tls.trim().eq_ignore_ascii_case("skip") {
+            } else if openshell_policy::network_tls_mode_to_str(endpoint.tls) == Some("skip") {
                 "tls: skip"
             } else {
                 continue;
@@ -3539,43 +3565,39 @@ async fn handle_update_config_inner(
     let replay_facts = super::mutation_replay::ordinary::Facts::from_request(&request);
     let req = request.into_inner();
     validate_annotations(&req.annotations, "annotations")?;
-    let workspace = if req.global {
-        if req.workspace_scope.is_some() {
+    let sandbox = if req.global {
+        if !req.sandbox.is_empty() || req.workspace_scope.is_some() {
             return Err(Status::invalid_argument(
-                "workspace_scope must be omitted when global is true",
+                "sandbox and workspace must be omitted when global is true",
             ));
         }
         require_platform_admin(&state.admin_role, principal)?;
         replay_facts.global()?;
-        String::new()
+        None
     } else {
         let min_role = if sandbox_caller {
             MinWorkspaceRole::User
         } else {
             MinWorkspaceRole::Admin
         };
-        let workspace = selected_workspace_name(req.workspace_scope.as_ref())?;
-        authorize_sandbox_workspace(
-            &state.store,
-            &state.admin_role,
-            principal,
-            workspace,
-            min_role,
+        Some(
+            super::sandbox::resolve_and_authorize_sandbox_name(
+                state,
+                principal,
+                &req.sandbox,
+                crate::auth::workspace_authz::selected_workspace_name(
+                    req.workspace_scope.as_ref(),
+                )?,
+                min_role,
+            )
+            .await?,
         )
-        .await?;
-        super::workspace::resolve_workspace(state.store.as_ref(), workspace)
-            .await?
-            .name
     };
+    let workspace = sandbox.as_ref().map_or_else(String::new, |sandbox| {
+        sandbox.object_workspace().to_string()
+    });
     if sandbox_caller {
         validate_sandbox_caller_update(&req)?;
-        resolve_sandbox_by_name_for_principal(
-            state.store.as_ref(),
-            &workspace,
-            principal,
-            &req.name,
-        )
-        .await?;
     }
     let key = req.setting_key.trim();
     let has_policy = req.policy.is_some();
@@ -3786,19 +3808,7 @@ async fn handle_update_config_inner(
         ));
     }
 
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument(
-            "name is required for sandbox-scoped updates",
-        ));
-    }
-
-    // Resolve sandbox by name.
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &req.name)
-        .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
+    let sandbox = sandbox.expect("non-global config update resolves a sandbox");
     let sandbox_id = sandbox.object_id().to_string();
     replay_facts.resource(&sandbox)?;
     let mut response_annotations = sandbox_metadata_annotations(&sandbox);
@@ -4239,40 +4249,33 @@ pub(super) async fn handle_get_sandbox_policy_status(
 ) -> Result<Response<GetSandboxPolicyStatusResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    let workspace = if req.global {
-        if req.workspace_scope.is_some() {
+    let sandbox = if req.global {
+        if !req.sandbox.is_empty() || req.workspace_scope.is_some() {
             return Err(Status::invalid_argument(
-                "workspace_scope must be omitted when global is true",
+                "sandbox and workspace must be omitted when global is true",
             ));
         }
         require_platform_admin(&state.admin_role, &principal)?;
-        String::new()
+        None
     } else {
-        let authz = authorize_workspace_selector(
-            &state.store,
-            &state.admin_role,
-            &principal,
-            req.workspace_scope.as_ref(),
-            MinWorkspaceRole::User,
+        Some(
+            super::sandbox::resolve_and_authorize_sandbox_name(
+                state,
+                &principal,
+                &req.sandbox,
+                crate::auth::workspace_authz::selected_workspace_name(
+                    req.workspace_scope.as_ref(),
+                )?,
+                MinWorkspaceRole::User,
+            )
+            .await?,
         )
-        .await?;
-        super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-            .await?
-            .name
     };
 
     let (policy_id, active_version) = if req.global {
         (GLOBAL_POLICY_SANDBOX_ID.to_string(), 0_u32)
     } else {
-        if req.name.is_empty() {
-            return Err(Status::invalid_argument("name is required"));
-        }
-        let sandbox = state
-            .store
-            .get_message_by_name::<Sandbox>(&workspace, &req.name)
-            .await
-            .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-            .ok_or_else(|| Status::not_found("sandbox not found"))?;
+        let sandbox = sandbox.as_ref().expect("sandbox query resolved a sandbox");
         (
             sandbox.object_id().to_string(),
             sandbox.current_policy_version(),
@@ -4312,40 +4315,33 @@ pub(super) async fn handle_list_sandbox_policies(
 ) -> Result<Response<ListSandboxPoliciesResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    let workspace = if req.global {
-        if req.workspace_scope.is_some() {
+    let sandbox = if req.global {
+        if !req.sandbox.is_empty() || req.workspace_scope.is_some() {
             return Err(Status::invalid_argument(
-                "workspace_scope must be omitted when global is true",
+                "sandbox and workspace must be omitted when global is true",
             ));
         }
         require_platform_admin(&state.admin_role, &principal)?;
-        String::new()
+        None
     } else {
-        let authz = authorize_workspace_selector(
-            &state.store,
-            &state.admin_role,
-            &principal,
-            req.workspace_scope.as_ref(),
-            MinWorkspaceRole::User,
+        Some(
+            super::sandbox::resolve_and_authorize_sandbox_name(
+                state,
+                &principal,
+                &req.sandbox,
+                crate::auth::workspace_authz::selected_workspace_name(
+                    req.workspace_scope.as_ref(),
+                )?,
+                MinWorkspaceRole::User,
+            )
+            .await?,
         )
-        .await?;
-        super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-            .await?
-            .name
     };
 
     let policy_id = if req.global {
         GLOBAL_POLICY_SANDBOX_ID.to_string()
     } else {
-        if req.name.is_empty() {
-            return Err(Status::invalid_argument("name is required"));
-        }
-        let sandbox = state
-            .store
-            .get_message_by_name::<Sandbox>(&workspace, &req.name)
-            .await
-            .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-            .ok_or_else(|| Status::not_found("sandbox not found"))?;
+        let sandbox = sandbox.as_ref().expect("sandbox query resolved a sandbox");
         sandbox.object_id().to_string()
     };
 
@@ -4354,9 +4350,11 @@ pub(super) async fn handle_list_sandbox_policies(
         &req.page_token,
         "ListSandboxPolicies",
         &[
-            &req.name,
+            &req.sandbox,
             if req.global { "true" } else { "false" },
-            &workspace,
+            sandbox
+                .as_ref()
+                .map_or("", |sandbox| sandbox.object_workspace()),
         ],
     )?;
     let mut records = state
@@ -4430,7 +4428,6 @@ pub(super) async fn handle_report_sandbox_configuration(
     request: Request<openshell_core::proto::ReportSandboxConfigurationRequest>,
 ) -> Result<Response<openshell_core::proto::ReportSandboxConfigurationResponse>, Status> {
     use openshell_core::proto::ConfigurationAdmissionState;
-    let principal = super::extract_principal(&request)?;
     let sandbox_id = request.get_ref().sandbox_id.clone();
     crate::auth::guard::enforce_sandbox_scope(&request, &sandbox_id)?;
     let mut admission = request
@@ -4447,8 +4444,14 @@ pub(super) async fn handle_report_sandbox_configuration(
         return Err(Status::invalid_argument("admission state is required"));
     }
     let _guard = state.compute.sandbox_sync_guard().await;
-    let mut sandbox =
-        super::sandbox::fetch_and_authorize_sandbox(state, &principal, &sandbox_id).await?;
+    let mut sandbox = state
+        .store
+        .get_message::<Sandbox>(&sandbox_id)
+        .await
+        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
+        .ok_or_else(|| Status::not_found("sandbox not found"))?;
+    let sandbox_name = sandbox.object_name().to_string();
+    let workspace = sandbox.object_workspace().to_string();
     crate::compute::provisioning_deadline::refresh_configuration(
         &state.store,
         &mut sandbox,
@@ -4483,7 +4486,8 @@ pub(super) async fn handle_report_sandbox_configuration(
     }
     if reported == ConfigurationAdmissionState::Accepted {
         let mut config_request = Request::new(GetSandboxConfigRequest {
-            sandbox_id: sandbox_id.clone(),
+            name: sandbox_name.clone(),
+            workspace_scope: Some(openshell_core::proto::workspace_selector(workspace.clone())),
         });
         *config_request.extensions_mut() = request.extensions().clone();
         let config = handle_get_sandbox_config(state, config_request)
@@ -4500,7 +4504,8 @@ pub(super) async fn handle_report_sandbox_configuration(
         // Runtime error strings may contain parser payloads. Only gateway-authored
         // diagnostics may be exposed verbatim through public sandbox status.
         let mut config_request = Request::new(GetSandboxConfigRequest {
-            sandbox_id: sandbox_id.clone(),
+            workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
+            name: sandbox_name,
         });
         *config_request.extensions_mut() = request.extensions().clone();
         admission.error = match handle_get_sandbox_config(state, config_request).await {
@@ -4697,28 +4702,18 @@ pub(super) async fn handle_get_sandbox_logs(
 ) -> Result<Response<GetSandboxLogsResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    if req.sandbox_id.is_empty() {
-        return Err(Status::invalid_argument("sandbox_id is required"));
-    }
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    let sandbox =
-        super::sandbox::fetch_and_authorize_sandbox(state, &principal, &req.sandbox_id).await?;
-    if sandbox.object_workspace() != workspace {
-        return Err(Status::not_found("sandbox not found"));
-    }
+    let sandbox_id = sandbox.object_id();
 
     let lines = if req.lines == 0 { 2000 } else { req.lines };
-    let tail = state.tracing_log_bus.tail(&req.sandbox_id, lines as usize);
+    let tail = state.tracing_log_bus.tail(sandbox_id, lines as usize);
 
     let buffer_total = tail.len() as u32;
 
@@ -4852,9 +4847,12 @@ pub(super) async fn handle_submit_policy_analysis(
         .cloned()
         .ok_or_else(|| Status::unauthenticated("missing principal"))?;
     let req = request.into_inner();
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &req.workspace)
-        .await?
-        .name;
+    let workspace = super::workspace::resolve_workspace(
+        state.store.as_ref(),
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
+    )
+    .await?
+    .name;
     if req.name.is_empty() {
         return Err(Status::invalid_argument("name is required"));
     }
@@ -5045,7 +5043,7 @@ pub(super) async fn handle_submit_policy_analysis(
             && let Some(reason) = rule_ref.endpoints.iter().find_map(|endpoint| {
                 openshell_policy::agent_authored_transport_rejection(
                     &endpoint.protocol,
-                    &endpoint.tls,
+                    openshell_policy::network_tls_mode_to_str(endpoint.tls).unwrap_or(""),
                 )
             })
         {
@@ -5305,27 +5303,12 @@ pub(super) async fn handle_get_draft_policy(
         .cloned()
         .ok_or_else(|| Status::unauthenticated("missing principal"))?;
     let req = request.into_inner();
-    let workspace_name = selected_workspace_name(req.workspace_scope.as_ref())?;
-    authorize_sandbox_workspace(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        workspace_name,
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
-    )
-    .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), workspace_name)
-        .await?
-        .name;
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
-
-    let sandbox = resolve_sandbox_by_name_for_principal(
-        state.store.as_ref(),
-        &workspace,
-        &principal,
-        &req.name,
     )
     .await?;
     let sandbox_id = sandbox.object_id().to_string();
@@ -5391,32 +5374,21 @@ async fn handle_approve_draft_chunk_inner(
     let principal = super::extract_principal(&request)?;
     let replay_facts = super::mutation_replay::ordinary::Facts::from_request(&request);
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
+    let workspace = sandbox.object_workspace().to_string();
     if req.chunk_id.is_empty() {
         return Err(Status::invalid_argument("chunk_id is required"));
     }
 
     require_no_global_policy(state).await?;
 
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &req.name)
-        .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
     let sandbox_id = sandbox.object_id().to_string();
     replay_facts.resource(&sandbox)?;
 
@@ -5548,30 +5520,19 @@ async fn handle_reject_draft_chunk_inner(
     let principal = super::extract_principal(&request)?;
     let replay_facts = super::mutation_replay::ordinary::Facts::from_request(&request);
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
+    let workspace = sandbox.object_workspace().to_string();
     if req.chunk_id.is_empty() {
         return Err(Status::invalid_argument("chunk_id is required"));
     }
 
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &req.name)
-        .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
     let sandbox_id = sandbox.object_id().to_string();
     replay_facts.resource(&sandbox)?;
 
@@ -5660,29 +5621,18 @@ async fn handle_approve_all_draft_chunks_inner(
     let principal = super::extract_principal(&request)?;
     let replay_facts = super::mutation_replay::ordinary::Facts::from_request(&request);
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
+    let workspace = sandbox.object_workspace().to_string();
 
     require_no_global_policy(state).await?;
 
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &req.name)
-        .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
     let sandbox_id = sandbox.object_id().to_string();
     replay_facts.resource(&sandbox)?;
 
@@ -5970,20 +5920,15 @@ pub(super) async fn handle_edit_draft_chunk(
     let principal = super::extract_principal(&request)?;
     let replay_facts = super::mutation_replay::ordinary::Facts::from_request(&request);
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
+    let workspace = sandbox.object_workspace().to_string();
     if req.chunk_id.is_empty() {
         return Err(Status::invalid_argument("chunk_id is required"));
     }
@@ -5991,12 +5936,6 @@ pub(super) async fn handle_edit_draft_chunk(
         .proposed_rule
         .ok_or_else(|| Status::invalid_argument("proposed_rule is required"))?;
 
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &req.name)
-        .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
     let sandbox_id = sandbox.object_id().to_string();
     replay_facts.resource(&sandbox)?;
 
@@ -6056,30 +5995,19 @@ async fn handle_undo_draft_chunk_inner(
     let principal = super::extract_principal(&request)?;
     let replay_facts = super::mutation_replay::ordinary::Facts::from_request(&request);
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
+    let workspace = sandbox.object_workspace().to_string();
     if req.chunk_id.is_empty() {
         return Err(Status::invalid_argument("chunk_id is required"));
     }
 
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &req.name)
-        .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
     let sandbox_id = sandbox.object_id().to_string();
     replay_facts.resource(&sandbox)?;
 
@@ -6155,27 +6083,14 @@ pub(super) async fn handle_clear_draft_chunks(
     let principal = super::extract_principal(&request)?;
     let replay_facts = super::mutation_replay::ordinary::Facts::from_request(&request);
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::Admin,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
-
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &req.name)
-        .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
     let sandbox_id = sandbox.object_id().to_string();
     replay_facts.resource(&sandbox)?;
 
@@ -6204,27 +6119,14 @@ pub(super) async fn handle_get_draft_history(
 ) -> Result<Response<GetDraftHistoryResponse>, Status> {
     let principal = super::extract_principal(&request)?;
     let req = request.into_inner();
-    let authz = authorize_workspace_selector(
-        &state.store,
-        &state.admin_role,
+    let sandbox = super::sandbox::resolve_and_authorize_sandbox_name(
+        state,
         &principal,
-        req.workspace_scope.as_ref(),
+        &req.sandbox,
+        crate::auth::workspace_authz::selected_workspace_name(req.workspace_scope.as_ref())?,
         MinWorkspaceRole::User,
     )
     .await?;
-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
-        .await?
-        .name;
-    if req.name.is_empty() {
-        return Err(Status::invalid_argument("name is required"));
-    }
-
-    let sandbox = state
-        .store
-        .get_message_by_name::<Sandbox>(&workspace, &req.name)
-        .await
-        .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-        .ok_or_else(|| Status::not_found("sandbox not found"))?;
     let sandbox_id = sandbox.object_id().to_string();
 
     let all_chunks = state
@@ -8093,7 +7995,10 @@ mod tests {
             &state,
             with_sandbox(
                 Request::new(GetSandboxConfigRequest {
-                    sandbox_id: sandbox_id.to_string(),
+                    name: "admission".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
                 sandbox_id,
             ),
@@ -8199,8 +8104,10 @@ mod tests {
             let error = handle_update_config(
                 &state,
                 with_user(Request::new(UpdateConfigRequest {
-                    name: "admission".to_string(),
-                    workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                    sandbox: "admission".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                     policy: Some(replacement),
                     ..Default::default()
                 })),
@@ -8264,7 +8171,7 @@ mod tests {
             &state,
             with_sandbox(
                 Request::new(UpdateConfigRequest {
-                    name: "image-admission".to_string(),
+                    sandbox: "image-admission".to_string(),
                     workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                     policy: Some(openshell_policy::project_base_policy(&image).unwrap()),
                     ..Default::default()
@@ -8278,7 +8185,10 @@ mod tests {
             &state,
             with_sandbox(
                 Request::new(GetSandboxConfigRequest {
-                    sandbox_id: sandbox_id.to_string(),
+                    name: "image-admission".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
                 sandbox_id,
             ),
@@ -8293,7 +8203,7 @@ mod tests {
         handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "image-admission".to_string(),
+                sandbox: "image-admission".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 policy: Some(
                     openshell_policy::project_base_policy(
@@ -8310,7 +8220,10 @@ mod tests {
             &state,
             with_sandbox(
                 Request::new(GetSandboxConfigRequest {
-                    sandbox_id: sandbox_id.to_string(),
+                    name: "image-admission".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                 }),
                 sandbox_id,
             ),
@@ -8485,7 +8398,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_sandbox_policies_rejects_token_from_different_filter() {
+    async fn list_global_policies_rejects_sandbox_name() {
         let state = test_server_state().await;
         let policy = ProtoSandboxPolicy::default();
         let payload = policy.encode_to_vec();
@@ -8522,7 +8435,7 @@ mod tests {
                 page_size: 1,
                 page_token: first.next_page_token,
                 global: true,
-                name: "different".to_string(),
+                sandbox: "different".to_string(),
                 ..Default::default()
             }),
         )
@@ -8654,6 +8567,60 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn get_sandbox_config_rejects_invalid_spec_policy_before_history_backfill() {
+        let state = test_server_state().await;
+        let cases = [
+            (
+                "duplicate",
+                mcp_policy_with_versions(&["2025-11-25", "2025-11-25"]),
+            ),
+            ("unsupported", mcp_policy_with_versions(&["latest"])),
+        ];
+
+        for (case, policy) in cases {
+            let sandbox_id = format!("stored-invalid-{case}");
+            state
+                .store
+                .put_message(&test_sandbox(
+                    &sandbox_id,
+                    &format!("stored-invalid-{case}"),
+                    policy,
+                    Vec::new(),
+                ))
+                .await
+                .expect("store legacy sandbox spec");
+
+            let error = handle_get_sandbox_config_inner(
+                &state,
+                with_sandbox(
+                    Request::new(GetSandboxConfigRequest {
+                        name: sandbox_id.clone(),
+                        workspace_scope: None,
+                    }),
+                    &sandbox_id,
+                ),
+            )
+            .await
+            .expect_err("invalid stored spec must fail before history backfill");
+
+            assert_eq!(error.code(), Code::FailedPrecondition, "{case}");
+            assert!(
+                error.message().contains(STORED_POLICY_SOURCE_SPEC),
+                "{case}"
+            );
+            assert!(
+                state
+                    .store
+                    .get_latest_policy(&sandbox_id)
+                    .await
+                    .expect("policy history lookup")
+                    .is_none(),
+                "{case} must not create policy history"
+            );
+        }
+    }
+
     #[test]
     fn incremental_merge_rejects_policy_over_canonical_size_limit() {
         let current = openshell_policy::restrictive_default_policy();
@@ -8710,7 +8677,8 @@ mod tests {
             &state,
             with_sandbox(
                 Request::new(GetSandboxConfigRequest {
-                    sandbox_id: sandbox_id.to_string(),
+                    name: sandbox_id.to_string(),
+                    workspace_scope: None,
                 }),
                 sandbox_id,
             ),
@@ -8764,7 +8732,8 @@ mod tests {
                 &state,
                 with_sandbox(
                     Request::new(GetSandboxConfigRequest {
-                        sandbox_id: sandbox_id.clone(),
+                        name: sandbox_id.clone(),
+                        workspace_scope: None,
                     }),
                     &sandbox_id,
                 ),
@@ -8913,7 +8882,8 @@ mod tests {
             &state,
             with_sandbox(
                 Request::new(GetSandboxConfigRequest {
-                    sandbox_id: sandbox_id.to_string(),
+                    name: sandbox_id.to_string(),
+                    workspace_scope: None,
                 }),
                 sandbox_id,
             ),
@@ -8947,9 +8917,11 @@ mod tests {
         let detail_error = handle_get_sandbox_policy_status(
             &state,
             with_user(Request::new(GetSandboxPolicyStatusRequest {
-                name: "stored-invalid-history".to_string(),
+                sandbox: "stored-invalid-history".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 version: 2,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
             })),
         )
@@ -8965,9 +8937,11 @@ mod tests {
         let listed = handle_list_sandbox_policies(
             &state,
             with_user(Request::new(ListSandboxPoliciesRequest {
-                name: "stored-invalid-history".to_string(),
+                sandbox: "stored-invalid-history".to_string(),
                 page_size: 10,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 ..Default::default()
             })),
         )
@@ -9019,7 +8993,8 @@ mod tests {
             &state,
             with_sandbox(
                 Request::new(GetSandboxConfigRequest {
-                    sandbox_id: sandbox_id.to_string(),
+                    name: sandbox_id.to_string(),
+                    workspace_scope: None,
                 }),
                 sandbox_id,
             ),
@@ -9075,7 +9050,8 @@ mod tests {
             &state,
             with_sandbox(
                 Request::new(GetSandboxConfigRequest {
-                    sandbox_id: sandbox_id.to_string(),
+                    name: sandbox_id.to_string(),
+                    workspace_scope: None,
                 }),
                 sandbox_id,
             ),
@@ -9328,7 +9304,7 @@ mod tests {
             let response = handle_update_config(
                 &state,
                 with_user(Request::new(UpdateConfigRequest {
-                    name: sandbox_name,
+                    sandbox: sandbox_name,
                     policy: some(mcp_policy_with_versions(&["2025-11-25"])),
                     workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                     ..Default::default()
@@ -9435,7 +9411,7 @@ mod tests {
         let response = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: sandbox_name.to_string(),
+                sandbox: sandbox_name.to_string(),
                 policy: some(candidate.clone()),
                 workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
@@ -9494,7 +9470,7 @@ mod tests {
         let response = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: sandbox_name.to_string(),
+                sandbox: sandbox_name.to_string(),
                 policy: some(candidate.clone()),
                 workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
@@ -9650,7 +9626,8 @@ mod tests {
             host: "api.vendor.example".to_string(),
             port: 443,
             protocol: protocol.to_string(),
-            tls: tls.to_string(),
+            tls: openshell_policy::network_tls_mode_from_str(tls).expect("valid test TLS mode")
+                as i32,
             provider_credentialed: true,
             allow_uninspected_credentials: allow,
             ..Default::default()
@@ -9843,7 +9820,7 @@ mod tests {
     #[test]
     fn sandbox_caller_update_validation_allows_sandbox_policy_sync() {
         let req = UpdateConfigRequest {
-            name: "sandbox-1".to_string(),
+            sandbox: "sandbox-1".to_string(),
             policy: some(ProtoSandboxPolicy::default()),
             workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             ..Default::default()
@@ -9865,10 +9842,12 @@ mod tests {
     #[test]
     fn sandbox_caller_update_validation_rejects_setting_mutation() {
         let req = UpdateConfigRequest {
-            name: "sandbox-1".to_string(),
+            sandbox: "sandbox-1".to_string(),
+            workspace_scope: Some(openshell_core::proto::workspace_selector(
+                "default".to_string(),
+            )),
             setting_key: "inference.model".to_string(),
             setting_value: Some(SettingValue { value: None }),
-            workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
             ..Default::default()
         };
         let err = validate_sandbox_caller_update(&req).unwrap_err();
@@ -9948,7 +9927,7 @@ mod tests {
         let error = handle_get_sandbox_logs(
             &state,
             with_user(Request::new(GetSandboxLogsRequest {
-                sandbox_id: "sandbox-b-id".to_string(),
+                sandbox: "sandbox-b".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -9982,12 +9961,14 @@ mod tests {
         let error = handle_get_sandbox_logs(
             &state,
             with_user(Request::new(GetSandboxLogsRequest {
-                sandbox_id: "sandbox-id".to_string(),
+                sandbox: "sandbox".to_string(),
                 since_time: Some(prost_types::Timestamp {
                     seconds: 253_402_300_800,
                     nanos: 0,
                 }),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 ..Default::default()
             })),
         )
@@ -10046,12 +10027,14 @@ mod tests {
         let response = handle_get_sandbox_logs(
             &state,
             with_user(Request::new(GetSandboxLogsRequest {
-                sandbox_id: "sandbox-id".to_string(),
+                sandbox: "sandbox".to_string(),
                 since_time: Some(prost_types::Timestamp {
                     seconds: 1,
                     nanos: 900,
                 }),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 ..Default::default()
             })),
         )
@@ -10071,12 +10054,14 @@ mod tests {
         let response = handle_get_sandbox_logs(
             &state,
             with_user(Request::new(GetSandboxLogsRequest {
-                sandbox_id: "sandbox-id".to_string(),
+                sandbox: "sandbox".to_string(),
                 since_time: Some(prost_types::Timestamp {
                     seconds: 0,
                     nanos: 0,
                 }),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 ..Default::default()
             })),
         )
@@ -10135,6 +10120,7 @@ mod tests {
         let response = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![invalid_first, invalid_last, chunk("valid_absent")],
@@ -10242,7 +10228,10 @@ mod tests {
             &state,
             authed_request(UpdateConfigRequest {
                 global: true,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                sandbox: String::new(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -10254,7 +10243,10 @@ mod tests {
             &state,
             authed_request(GetSandboxPolicyStatusRequest {
                 global: true,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                sandbox: String::new(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -10266,7 +10258,10 @@ mod tests {
             &state,
             authed_request(ListSandboxPoliciesRequest {
                 global: true,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                sandbox: String::new(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -10354,14 +10349,15 @@ mod tests {
         }
     }
 
+    #[allow(deprecated)]
     fn l7_scope_policy() -> ProtoSandboxPolicy {
         let endpoint = NetworkEndpoint {
             host: "api.example.com".to_string(),
             port: 443,
             ports: vec![443, 8443],
             protocol: "rest".to_string(),
-            tls: "terminate".to_string(),
-            access: "read-only".to_string(),
+            tls: openshell_core::proto::NetworkTlsMode::Terminate as i32,
+            access: openshell_core::proto::NetworkAccessPreset::ReadOnly as i32,
             ..Default::default()
         };
         let selected = NetworkPolicyRule {
@@ -10548,7 +10544,7 @@ mod tests {
                 let error = handle_update_config(
                     &state,
                     with_user(Request::new(UpdateConfigRequest {
-                        name: sandbox_id.to_string(),
+                        sandbox: sandbox_id.to_string(),
                         merge_operations: vec![
                             l7_scope_operation(Some(l7_scope_target()), false),
                             l7_scope_operation(target.clone(), deny),
@@ -10562,7 +10558,9 @@ mod tests {
                             "example.com/change".to_string(),
                             "rejected".to_string(),
                         )]),
-                        workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                        workspace_scope: Some(openshell_core::proto::workspace_selector(
+                            "default".to_string(),
+                        )),
                         ..Default::default()
                     })),
                 )
@@ -10645,10 +10643,12 @@ mod tests {
             let response = handle_update_config(
                 &state,
                 with_user(Request::new(UpdateConfigRequest {
-                    name: sandbox_id.to_string(),
+                    sandbox: sandbox_id.to_string(),
                     merge_operations: vec![l7_scope_operation(Some(target), deny)],
                     expected_resource_version: before.metadata.as_ref().unwrap().resource_version,
-                    workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                     ..Default::default()
                 })),
             )
@@ -10897,7 +10897,8 @@ mod tests {
         }
         let req = with_sandbox(
             Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-b".to_string(),
+                name: "sb-b".to_string(),
+                workspace_scope: None,
             }),
             "sb-a",
         );
@@ -10905,6 +10906,24 @@ mod tests {
             .await
             .expect_err("cross-sandbox call must be denied");
         assert_eq!(err.code(), Code::PermissionDenied);
+    }
+
+    #[tokio::test]
+    async fn missing_sandbox_get_sandbox_config_matches_foreign_sandbox_denial() {
+        let state = test_server_state().await;
+        let req = with_sandbox(
+            Request::new(GetSandboxConfigRequest {
+                name: "missing-sandbox".to_string(),
+                workspace_scope: None,
+            }),
+            "sb-a",
+        );
+
+        let err = handle_get_sandbox_config(&state, req)
+            .await
+            .expect_err("missing sandbox must not be distinguishable from a foreign sandbox");
+        assert_eq!(err.code(), Code::PermissionDenied);
+        assert_eq!(err.message(), "sandbox not found or not owned by caller");
     }
 
     #[tokio::test]
@@ -10932,13 +10951,35 @@ mod tests {
         state.store.put_message(&sandbox).await.unwrap();
         let req = with_sandbox(
             Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-self".to_string(),
+                name: "self".to_string(),
+                workspace_scope: None,
             }),
             "sb-self",
         );
         handle_get_sandbox_config(&state, req)
             .await
             .expect("matching principal must be allowed");
+    }
+
+    #[tokio::test]
+    async fn sandbox_get_sandbox_config_rejects_all_workspaces_selector() {
+        let state = test_server_state().await;
+        let req = with_sandbox(
+            Request::new(GetSandboxConfigRequest {
+                name: "self".to_string(),
+                workspace_scope: Some(openshell_core::proto::all_workspaces_selector()),
+            }),
+            "sb-self",
+        );
+
+        let err = handle_get_sandbox_config(&state, req)
+            .await
+            .expect_err("single-sandbox bootstrap must reject all_workspaces");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert_eq!(
+            err.message(),
+            "all_workspaces is not supported by this request"
+        );
     }
 
     #[tokio::test]
@@ -10968,6 +11009,7 @@ mod tests {
         }
         let req = with_sandbox(
             Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: "sandbox-b".to_string(),
                 ..Default::default()
             }),
@@ -11006,11 +11048,11 @@ mod tests {
         }
         let req = with_sandbox(
             Request::new(GetDraftPolicyRequest {
-                name: "sandbox-b".to_string(),
-                status_filter: String::new(),
+                sandbox: "sandbox-b".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             }),
             "sb-a",
         );
@@ -11021,11 +11063,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_update_config_missing_name_returns_permission_denied() {
+    async fn sandbox_update_config_missing_name_matches_foreign_sandbox_denial() {
         let state = test_server_state().await;
         let req = with_sandbox(
             Request::new(UpdateConfigRequest {
-                name: "missing-sandbox".to_string(),
+                sandbox: "missing-sandbox".to_string(),
                 policy: some(ProtoSandboxPolicy::default()),
                 workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
@@ -11044,6 +11086,7 @@ mod tests {
         let state = test_server_state().await;
         let req = with_sandbox(
             Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: "missing-sandbox".to_string(),
                 ..Default::default()
             }),
@@ -11057,15 +11100,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_get_draft_policy_missing_name_returns_permission_denied() {
+    async fn sandbox_get_draft_policy_missing_name_matches_foreign_sandbox_denial() {
         let state = test_server_state().await;
         let req = with_sandbox(
             Request::new(GetDraftPolicyRequest {
-                name: "missing-sandbox".to_string(),
-                status_filter: String::new(),
+                sandbox: "missing-sandbox".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             }),
             "sb-a",
         );
@@ -11101,7 +11144,10 @@ mod tests {
         sandbox.set_phase(SandboxPhase::Provisioning as i32);
         state.store.put_message(&sandbox).await.unwrap();
         let req = with_user(Request::new(GetSandboxConfigRequest {
-            sandbox_id: "sb-x".to_string(),
+            name: "x".to_string(),
+            workspace_scope: Some(openshell_core::proto::workspace_selector(
+                "default".to_string(),
+            )),
         }));
         handle_get_sandbox_config(&state, req)
             .await
@@ -11268,8 +11314,8 @@ mod tests {
         let mut policy = test_policy_with_rule("aws", host);
         let endpoint = &mut policy.network_policies.get_mut("aws").unwrap().endpoints[0];
         endpoint.protocol = "rest".to_string();
-        endpoint.tls = "terminate".to_string();
-        endpoint.access = "full".to_string();
+        endpoint.tls = 2;
+        endpoint.access = openshell_core::proto::NetworkAccessPreset::Full as i32;
         endpoint.credential_signing = "sigv4".to_string();
         endpoint.signing_service = "s3".to_string();
         endpoint.credential_binding =
@@ -11281,7 +11327,8 @@ mod tests {
 
     fn test_ambiguous_policy() -> ProtoSandboxPolicy {
         let mut left = test_policy_with_rule("left", "api.example.com");
-        left.network_policies.get_mut("left").unwrap().endpoints[0].tls = "skip".to_string();
+        left.network_policies.get_mut("left").unwrap().endpoints[0].tls =
+            openshell_core::proto::NetworkTlsMode::Skip as i32;
         let right = test_policy_with_rule("right", "api.example.com");
         left.network_policies.extend(right.network_policies);
         left
@@ -11318,10 +11365,19 @@ mod tests {
     }
 
     async fn get_sandbox_policy(state: &Arc<ServerState>, sandbox_id: &str) -> ProtoSandboxPolicy {
+        let sandbox = state
+            .store
+            .get_message::<Sandbox>(sandbox_id)
+            .await
+            .expect("sandbox lookup")
+            .expect("sandbox exists");
         handle_get_sandbox_config(
             state,
             with_user(Request::new(GetSandboxConfigRequest {
-                sandbox_id: sandbox_id.to_string(),
+                name: sandbox.object_name().to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    (sandbox.object_workspace()).to_string(),
+                )),
             })),
         )
         .await
@@ -11364,7 +11420,7 @@ mod tests {
                     host: host.to_string(),
                     port: 443,
                     protocol: "rest".to_string(),
-                    access: "full".to_string(),
+                    access: openshell_core::proto::NetworkAccessPreset::Full as i32,
                     ..Default::default()
                 })],
                 ..Default::default()
@@ -11435,7 +11491,10 @@ mod tests {
         let first = handle_get_sandbox_config(
             &state,
             with_user(Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-snapshot-consistency".to_string(),
+                name: "snapshot-consistency".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -11457,7 +11516,10 @@ mod tests {
         let second = handle_get_sandbox_config(
             &state,
             with_user(Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-snapshot-consistency".to_string(),
+                name: "snapshot-consistency".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -11503,6 +11565,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: "snapshot-consistency".to_string(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -11794,7 +11857,8 @@ mod tests {
                 endpoint.host == "api.github.com"
                     && endpoint.protocol == "graphql"
                     && endpoint.path == "/graphql"
-                    && endpoint.access == "read-only"
+                    && endpoint.access
+                        == openshell_core::proto::NetworkAccessPreset::ReadOnly as i32
             }),
             "github provider policy should include read-only GraphQL endpoint"
         );
@@ -11803,9 +11867,9 @@ mod tests {
                 // API endpoints stay read-only; the github.com git transport
                 // carries explicit rules so clone/fetch works (see #1769).
                 if endpoint.host == "github.com" {
-                    endpoint.access.is_empty()
+                    endpoint.access == 0
                 } else {
-                    endpoint.access == "read-only"
+                    endpoint.access == openshell_core::proto::NetworkAccessPreset::ReadOnly as i32
                 }
             }),
             "github API endpoints should be read-only; git transport uses explicit rules"
@@ -12054,7 +12118,10 @@ mod tests {
         let response = handle_get_sandbox_config(
             &state,
             with_user(Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-mcp-default-composed".to_string(),
+                name: "mcp-default-composed".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -12089,7 +12156,7 @@ mod tests {
             .network_policies
             .remove("provider")
             .unwrap();
-        provider_rule.endpoints[0].tls = "skip".to_string();
+        provider_rule.endpoints[0].tls = openshell_core::proto::NetworkTlsMode::Skip as i32;
         let layers = [ProviderPolicyLayer {
             rule_name: "_provider_test".to_string(),
             rule: provider_rule,
@@ -12117,7 +12184,7 @@ mod tests {
         let error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "ambiguous-update".to_string(),
+                sandbox: "ambiguous-update".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12156,7 +12223,7 @@ mod tests {
         let error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "unattached-binding".to_string(),
+                sandbox: "unattached-binding".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12203,7 +12270,7 @@ mod tests {
         let error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "double-binding".to_string(),
+                sandbox: "double-binding".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12273,7 +12340,7 @@ mod tests {
         let l4_error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "endpointless-gating".to_string(),
+                sandbox: "endpointless-gating".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12293,12 +12360,12 @@ mod tests {
             .unwrap()
             .endpoints[0];
         tls_endpoint.protocol = "rest".to_string();
-        tls_endpoint.access = "full".to_string();
-        tls_endpoint.tls = "skip".to_string();
+        tls_endpoint.access = openshell_core::proto::NetworkAccessPreset::Full as i32;
+        tls_endpoint.tls = openshell_core::proto::NetworkTlsMode::Skip as i32;
         let tls_error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "endpointless-gating".to_string(),
+                sandbox: "endpointless-gating".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12314,7 +12381,7 @@ mod tests {
         let merge_l4_error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "endpointless-gating".to_string(),
+                sandbox: "endpointless-gating".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12330,7 +12397,7 @@ mod tests {
         let merge_tls_error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "endpointless-gating".to_string(),
+                sandbox: "endpointless-gating".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12363,7 +12430,7 @@ mod tests {
         handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "endpointless-gating".to_string(),
+                sandbox: "endpointless-gating".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12381,6 +12448,9 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+
+        // Wait for SQLx's SQLite worker threads to stop before the test process exits;
+        state.store.close_for_test().await;
     }
 
     #[tokio::test]
@@ -12398,7 +12468,7 @@ mod tests {
         let error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "signing-no-source".to_string(),
+                sandbox: "signing-no-source".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12446,7 +12516,7 @@ mod tests {
         let error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "signing-unbound-aws".to_string(),
+                sandbox: "signing-unbound-aws".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12485,7 +12555,7 @@ mod tests {
         handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "signing-bound-aws".to_string(),
+                sandbox: "signing-bound-aws".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12525,13 +12595,13 @@ mod tests {
 
         let mut policy = test_sigv4_policy("bucket.s3.amazonaws.com", None);
         let endpoint = &mut policy.network_policies.get_mut("aws").unwrap().endpoints[0];
-        endpoint.access = "read-write".to_string();
-        endpoint.enforcement = "enforce".to_string();
+        endpoint.access = openshell_core::proto::NetworkAccessPreset::ReadWrite as i32;
+        endpoint.enforcement = openshell_core::proto::NetworkEnforcementMode::Enforce as i32;
 
         handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "signing-profile-endpoint".to_string(),
+                sandbox: "signing-profile-endpoint".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12563,7 +12633,7 @@ mod tests {
         let error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "signing-profile-mismatch".to_string(),
+                sandbox: "signing-profile-mismatch".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -12647,7 +12717,7 @@ mod tests {
                     endpoints: vec![authored_endpoint(NetworkEndpoint {
                         host: "api.example.com".to_string(),
                         port: 443,
-                        tls: "skip".to_string(),
+                        tls: openshell_core::proto::NetworkTlsMode::Skip as i32,
                         ..Default::default()
                     })],
                     ..Default::default()
@@ -12672,12 +12742,12 @@ mod tests {
             &state,
             authed_request(openshell_core::proto::AttachSandboxProviderRequest {
                 request_id: String::new(),
-                sandbox_name: "provider-ambiguity".to_string(),
-                provider_name: "candidate-provider".to_string(),
-                expected_resource_version: 0,
+                sandbox: "provider-ambiguity".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                provider: "candidate-provider".to_string(),
+                expected_resource_version: 0,
             }),
         )
         .await
@@ -12721,7 +12791,7 @@ mod tests {
                 endpoints: vec![authored_endpoint(NetworkEndpoint {
                     host: "api.example.com".to_string(),
                     port: 443,
-                    tls: "skip".to_string(),
+                    tls: openshell_core::proto::NetworkTlsMode::Skip as i32,
                     ..Default::default()
                 })],
                 ..Default::default()
@@ -12763,7 +12833,10 @@ mod tests {
         let error = handle_get_sandbox_config(
             &state,
             with_user(Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-invalid-composed-policy".to_string(),
+                name: "invalid-composed-policy".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -12944,7 +13017,9 @@ mod tests {
                 }),
                 expected_resource_version: 0,
                 id: "custom-policy".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -13012,7 +13087,7 @@ mod tests {
             .expect("custom rule")
             .endpoints[0];
         endpoint.protocol = "rest".to_string();
-        endpoint.access = "read-only".to_string();
+        endpoint.access = openshell_core::proto::NetworkAccessPreset::ReadOnly as i32;
         state
             .store
             .put_message(&test_sandbox(
@@ -13303,8 +13378,8 @@ mod tests {
             .unwrap()
             .endpoints[0];
         bound_endpoint.protocol = "rest".to_string();
-        bound_endpoint.access = "full".to_string();
-        bound_endpoint.tls = "terminate".to_string();
+        bound_endpoint.access = openshell_core::proto::NetworkAccessPreset::Full as i32;
+        bound_endpoint.tls = 2;
         openshell_policy::ensure_sandbox_process_identity(&mut policy);
         state
             .store
@@ -13320,7 +13395,10 @@ mod tests {
         let config = handle_get_sandbox_config(
             &state,
             with_user(Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-policy-binding".to_string(),
+                name: "policy-binding".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -13369,7 +13447,7 @@ mod tests {
         handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "policy-binding".to_string(),
+                sandbox: "policy-binding".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -13382,7 +13460,10 @@ mod tests {
         let next_config = handle_get_sandbox_config(
             &state,
             with_user(Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-policy-binding".to_string(),
+                name: "policy-binding".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -13426,7 +13507,7 @@ mod tests {
         handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "policy-binding".to_string(),
+                sandbox: "policy-binding".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -13439,7 +13520,10 @@ mod tests {
         let unbound_config = handle_get_sandbox_config(
             &state,
             with_user(Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-policy-binding".to_string(),
+                name: "policy-binding".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -13520,7 +13604,7 @@ mod tests {
                     port: 443,
                     path: "/**".to_string(),
                     protocol: "rest".to_string(),
-                    access: "full".to_string(),
+                    access: openshell_core::proto::NetworkAccessPreset::Full as i32,
                     ..Default::default()
                 })],
                 ..Default::default()
@@ -13620,7 +13704,7 @@ mod tests {
                     host: "api.exchange.example.test".to_string(),
                     port: 443,
                     protocol: "rest".to_string(),
-                    access: "full".to_string(),
+                    access: openshell_core::proto::NetworkAccessPreset::Full as i32,
                     ..Default::default()
                 })],
                 ..Default::default()
@@ -13820,7 +13904,7 @@ mod tests {
                         port: 443,
                         path: "/**".to_string(),
                         protocol: "rest".to_string(),
-                        access: "full".to_string(),
+                        access: openshell_core::proto::NetworkAccessPreset::Full as i32,
                         ..Default::default()
                     })],
                     ..Default::default()
@@ -14006,7 +14090,7 @@ mod tests {
                         host: "api.custom.example".to_string(),
                         port: 443,
                         protocol: "rest".to_string(),
-                        access: "full".to_string(),
+                        access: openshell_core::proto::NetworkAccessPreset::Full as i32,
                         ..Default::default()
                     })],
                     binaries: Vec::new(),
@@ -14062,7 +14146,9 @@ mod tests {
                 }),
                 expected_resource_version: 0,
                 id: "custom-token".to_string(),
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -14216,12 +14302,12 @@ mod tests {
             &state,
             with_user(Request::new(AttachSandboxProviderRequest {
                 request_id: String::new(),
-                sandbox_name: "attach-lifecycle".to_string(),
-                provider_name: "work-github".to_string(),
-                expected_resource_version: 0,
+                sandbox: "attach-lifecycle".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                provider: "work-github".to_string(),
+                expected_resource_version: 0,
             })),
         )
         .await
@@ -14257,12 +14343,12 @@ mod tests {
             &state,
             authed_request(DetachSandboxProviderRequest {
                 request_id: String::new(),
-                sandbox_name: "attach-lifecycle".to_string(),
-                provider_name: "work-github".to_string(),
-                expected_resource_version: 0,
+                sandbox: "attach-lifecycle".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                provider: "work-github".to_string(),
+                expected_resource_version: 0,
             }),
         )
         .await
@@ -14349,7 +14435,9 @@ mod tests {
                         scope: String::new(),
                     }),
                 }],
-                workspace: "default".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             }),
         )
         .await
@@ -14391,12 +14479,12 @@ mod tests {
             &state,
             with_user(Request::new(AttachSandboxProviderRequest {
                 request_id: String::new(),
-                sandbox_name: "attach-lifecycle".to_string(),
-                provider_name: "work-custom".to_string(),
-                expected_resource_version: 0,
+                sandbox: "attach-lifecycle".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                provider: "work-custom".to_string(),
+                expected_resource_version: 0,
             })),
         )
         .await
@@ -14435,12 +14523,12 @@ mod tests {
             &state,
             authed_request(DetachSandboxProviderRequest {
                 request_id: String::new(),
-                sandbox_name: "attach-lifecycle".to_string(),
-                provider_name: "work-custom".to_string(),
-                expected_resource_version: 0,
+                sandbox: "attach-lifecycle".to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                provider: "work-custom".to_string(),
+                expected_resource_version: 0,
             }),
         )
         .await
@@ -14552,7 +14640,10 @@ mod tests {
         let response = handle_get_sandbox_config(
             &state,
             with_user(Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-global-profile".to_string(),
+                name: "global-profile-sandbox".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
             })),
         )
         .await
@@ -14693,6 +14784,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: [
@@ -14751,7 +14843,7 @@ mod tests {
         let approved = handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
-                name: sandbox_name.to_string(),
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -14821,6 +14913,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![
@@ -14832,8 +14925,9 @@ mod tests {
                                 host: "shared.example.com".to_string(),
                                 port: 443,
                                 protocol: "rest".to_string(),
-                                enforcement: "enforce".to_string(),
-                                access: "read-only".to_string(),
+                                enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce
+                                    as i32,
+                                access: openshell_core::proto::NetworkAccessPreset::ReadOnly as i32,
                                 ..Default::default()
                             }],
                             binaries: vec![NetworkBinary {
@@ -14850,8 +14944,9 @@ mod tests {
                                 host: "shared.example.com".to_string(),
                                 port: 443,
                                 protocol: "graphql".to_string(),
-                                enforcement: "enforce".to_string(),
-                                access: "read-only".to_string(),
+                                enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce
+                                    as i32,
+                                access: openshell_core::proto::NetworkAccessPreset::ReadOnly as i32,
                                 advisor_proposed: true,
                                 ..Default::default()
                             }],
@@ -14884,7 +14979,7 @@ mod tests {
         let approved = handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
-                name: sandbox_name.to_string(),
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -15044,6 +15139,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -15085,11 +15181,11 @@ mod tests {
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
                 request_id: String::new(),
-                name: sandbox_name.to_string(),
-                include_security_flagged: false,
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                include_security_flagged: false,
                 approvals: vec![openshell_core::proto::DraftChunkApproval {
                     chunk_id: chunk_id.clone(),
                     review_token: chunk.review_token.clone(),
@@ -15116,11 +15212,11 @@ mod tests {
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
                 request_id: String::new(),
-                name: sandbox_name.to_string(),
-                include_security_flagged: true,
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                include_security_flagged: true,
                 approvals: vec![openshell_core::proto::DraftChunkApproval {
                     chunk_id: chunk_id.clone(),
                     review_token: chunk.review_token.clone(),
@@ -15142,6 +15238,9 @@ mod tests {
                 .status,
             "approved"
         );
+
+        // Wait for SQLx's SQLite worker threads to stop before the test process exits;
+        state.store.close_for_test().await;
     }
 
     #[tokio::test]
@@ -15174,6 +15273,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -15195,7 +15295,7 @@ mod tests {
             &state,
             with_user(Request::new(EditDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name.to_string(),
+                sandbox: sandbox_name.to_string(),
                 chunk_id: chunk_id.clone(),
                 proposed_rule: some(private_rule),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
@@ -15217,11 +15317,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.to_string(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -15236,11 +15336,11 @@ mod tests {
         let skipped = handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
-                name: sandbox_name.to_string(),
-                include_security_flagged: false,
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                include_security_flagged: false,
                 ..Default::default()
             })),
         )
@@ -15303,11 +15403,11 @@ mod tests {
         let skipped = handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
-                name: sandbox_name.to_string(),
-                include_security_flagged: false,
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                include_security_flagged: false,
                 ..Default::default()
             })),
         )
@@ -15347,6 +15447,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "mechanistic".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -15374,11 +15475,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.to_string(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -15430,6 +15531,7 @@ mod tests {
         let first = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "mechanistic".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -15489,7 +15591,7 @@ mod tests {
             &state,
             with_user(Request::new(EditDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name.to_string(),
+                sandbox: sandbox_name.to_string(),
                 chunk_id: chunk_id.clone(),
                 proposed_rule: some(finding_rule),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
@@ -15507,6 +15609,7 @@ mod tests {
         let duplicate = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "mechanistic".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -15598,6 +15701,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 proposed_chunks: vec![PolicyChunk {
                     rule_name: "allow_github".to_string(),
@@ -15624,11 +15728,11 @@ mod tests {
         let draft_policy = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.clone(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -15647,11 +15751,11 @@ mod tests {
             &state,
             authed_request(ApproveDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name.clone(),
-                chunk_id: chunk_id.clone(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
                 review_token,
             }),
         )
@@ -15664,7 +15768,7 @@ mod tests {
         let history_after_approve = handle_get_draft_history(
             &state,
             authed_request(GetDraftHistoryRequest {
-                name: sandbox_name.clone(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -15681,7 +15785,7 @@ mod tests {
         let policies_after_approve = handle_list_sandbox_policies(
             &state,
             authed_request(ListSandboxPoliciesRequest {
-                name: sandbox_name.clone(),
+                sandbox: sandbox_name.clone(),
                 page_size: 10,
                 page_token: String::new(),
                 global: false,
@@ -15700,11 +15804,11 @@ mod tests {
             &state,
             authed_request(UndoDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name.clone(),
-                chunk_id: chunk_id.clone(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
             }),
         )
         .await
@@ -15716,11 +15820,11 @@ mod tests {
         let draft_policy_after_undo = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.clone(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -15732,7 +15836,7 @@ mod tests {
         let history_after_undo = handle_get_draft_history(
             &state,
             authed_request(GetDraftHistoryRequest {
-                name: sandbox_name.clone(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -15747,7 +15851,7 @@ mod tests {
         let policies_after_undo = handle_list_sandbox_policies(
             &state,
             authed_request(ListSandboxPoliciesRequest {
-                name: sandbox_name.clone(),
+                sandbox: sandbox_name.clone(),
                 page_size: 10,
                 page_token: String::new(),
                 global: false,
@@ -15767,7 +15871,7 @@ mod tests {
             &state,
             authed_request(ClearDraftChunksRequest {
                 request_id: String::new(),
-                name: sandbox_name.clone(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -15781,11 +15885,11 @@ mod tests {
         let draft_policy_after_clear = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.clone(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -15796,7 +15900,7 @@ mod tests {
         let history_after_clear = handle_get_draft_history(
             &state,
             authed_request(GetDraftHistoryRequest {
-                name: sandbox_name,
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -15853,6 +15957,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 proposed_chunks: vec![PolicyChunk {
                     rule_name: "allow_example".to_string(),
@@ -15873,12 +15978,12 @@ mod tests {
             &state,
             authed_request(RejectDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name.clone(),
-                chunk_id: chunk_id.clone(),
-                reason: guidance.to_string(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
+                reason: guidance.to_string(),
             }),
         )
         .await
@@ -15887,11 +15992,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -15960,7 +16065,7 @@ mod tests {
                 host: "api.github.com".to_string(),
                 port: 443,
                 protocol: "rest".to_string(),
-                enforcement: "enforce".to_string(),
+                enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce as i32,
                 rules: vec![L7Rule {
                     allow: Some(L7Allow {
                         method: "PUT".to_string(),
@@ -15978,6 +16083,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -15995,11 +16101,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -16088,6 +16194,7 @@ mod tests {
         let mechanistic_submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "mechanistic".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -16109,11 +16216,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.clone(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -16150,7 +16257,7 @@ mod tests {
                 host: "api.github.com".to_string(),
                 port: 443,
                 protocol: "rest".to_string(),
-                enforcement: "enforce".to_string(),
+                enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce as i32,
                 rules: vec![L7Rule {
                     allow: Some(L7Allow {
                         method: "PUT".to_string(),
@@ -16167,6 +16274,7 @@ mod tests {
         let agent_submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -16186,11 +16294,11 @@ mod tests {
         let draft_after = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -16300,6 +16408,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "mechanistic".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -16317,11 +16426,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -16356,8 +16465,8 @@ mod tests {
                     port: 80,
                     ports: vec![80, 443],
                     protocol: "rest".to_string(),
-                    enforcement: "enforce".to_string(),
-                    access: "read-only".to_string(),
+                    enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce as i32,
+                    access: openshell_core::proto::NetworkAccessPreset::ReadOnly as i32,
                     ..Default::default()
                 }],
                 binaries: vec![NetworkBinary {
@@ -16392,6 +16501,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "mechanistic".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -16418,7 +16528,7 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -16452,14 +16562,20 @@ mod tests {
         assert_eq!(cargo_rule.endpoints.len(), 1);
         assert_eq!(cargo_rule.endpoints[0].ports, vec![80, 443]);
         assert_eq!(cargo_rule.endpoints[0].protocol, "rest");
-        assert_eq!(cargo_rule.endpoints[0].access, "read-only");
+        assert_eq!(
+            cargo_rule.endpoints[0].access,
+            openshell_core::proto::NetworkAccessPreset::ReadOnly as i32
+        );
         assert_eq!(cargo_rule.binaries.len(), 1);
         assert_eq!(cargo_rule.binaries[0].path, "/usr/bin/cargo");
         let curl_rule = &applied.network_policies["allow_index_crates_io_443"];
         assert_eq!(curl_rule.endpoints.len(), 1);
         assert_eq!(curl_rule.endpoints[0].ports, vec![443]);
         assert_eq!(curl_rule.endpoints[0].protocol, "rest");
-        assert_eq!(curl_rule.endpoints[0].access, "read-only");
+        assert_eq!(
+            curl_rule.endpoints[0].access,
+            openshell_core::proto::NetworkAccessPreset::ReadOnly as i32
+        );
         assert!(
             curl_rule.endpoints[0].advisor_proposed,
             "the persisted advisor overlay must retain proposal provenance"
@@ -16497,6 +16613,7 @@ mod tests {
         let response = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -16507,7 +16624,8 @@ mod tests {
                             host: "api.example.com".to_string(),
                             port: 443,
                             protocol: "graphql".to_string(),
-                            enforcement: "enforce".to_string(),
+                            enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce
+                                as i32,
                             rules: vec![L7Rule {
                                 allow: Some(L7Allow {
                                     // Runtime requires an operation type for
@@ -16537,7 +16655,7 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
@@ -16580,6 +16698,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -16668,11 +16787,11 @@ mod tests {
             &state,
             with_user(Request::new(ApproveDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name,
-                chunk_id: chunk_id.clone(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
                 review_token: before.review_token.clone(),
             })),
         )
@@ -16731,6 +16850,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -16823,8 +16943,8 @@ mod tests {
                 host: "api.github.com".to_string(),
                 port: 443,
                 protocol: "rest".to_string(),
-                enforcement: "enforce".to_string(),
-                access: "full".to_string(),
+                enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce as i32,
+                access: openshell_core::proto::NetworkAccessPreset::Full as i32,
                 ..Default::default()
             }],
             binaries: vec![NetworkBinary {
@@ -16835,6 +16955,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -16852,11 +16973,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -16940,6 +17061,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -16957,11 +17079,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -17038,6 +17160,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -17055,11 +17178,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -17127,6 +17250,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -17144,11 +17268,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -17220,6 +17344,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -17237,11 +17362,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -17316,6 +17441,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -17333,11 +17459,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -17408,6 +17534,7 @@ mod tests {
         let response = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -17456,7 +17583,8 @@ mod tests {
             host: "api.example.com".to_string(),
             port: 443,
             protocol: protocol.to_string(),
-            tls: tls.to_string(),
+            tls: openshell_policy::network_tls_mode_from_str(tls)
+                .expect("test TLS mode must be valid") as i32,
             ..Default::default()
         };
         let chunk = |name: &str, endpoint: NetworkEndpoint| PolicyChunk {
@@ -17474,6 +17602,7 @@ mod tests {
         let response = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.to_string(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![
@@ -17507,11 +17636,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.to_string(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -17581,11 +17710,11 @@ mod tests {
         let err = handle_approve_draft_chunk(
             &state,
             with_user(Request::new(ApproveDraftChunkRequest {
-                name: sandbox_name.to_string(),
-                chunk_id: chunk.id.clone(),
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk.id.clone(),
                 ..Default::default()
             })),
         )
@@ -17676,6 +17805,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -17693,11 +17823,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -17777,6 +17907,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -17794,11 +17925,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -17867,6 +17998,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -17884,11 +18016,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -17944,7 +18076,7 @@ mod tests {
                         host: "api.github.com".to_string(),
                         port: 443,
                         protocol: "rest".to_string(),
-                        access: "full".to_string(),
+                        access: openshell_core::proto::NetworkAccessPreset::Full as i32,
                         deny_rules: vec![L7DenyRule {
                             method: "DELETE".to_string(),
                             path: "/repos/*".to_string(),
@@ -18003,7 +18135,7 @@ mod tests {
                 // Match the provider-owned endpoint contract so this test
                 // exercises prover composition rather than a deterministic
                 // application failure.
-                enforcement: "audit".to_string(),
+                enforcement: openshell_core::proto::NetworkEnforcementMode::Audit as i32,
                 rules: vec![L7Rule {
                     allow: Some(L7Allow {
                         method: "PUT".to_string(),
@@ -18022,6 +18154,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -18043,11 +18176,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.clone(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -18076,11 +18209,11 @@ mod tests {
             &state,
             authed_request(ApproveDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name,
-                chunk_id,
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id,
                 review_token: chunk.review_token.clone(),
             }),
         )
@@ -18108,7 +18241,10 @@ mod tests {
 
         let effective_policy = get_sandbox_policy(&state, sandbox_id).await;
         let provider_rule = &effective_policy.network_policies["_provider_work_custom"];
-        assert_eq!(provider_rule.endpoints[0].access, "full");
+        assert_eq!(
+            provider_rule.endpoints[0].access,
+            openshell_core::proto::NetworkAccessPreset::Full as i32
+        );
         assert_eq!(provider_rule.endpoints[0].deny_rules.len(), 1);
         assert!(!provider_rule.endpoints[0].advisor_proposed);
         assert!(
@@ -18187,7 +18323,7 @@ mod tests {
                 host: "raw.githubusercontent.com".to_string(),
                 port: 443,
                 protocol: "rest".to_string(),
-                enforcement: "enforce".to_string(),
+                enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce as i32,
                 rules: vec![L7Rule {
                     allow: Some(L7Allow {
                         method: "GET".to_string(),
@@ -18205,6 +18341,7 @@ mod tests {
         let step1 = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -18228,7 +18365,7 @@ mod tests {
                 host: "api.github.com".to_string(),
                 port: 443,
                 protocol: "rest".to_string(),
-                enforcement: "enforce".to_string(),
+                enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce as i32,
                 rules: vec![L7Rule {
                     allow: Some(L7Allow {
                         method: "PUT".to_string(),
@@ -18245,6 +18382,7 @@ mod tests {
         let step2 = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 analysis_mode: "agent_authored".to_string(),
                 proposed_chunks: vec![PolicyChunk {
@@ -18264,11 +18402,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -18387,6 +18525,7 @@ mod tests {
                 handle_submit_policy_analysis(
                     &state,
                     with_user(Request::new(SubmitPolicyAnalysisRequest {
+                        workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                         name: sandbox_name,
                         analysis_mode: "agent_authored".to_string(),
                         proposed_chunks: vec![PolicyChunk {
@@ -18416,11 +18555,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.clone(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -18440,12 +18579,12 @@ mod tests {
             &state,
             authed_request(RejectDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name,
-                chunk_id: second.accepted_chunk_ids[0].clone(),
-                reason: "redraft test".to_string(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: second.accepted_chunk_ids[0].clone(),
+                reason: "redraft test".to_string(),
             }),
         )
         .await
@@ -18503,6 +18642,7 @@ mod tests {
                 handle_submit_policy_analysis(
                     &state,
                     with_user(Request::new(SubmitPolicyAnalysisRequest {
+                        workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                         name: sandbox_name,
                         analysis_mode: "mechanistic".to_string(),
                         proposed_chunks: vec![PolicyChunk {
@@ -18526,11 +18666,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -18622,6 +18762,7 @@ mod tests {
                 handle_submit_policy_analysis(
                     &state,
                     with_user(Request::new(SubmitPolicyAnalysisRequest {
+                        workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                         name: sandbox_name,
                         analysis_mode: "mechanistic".to_string(),
                         proposed_chunks: vec![PolicyChunk {
@@ -18643,11 +18784,11 @@ mod tests {
         let after_first = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.clone(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -18666,11 +18807,11 @@ mod tests {
         let after_second = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name.clone(),
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -18885,6 +19026,7 @@ mod tests {
         let submit = handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_name.clone(),
                 proposed_chunks: vec![PolicyChunk {
                     rule_name: "allow_example".to_string(),
@@ -18910,12 +19052,12 @@ mod tests {
             &state,
             authed_request(RejectDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name.clone(),
-                chunk_id: chunk_id.clone(),
-                reason: "scope too broad".to_string(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
+                reason: "scope too broad".to_string(),
             }),
         )
         .await
@@ -18925,11 +19067,11 @@ mod tests {
             &state,
             authed_request(ApproveDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name.clone(),
-                chunk_id: chunk_id.clone(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
                 review_token,
             }),
         )
@@ -18940,11 +19082,11 @@ mod tests {
             &state,
             authed_request(UndoDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_name.clone(),
-                chunk_id: chunk_id.clone(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
             }),
         )
         .await
@@ -18953,11 +19095,11 @@ mod tests {
         let draft = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_name,
-                status_filter: String::new(),
+                sandbox: sandbox_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -18974,6 +19116,9 @@ mod tests {
             "undo must clear stale rejection_reason; got: {:?}",
             restored.rejection_reason
         );
+
+        // Wait for SQLx's SQLite worker threads to stop before the test process exits;
+        state.store.close_for_test().await;
     }
 
     #[tokio::test]
@@ -19045,6 +19190,7 @@ mod tests {
         handle_submit_policy_analysis(
             &state,
             with_user(Request::new(SubmitPolicyAnalysisRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 name: sandbox_a.object_name().to_string(),
                 proposed_chunks: vec![PolicyChunk {
                     rule_name: "allow_example".to_string(),
@@ -19066,11 +19212,11 @@ mod tests {
         let draft_policy = handle_get_draft_policy(
             &state,
             with_user(Request::new(GetDraftPolicyRequest {
-                name: sandbox_a.object_name().to_string(),
-                status_filter: String::new(),
+                sandbox: sandbox_a.object_name().to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                status_filter: String::new(),
             })),
         )
         .await
@@ -19084,11 +19230,11 @@ mod tests {
             &state,
             authed_request(ApproveDraftChunkRequest {
                 request_id: String::new(),
-                name: other_name.clone(),
-                chunk_id: chunk_id.clone(),
+                sandbox: other_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
                 review_token: String::new(),
             }),
         )
@@ -19100,12 +19246,12 @@ mod tests {
             &state,
             authed_request(RejectDraftChunkRequest {
                 request_id: String::new(),
-                name: other_name.clone(),
-                chunk_id: chunk_id.clone(),
-                reason: "wrong sandbox".to_string(),
+                sandbox: other_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
+                reason: "wrong sandbox".to_string(),
             }),
         )
         .await
@@ -19116,7 +19262,7 @@ mod tests {
             &state,
             authed_request(EditDraftChunkRequest {
                 request_id: String::new(),
-                name: other_name.clone(),
+                sandbox: other_name.clone(),
                 chunk_id: chunk_id.clone(),
                 proposed_rule: some(proposed_rule.clone()),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
@@ -19132,11 +19278,11 @@ mod tests {
             &state,
             authed_request(ApproveDraftChunkRequest {
                 request_id: String::new(),
-                name: sandbox_a.object_name().to_string(),
-                chunk_id: chunk_id.clone(),
+                sandbox: sandbox_a.object_name().to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id: chunk_id.clone(),
                 review_token,
             }),
         )
@@ -19147,16 +19293,19 @@ mod tests {
             &state,
             authed_request(UndoDraftChunkRequest {
                 request_id: String::new(),
-                name: other_name,
-                chunk_id,
+                sandbox: other_name.clone(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                chunk_id,
             }),
         )
         .await
         .unwrap_err();
         assert_eq!(undo_err.code(), Code::NotFound);
+
+        // Wait for SQLx's SQLite worker threads to stop before the test process exits;
+        state.store.close_for_test().await;
     }
 
     #[test]
@@ -19263,8 +19412,8 @@ mod tests {
                     host: "api.github.com".to_string(),
                     port: 443,
                     protocol: "rest".to_string(),
-                    access: "read-only".to_string(),
-                    enforcement: "enforce".to_string(),
+                    access: openshell_core::proto::NetworkAccessPreset::ReadOnly as i32,
+                    enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce as i32,
                     ..Default::default()
                 }],
                 binaries: vec![NetworkBinary {
@@ -19289,8 +19438,8 @@ mod tests {
                     host: "realtime.example.com".to_string(),
                     port: 443,
                     protocol: "websocket".to_string(),
-                    access: "read-write".to_string(),
-                    enforcement: "enforce".to_string(),
+                    access: openshell_core::proto::NetworkAccessPreset::ReadWrite as i32,
+                    enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce as i32,
                     websocket_credential_rewrite: true,
                     ..Default::default()
                 }],
@@ -19316,8 +19465,8 @@ mod tests {
                     host: "slack.com".to_string(),
                     port: 443,
                     protocol: "rest".to_string(),
-                    access: "read-write".to_string(),
-                    enforcement: "enforce".to_string(),
+                    access: openshell_core::proto::NetworkAccessPreset::ReadWrite as i32,
+                    enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce as i32,
                     request_body_credential_rewrite: true,
                     ..Default::default()
                 }],
@@ -19604,7 +19753,7 @@ mod tests {
                         port: 443,
                         ports: vec![443],
                         protocol: "rest".to_string(),
-                        access: "read-only".to_string(),
+                        access: openshell_core::proto::NetworkAccessPreset::ReadOnly as i32,
                         ..Default::default()
                     }],
                     ..Default::default()
@@ -19700,7 +19849,7 @@ mod tests {
 
         let policy = SandboxPolicy::decode(latest.policy_payload.as_slice()).unwrap();
         let endpoint = &policy.network_policies["github"].endpoints[0];
-        assert!(endpoint.access.is_empty());
+        assert!(endpoint.access == 0);
         assert_eq!(endpoint.rules.len(), 4);
         assert_eq!(endpoint.deny_rules.len(), 1);
         assert_eq!(endpoint.deny_rules[0].path, "/admin");
@@ -20171,7 +20320,7 @@ mod tests {
                     endpoints: vec![authored_endpoint(NetworkEndpoint {
                         host: "api.example.com".to_string(),
                         port: 443,
-                        tls: "skip".to_string(),
+                        tls: openshell_core::proto::NetworkTlsMode::Skip as i32,
                         ..Default::default()
                     })],
                     ..Default::default()
@@ -21100,7 +21249,8 @@ mod tests {
 
         let alpha_req = with_sandbox(
             Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-alpha".to_string(),
+                name: "work".to_string(),
+                workspace_scope: None,
             }),
             "sb-alpha",
         );
@@ -21112,7 +21262,8 @@ mod tests {
 
         let beta_req = with_sandbox(
             Request::new(GetSandboxConfigRequest {
-                sandbox_id: "sb-beta".to_string(),
+                name: "work".to_string(),
+                workspace_scope: None,
             }),
             "sb-beta",
         );
@@ -21262,7 +21413,10 @@ mod tests {
             &state,
             authed_request(UpdateConfigRequest {
                 request_id: String::new(),
-                name: "test-sandbox".to_string(),
+                sandbox: "test-sandbox".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(new_policy),
                 setting_key: String::new(),
                 setting_value: None,
@@ -21271,9 +21425,6 @@ mod tests {
                 merge_operations: vec![],
                 expected_resource_version: current_version,
                 annotations: HashMap::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector(
-                    "default".to_string(),
-                )),
             }),
         )
         .await
@@ -21361,7 +21512,10 @@ mod tests {
             &state,
             authed_request(UpdateConfigRequest {
                 request_id: String::new(),
-                name: "annotated-backfill".to_string(),
+                sandbox: "annotated-backfill".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(ProtoSandboxPolicy::default()),
                 setting_key: String::new(),
                 setting_value: None,
@@ -21370,9 +21524,6 @@ mod tests {
                 merge_operations: vec![],
                 expected_resource_version: current_version,
                 annotations: annotations.clone(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector(
-                    "default".to_string(),
-                )),
             }),
         )
         .await
@@ -21439,13 +21590,15 @@ mod tests {
         let response = handle_update_config(
             &state,
             authed_request(UpdateConfigRequest {
-                name: "same-hash".to_string(),
+                sandbox: "same-hash".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(policy),
                 annotations: HashMap::from([(
                     "openshell.nvidia.com/policy-signature".to_string(),
                     "same-hash-signature".to_string(),
                 )]),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
             }),
         )
@@ -21526,10 +21679,12 @@ mod tests {
         let first = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "idempotent-provenance".to_string(),
+                sandbox: "idempotent-provenance".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(policy.clone()),
                 annotations: annotations.clone(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
             })),
         )
@@ -21539,10 +21694,12 @@ mod tests {
         let second = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "idempotent-provenance".to_string(),
+                sandbox: "idempotent-provenance".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(policy),
                 annotations: annotations.clone(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
             })),
         )
@@ -21594,7 +21751,7 @@ mod tests {
         let response = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "preserve-full".to_string(),
+                sandbox: "preserve-full".to_string(),
                 policy: some(updated),
                 workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
@@ -21643,7 +21800,10 @@ mod tests {
         let response = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "preserve-merge".to_string(),
+                sandbox: ("preserve-merge").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 merge_operations: vec![PolicyMergeOperation {
                     operation: Some(policy_merge_operation::Operation::AddRule(
                         openshell_core::proto::AddNetworkRule {
@@ -21660,7 +21820,6 @@ mod tests {
                         },
                     )),
                 }],
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
             })),
         )
@@ -21715,7 +21874,10 @@ mod tests {
         let response = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "merge-provenance".to_string(),
+                sandbox: ("merge-provenance").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 merge_operations: vec![PolicyMergeOperation {
                     operation: Some(policy_merge_operation::Operation::AddRule(
                         openshell_core::proto::AddNetworkRule {
@@ -21733,7 +21895,6 @@ mod tests {
                     )),
                 }],
                 annotations: provenance.clone(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
             })),
         )
@@ -21792,10 +21953,12 @@ mod tests {
         let response = handle_update_config(
             &state,
             authed_request(UpdateConfigRequest {
-                name: "preserve-backfill".to_string(),
+                sandbox: "preserve-backfill".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(ProtoSandboxPolicy::default()),
                 expected_resource_version: current_version,
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
             }),
         )
@@ -21867,12 +22030,12 @@ mod tests {
         let error = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: sandbox_name.to_string(),
-                policy: some(unsafe_replacement),
-                expected_resource_version: current_version,
+                sandbox: sandbox_name.to_string(),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),
+                policy: some(unsafe_replacement),
+                expected_resource_version: current_version,
                 ..Default::default()
             })),
         )
@@ -21947,12 +22110,12 @@ mod tests {
             let error = handle_update_config(
                 &state,
                 with_user(Request::new(UpdateConfigRequest {
-                    name: sandbox_name.to_string(),
-                    policy: Some(authored_mcp_policy_with_versions(versions)),
-                    expected_resource_version: current_version,
+                    sandbox: sandbox_name.to_string(),
                     workspace_scope: Some(openshell_core::proto::workspace_selector(
                         "default".to_string(),
                     )),
+                    policy: Some(authored_mcp_policy_with_versions(versions)),
+                    expected_resource_version: current_version,
                     ..Default::default()
                 })),
             )
@@ -22031,12 +22194,12 @@ mod tests {
             let response = handle_update_config(
                 &state,
                 with_user(Request::new(UpdateConfigRequest {
-                    name: sandbox_name.clone(),
-                    policy: some(policy),
-                    expected_resource_version: current_version,
+                    sandbox: sandbox_name.clone(),
                     workspace_scope: Some(openshell_core::proto::workspace_selector(
                         "default".to_string(),
                     )),
+                    policy: some(policy),
+                    expected_resource_version: current_version,
                     ..Default::default()
                 })),
             )
@@ -22124,16 +22287,16 @@ mod tests {
         handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: sandbox_name.to_string(),
+                sandbox: sandbox_name.to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(mcp_policy_with_versions(&[
                     "2025-11-25",
                     "2025-06-18",
                     "2025-03-26",
                 ])),
                 expected_resource_version: current_version,
-                workspace_scope: Some(openshell_core::proto::workspace_selector(
-                    "default".to_string(),
-                )),
                 ..Default::default()
             })),
         )
@@ -22205,10 +22368,12 @@ mod tests {
         let err = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "invalid-annotation".to_string(),
+                sandbox: "invalid-annotation".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(ProtoSandboxPolicy::default()),
                 annotations: HashMap::from([("bad key".to_string(), "value".to_string())]),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
             })),
         )
@@ -22236,12 +22401,14 @@ mod tests {
         let err = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {
-                name: "user-reserved-key".to_string(),
+                sandbox: "user-reserved-key".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(test_policy_with_rule(
                     "_provider_work_github",
                     "api.github.com",
                 )),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 ..Default::default()
             })),
         )
@@ -22305,10 +22472,12 @@ mod tests {
             &state,
             with_sandbox(
                 Request::new(UpdateConfigRequest {
-                    name: "sync-strip".to_string(),
+                    sandbox: "sync-strip".to_string(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
                     policy: some(synced_policy),
                     expected_resource_version: current_version,
-                    workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                     ..Default::default()
                 }),
                 "sb-sync-strip",
@@ -22402,7 +22571,10 @@ mod tests {
             &state,
             authed_request(UpdateConfigRequest {
                 request_id: String::new(),
-                name: "test-sandbox".to_string(),
+                sandbox: "test-sandbox".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
                 policy: some(new_policy),
                 setting_key: String::new(),
                 setting_value: None,
@@ -22411,9 +22583,6 @@ mod tests {
                 merge_operations: vec![],
                 expected_resource_version: 99, // stale version
                 annotations: HashMap::new(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector(
-                    "default".to_string(),
-                )),
             }),
         )
         .await
@@ -22504,7 +22673,10 @@ mod tests {
                     &state_clone,
                     authed_request(UpdateConfigRequest {
                         request_id: String::new(),
-                        name: "test-sandbox".to_string(),
+                        sandbox: "test-sandbox".to_string(),
+                        workspace_scope: Some(openshell_core::proto::workspace_selector(
+                            "default".to_string(),
+                        )),
                         policy: some(new_policy),
                         setting_key: String::new(),
                         setting_value: None,
@@ -22513,9 +22685,6 @@ mod tests {
                         merge_operations: vec![],
                         expected_resource_version: initial_version,
                         annotations: HashMap::new(),
-                        workspace_scope: Some(openshell_core::proto::workspace_selector(
-                            "default".to_string(),
-                        )),
                     }),
                 )
                 .await
@@ -22576,7 +22745,7 @@ mod tests {
     /// when targeting a workspace that does not exist. Returning `NOT_FOUND`
     /// would create a CWE-203 workspace-name oracle.
     #[tokio::test]
-    async fn non_member_gets_permission_denied_not_workspace_oracle() {
+    async fn non_member_gets_gets_not_found_without_sandbox_oracle() {
         let mut state = test_server_state().await;
         Arc::get_mut(&mut state).unwrap().admin_role = "openshell-admin".to_string();
 
@@ -22597,7 +22766,10 @@ mod tests {
         let err = handle_get_sandbox_policy_status(
             &state,
             non_member_request(GetSandboxPolicyStatusRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22605,15 +22777,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_get_sandbox_policy_status should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_get_sandbox_policy_status should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_list_sandbox_policies(
             &state,
             non_member_request(ListSandboxPoliciesRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22621,15 +22796,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_list_sandbox_policies should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_list_sandbox_policies should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_update_config(
             &state,
             non_member_request(UpdateConfigRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22637,15 +22815,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_update_config should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_update_config should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_get_draft_policy(
             &state,
             non_member_request(GetDraftPolicyRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22653,15 +22834,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_get_draft_policy should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_get_draft_policy should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_approve_draft_chunk(
             &state,
             non_member_request(ApproveDraftChunkRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22669,15 +22853,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_approve_draft_chunk should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_approve_draft_chunk should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_reject_draft_chunk(
             &state,
             non_member_request(RejectDraftChunkRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22685,15 +22872,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_reject_draft_chunk should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_reject_draft_chunk should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_approve_all_draft_chunks(
             &state,
             non_member_request(ApproveAllDraftChunksRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22701,15 +22891,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_approve_all_draft_chunks should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_approve_all_draft_chunks should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_edit_draft_chunk(
             &state,
             non_member_request(EditDraftChunkRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22717,15 +22910,18 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_edit_draft_chunk should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_edit_draft_chunk should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_undo_draft_chunk(
             &state,
             non_member_request(UndoDraftChunkRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22733,48 +22929,53 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_undo_draft_chunk should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_undo_draft_chunk should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_clear_draft_chunks(
             &state,
             non_member_request(ClearDraftChunksRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
-                ..Default::default()
+                request_id: String::new(),
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
             }),
         )
         .await
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_clear_draft_chunks should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_clear_draft_chunks should return NotFound, got {:?}",
             err.code()
         );
 
         let err = handle_get_draft_history(
             &state,
             non_member_request(GetDraftHistoryRequest {
-                workspace_scope: Some(openshell_core::proto::workspace_selector("no-such-ws")),
-                ..Default::default()
+                sandbox: ("any").to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "no-such-ws".to_string(),
+                )),
             }),
         )
         .await
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_get_draft_history should return PermissionDenied, got {:?}",
+            Code::NotFound,
+            "handle_get_draft_history should return NotFound, got {:?}",
             err.code()
         );
     }
 
-    /// ID-only policy handlers hide cross-workspace resources, while requests
-    /// with an explicit workspace selector authorize that selector first.
+    /// Name-based policy handlers hide cross-workspace resources after
+    /// authorizing the explicit workspace selector.
     #[tokio::test]
-    async fn id_based_policy_handlers_hide_cross_workspace_sandboxes() {
+    async fn name_based_policy_handlers_hide_cross_workspace_sandboxes() {
         let mut state = test_server_state().await;
         Arc::get_mut(&mut state).unwrap().admin_role = "openshell-admin".to_string();
 
@@ -22805,7 +23006,10 @@ mod tests {
         let err = handle_get_sandbox_config(
             &state,
             non_member_request(GetSandboxConfigRequest {
-                sandbox_id: "sandbox-other".into(),
+                name: "other".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "other-workspace".to_string(),
+                )),
             }),
         )
         .await
@@ -22820,8 +23024,10 @@ mod tests {
         let err = handle_get_sandbox_logs(
             &state,
             non_member_request(GetSandboxLogsRequest {
-                sandbox_id: "sandbox-other".into(),
-                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                sandbox: "other".to_string(),
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "other-workspace".to_string(),
+                )),
                 ..Default::default()
             }),
         )
@@ -22829,8 +23035,8 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.code(),
-            Code::PermissionDenied,
-            "handle_get_sandbox_logs must authorize the selected workspace before lookup"
+            Code::NotFound,
+            "handle_get_sandbox_logs must hide unauthorized sandbox existence"
         );
     }
 

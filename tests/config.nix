@@ -31,7 +31,7 @@ let
       }
     ];
 
-    scenarios = [
+    environments = [
       {
         name = "ubuntu-docker-rootful";
         machine = "ubuntu";
@@ -42,19 +42,6 @@ let
             "ansible/playbooks/docker.yaml"
           ];
         };
-        install = {
-          use_galaxy = false;
-          playbooks = [
-            "ansible/playbooks/openshell.yaml"
-            "ansible/playbooks/gateway.yaml"
-          ];
-          inputs = {
-            openshell_cli_binary = "../artifacts/binaries/${muslTarget}/openshell";
-            openshell_gateway_binary = "../artifacts/binaries/${gnuTarget}/openshell-gateway";
-            openshell_supervisor_image = "../artifacts/images/openshell-supervisor-tmachine.tar";
-            openshell_sandbox_image = "../artifacts/images/openshell-sandbox-tmachine.tar";
-          };
-        };
       }
       {
         name = "fedora-podman-rootful";
@@ -63,21 +50,9 @@ let
           use_galaxy = false;
           playbooks = [
             "ansible/playbooks/nextest.yaml"
+            "ansible/playbooks/selinux.yaml"
             "ansible/playbooks/podman-rootful.yaml"
           ];
-        };
-        install = {
-          use_galaxy = false;
-          playbooks = [
-            "ansible/playbooks/openshell.yaml"
-            "ansible/playbooks/gateway.yaml"
-          ];
-          inputs = {
-            openshell_cli_binary = "../artifacts/binaries/${muslTarget}/openshell";
-            openshell_gateway_binary = "../artifacts/binaries/${gnuTarget}/openshell-gateway";
-            openshell_supervisor_image = "../artifacts/images/openshell-supervisor-tmachine.tar";
-            openshell_sandbox_image = "../artifacts/images/openshell-sandbox-tmachine.tar";
-          };
         };
       }
       {
@@ -87,21 +62,26 @@ let
           use_galaxy = false;
           playbooks = [
             "ansible/playbooks/nextest.yaml"
+            "ansible/playbooks/selinux.yaml"
             "ansible/playbooks/podman-rootless.yaml"
           ];
         };
-        install = {
-          use_galaxy = false;
-          playbooks = [
-            "ansible/playbooks/openshell.yaml"
-            "ansible/playbooks/gateway.yaml"
-          ];
-          inputs = {
-            openshell_cli_binary = "../artifacts/binaries/${muslTarget}/openshell";
-            openshell_gateway_binary = "../artifacts/binaries/${gnuTarget}/openshell-gateway";
-            openshell_supervisor_image = "../artifacts/images/openshell-supervisor-tmachine.tar";
-            openshell_sandbox_image = "../artifacts/images/openshell-sandbox-tmachine.tar";
-          };
+      }
+    ];
+
+    installers = [
+      {
+        name = "binaries";
+        use_galaxy = false;
+        playbooks = [
+          "ansible/playbooks/openshell.yaml"
+          "ansible/playbooks/gateway.yaml"
+        ];
+        inputs = {
+          openshell_cli_binary = "../artifacts/binaries/${muslTarget}/openshell";
+          openshell_gateway_binary = "../artifacts/binaries/${gnuTarget}/openshell-gateway";
+          openshell_supervisor_image = "../artifacts/images/openshell-supervisor-tmachine.tar";
+          openshell_sandbox_image = "../artifacts/images/openshell-sandbox-tmachine.tar";
         };
       }
     ];
@@ -112,6 +92,14 @@ let
         playbooks = [ "ansible/playbooks/conformance/cli.yaml" ];
         inputs = {
           openshell_conformance_test_bundle = "../artifacts/test-archives/${muslTarget}/openshell-conformance-tests.tar";
+        };
+      }
+      {
+        name = "provider-refresh";
+        playbooks = [ "ansible/playbooks/features/provider-refresh/keycloak.yaml" ];
+        inputs = {
+          keycloak_realm_file = "../scripts/keycloak-realm.json";
+          provider_refresh_keycloak_test_bundle = "../artifacts/test-archives/${muslTarget}/provider-refresh-keycloak-tests.tar";
         };
       }
     ];

@@ -1086,9 +1086,7 @@ fn build_base_spec(
             .collect()
     });
 
-    // Network configuration -- always bridge mode.
-    // Matches libpod's network spec format `{name: {opts}}`; the unit-struct
-    // value mirrors empty opts in the JSON.
+    // The isolation roles override this base network configuration below.
     #[allow(clippy::zero_sized_map_values)]
     let mut networks = BTreeMap::new();
     networks.insert(config.network_name.clone(), NetworkAttachment {});

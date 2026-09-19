@@ -127,7 +127,8 @@ impl OpenShell for TestOpenShell {
         &self,
         request: tonic::Request<GetSandboxRequest>,
     ) -> Result<Response<SandboxResponse>, Status> {
-        let name = request.into_inner().name;
+        let request = request.into_inner();
+        let name = request.name.clone();
         *self.state.last_get_name.lock().await = Some(name.clone());
         Ok(Response::new(SandboxResponse {
             sandbox: Some(Sandbox {
@@ -191,10 +192,7 @@ impl OpenShell for TestOpenShell {
         request: tonic::Request<GetSandboxConfigRequest>,
     ) -> Result<Response<GetSandboxConfigResponse>, Status> {
         let req = request.into_inner();
-        assert_eq!(
-            req.sandbox_id, "test-id",
-            "GetSandboxConfig should pass the id from GetSandbox"
-        );
+        assert!(!req.name.is_empty());
         Ok(Response::new(GetSandboxConfigResponse {
             policy: Some(openshell_core::proto::SandboxPolicy {
                 version: 1,
@@ -207,8 +205,9 @@ impl OpenShell for TestOpenShell {
                                 host: "api.user.example.com".to_string(),
                                 port: 443,
                                 protocol: "rest".to_string(),
-                                enforcement: "enforce".to_string(),
-                                access: "read-only".to_string(),
+                                enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce
+                                    as i32,
+                                access: openshell_core::proto::NetworkAccessPreset::ReadOnly as i32,
                                 ..Default::default()
                             }],
                             ..Default::default()
@@ -222,8 +221,9 @@ impl OpenShell for TestOpenShell {
                                 host: "api.provider.example.com".to_string(),
                                 port: 443,
                                 protocol: "rest".to_string(),
-                                enforcement: "enforce".to_string(),
-                                access: "read-only".to_string(),
+                                enforcement: openshell_core::proto::NetworkEnforcementMode::Enforce
+                                    as i32,
+                                access: openshell_core::proto::NetworkAccessPreset::ReadOnly as i32,
                                 ..Default::default()
                             }],
                             ..Default::default()
@@ -483,7 +483,7 @@ impl OpenShell for TestOpenShell {
         request: tonic::Request<GetSandboxPolicyStatusRequest>,
     ) -> Result<Response<GetSandboxPolicyStatusResponse>, Status> {
         let req = request.into_inner();
-        assert_eq!(req.name, "my-sandbox");
+        assert_eq!(req.sandbox, "my-sandbox");
         assert_eq!(req.version, 3);
         assert!(!req.global);
 

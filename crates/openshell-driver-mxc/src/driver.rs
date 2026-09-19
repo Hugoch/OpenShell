@@ -1198,7 +1198,7 @@ fn make_sandbox_with_condition(
         workspace: base.workspace.clone(),
         spec: base.spec.clone(),
         status: Some(DriverSandboxStatus {
-            sandbox_name: base.name.clone(),
+            name: base.name.clone(),
             instance_id: String::new(),
             agent_fd: String::new(),
             sandbox_fd: String::new(),

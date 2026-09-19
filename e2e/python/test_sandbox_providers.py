@@ -118,7 +118,7 @@ def _delete_provider_profile(stub: object, profile_id: str) -> None:
         stub.DeleteProviderProfile(
             openshell_pb2.DeleteProviderProfileRequest(
                 id=profile_id,
-                workspace="default",
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace="default"),
             )
         )
     except grpc.RpcError as exc:
@@ -145,7 +145,7 @@ def imported_provider_profile(
                     source=source,
                 )
             ],
-            workspace="default",
+            workspace_scope=datamodel_pb2.WorkspaceSelector(workspace="default"),
         )
     )
     assert response.imported, f"profile import failed: {response.diagnostics!r}"
@@ -185,8 +185,8 @@ def _native_inference_profile(
                 host="host.openshell.internal",
                 port=port,
                 protocol="rest",
-                tls="none",
-                enforcement="enforce",
+                tls=sandbox_pb2.NETWORK_TLS_MODE_UNSPECIFIED,
+                enforcement=sandbox_pb2.NETWORK_ENFORCEMENT_MODE_ENFORCE,
                 rules=rules,
                 allowed_ips=[
                     "10.0.0.0/8",
@@ -386,7 +386,7 @@ def test_endpointless_profile_credentials_use_explicit_policy_binding(
                         host="storage.googleapis.com",
                         port=443,
                         protocol="rest",
-                        access="full",
+                        access=sandbox_pb2.NETWORK_ACCESS_PRESET_FULL,
                         credential_binding=sandbox_pb2.NetworkCredentialBinding(
                             provider=provider_name
                         ),
@@ -488,8 +488,8 @@ def test_attach_detach_updates_credentials_for_later_exec_launches(
                         workspace_scope=datamodel_pb2.WorkspaceSelector(
                             workspace="default"
                         ),
-                        sandbox_name=sb.sandbox.name,
-                        provider_name=provider_name,
+                        sandbox=sb.sandbox.name,
+                        provider=provider_name,
                     )
                 )
                 wait_for_token(
@@ -502,8 +502,8 @@ def test_attach_detach_updates_credentials_for_later_exec_launches(
                         workspace_scope=datamodel_pb2.WorkspaceSelector(
                             workspace="default"
                         ),
-                        sandbox_name=sb.sandbox.name,
-                        provider_name=provider_name,
+                        sandbox=sb.sandbox.name,
+                        provider=provider_name,
                     )
                 )
                 wait_for_token(sb, "NOT_SET")
@@ -514,8 +514,8 @@ def test_attach_detach_updates_credentials_for_later_exec_launches(
                             workspace_scope=datamodel_pb2.WorkspaceSelector(
                                 workspace="default"
                             ),
-                            sandbox_name=sb.sandbox.name,
-                            provider_name=provider_name,
+                            sandbox=sb.sandbox.name,
+                            provider=provider_name,
                         )
                     )
                 except grpc.RpcError as exc:
@@ -697,6 +697,7 @@ def test_imported_anthropic_profile_allows_native_endpoint_with_attached_provide
                     assert payload["path"] == "/v1/messages"
                     assert payload["x_api_key"] == secret
                     assert body["model"] == "fixture-anthropic-model"
+
 
 # ===========================================================================
 # Tests: security & edge cases
@@ -1036,9 +1037,10 @@ def test_provider_profile_platform_vs_workspace_isolation(
     def _cleanup() -> None:
         for pid, ws in [(platform_id, ""), (workspace_id, "default")]:
             try:
-                stub.DeleteProviderProfile(
-                    openshell_pb2.DeleteProviderProfileRequest(id=pid, workspace=ws)
-                )
+                request = openshell_pb2.DeleteProviderProfileRequest(id=pid)
+                if ws:
+                    request.workspace_scope.workspace = ws
+                stub.DeleteProviderProfile(request)
             except grpc.RpcError:
                 pass
 
@@ -1047,7 +1049,6 @@ def test_provider_profile_platform_vs_workspace_isolation(
         resp = stub.ImportProviderProfiles(
             openshell_pb2.ImportProviderProfilesRequest(
                 profiles=[_make_profile(platform_id)],
-                workspace="",
             )
         )
         assert resp.imported, "platform-scoped import should succeed"
@@ -1055,13 +1056,13 @@ def test_provider_profile_platform_vs_workspace_isolation(
         resp = stub.ImportProviderProfiles(
             openshell_pb2.ImportProviderProfilesRequest(
                 profiles=[_make_profile(workspace_id)],
-                workspace="default",
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace="default"),
             )
         )
         assert resp.imported, "workspace-scoped import should succeed"
 
         platform_list = stub.ListProviderProfiles(
-            openshell_pb2.ListProviderProfilesRequest(page_size=200, workspace="")
+            openshell_pb2.ListProviderProfilesRequest(page_size=200)
         )
         platform_ids = [p.id for p in platform_list.profiles]
         assert platform_id in platform_ids, (
@@ -1072,7 +1073,10 @@ def test_provider_profile_platform_vs_workspace_isolation(
         )
 
         workspace_list = stub.ListProviderProfiles(
-            openshell_pb2.ListProviderProfilesRequest(page_size=200, workspace="default")
+            openshell_pb2.ListProviderProfilesRequest(
+                page_size=200,
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace="default"),
+            )
         )
         workspace_ids = [p.id for p in workspace_list.profiles]
         assert workspace_id in workspace_ids, (
@@ -1114,7 +1118,7 @@ def test_cross_workspace_profile_ids_do_not_collide(
         resp_a = stub.ImportProviderProfiles(
             openshell_pb2.ImportProviderProfilesRequest(
                 profiles=[_make_profile()],
-                workspace=ws_a,
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=ws_a),
             )
         )
         assert resp_a.imported, "import into ws-a should succeed"
@@ -1122,20 +1126,26 @@ def test_cross_workspace_profile_ids_do_not_collide(
         resp_b = stub.ImportProviderProfiles(
             openshell_pb2.ImportProviderProfilesRequest(
                 profiles=[_make_profile()],
-                workspace=ws_b,
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=ws_b),
             )
         )
         assert resp_b.imported, "import into ws-b should succeed"
 
         list_a = stub.ListProviderProfiles(
-            openshell_pb2.ListProviderProfilesRequest(page_size=200, workspace=ws_a)
+            openshell_pb2.ListProviderProfilesRequest(
+                page_size=200,
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=ws_a),
+            )
         )
         assert any(p.id == profile_id for p in list_a.profiles), (
             "profile should appear in ws-a"
         )
 
         list_b = stub.ListProviderProfiles(
-            openshell_pb2.ListProviderProfilesRequest(page_size=200, workspace=ws_b)
+            openshell_pb2.ListProviderProfilesRequest(
+                page_size=200,
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=ws_b),
+            )
         )
         assert any(p.id == profile_id for p in list_b.profiles), (
             "profile should appear in ws-b"
@@ -1145,7 +1155,8 @@ def test_cross_workspace_profile_ids_do_not_collide(
             with contextlib.suppress(Exception):
                 stub.DeleteProviderProfile(
                     openshell_pb2.DeleteProviderProfileRequest(
-                        id=profile_id, workspace=ws
+                        id=profile_id,
+                        workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=ws),
                     )
                 )
             with contextlib.suppress(Exception):
