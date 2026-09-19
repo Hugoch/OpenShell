@@ -892,21 +892,11 @@ impl SshHandler {
         let no_login_shell = state.no_login_shell;
         let pty = state.pty_request.take();
         let pty_requested = pty.is_some();
-        let (program, args) = command.map_or_else(
-            || {
-                if pty_requested {
-                    ("/bin/bash".to_string(), vec!["-i".to_string()])
-                } else {
-                    ("/bin/bash".to_string(), vec![])
-                }
-            },
-            |command| {
-                (
-                    "/bin/bash".to_string(),
-                    vec![login_shell_flag(no_login_shell).to_string(), command],
-                )
-            },
-        );
+        // The supervisor shares the workload filesystem, so select a shell
+        // that actually exists in the image. Alpine and other minimal images
+        // provide `/bin/sh` but not `/bin/bash`.
+        let shell = openshell_core::shell::detect_login_shell();
+        let (program, args) = shell_command(shell, command, pty_requested, no_login_shell);
         let env = pty
             .as_ref()
             .map(|request| vec![("TERM".to_string(), request.term.clone())])
@@ -1082,6 +1072,25 @@ async fn send_main_output(handle: &Handle, channel: ChannelId, event: MainOutput
 
 const fn login_shell_flag(no_login_shell: bool) -> &'static str {
     if no_login_shell { "-c" } else { "-lc" }
+}
+
+fn shell_command(
+    shell: String,
+    command: Option<String>,
+    pty_requested: bool,
+    no_login_shell: bool,
+) -> (String, Vec<String>) {
+    let args = command.map_or_else(
+        || {
+            if pty_requested {
+                vec!["-i".to_string()]
+            } else {
+                Vec::new()
+            }
+        },
+        |command| vec![login_shell_flag(no_login_shell).to_string(), command],
+    );
+    (shell, args)
 }
 
 #[allow(dead_code)]
@@ -1398,6 +1407,27 @@ mod tests {
             MainOutput::Exit(23)
         ));
         main_session.end_terminal_attachment();
+    }
+
+    #[test]
+    fn shell_command_uses_the_resolved_image_shell() {
+        let (program, args) = shell_command(
+            "/bin/sh".to_string(),
+            Some("printf ready".to_string()),
+            false,
+            false,
+        );
+
+        assert_eq!(program, "/bin/sh");
+        assert_eq!(args, ["-lc", "printf ready"]);
+    }
+
+    #[test]
+    fn interactive_shell_uses_the_resolved_image_shell() {
+        let (program, args) = shell_command("/bin/sh".to_string(), None, true, false);
+
+        assert_eq!(program, "/bin/sh");
+        assert_eq!(args, ["-i"]);
     }
 
     #[cfg(unix)]

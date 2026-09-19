@@ -302,7 +302,6 @@ fn prepare_with_path_open_mode(
 
     let result: Result<PreparedRuleset> = (|| {
         let access_all = AccessFs::from_all(abi);
-        let access_read = AccessFs::from_read(abi);
 
         let mut ruleset = Ruleset::default();
         ruleset = ruleset
@@ -315,7 +314,8 @@ fn prepare_with_path_open_mode(
 
         for path in &read_only {
             if let Some(path_fd) = try_open_path(path, compatibility, path_open_mode)? {
-                let allowed_access = access_for_path_fd(&path_fd, access_read, abi)?;
+                let allowed_access =
+                    access_for_path_fd(&path_fd, read_only_access(path, abi), abi)?;
                 debug!(path = %path.display(), "Landlock allow read-only");
                 ruleset = ruleset
                     .add_rule(PathBeneath::new(path_fd, allowed_access))
@@ -432,6 +432,17 @@ pub fn enforce(prepared: PreparedRuleset) -> Result<()> {
         return Err(err);
     }
     Ok(())
+}
+
+/// The baseline permits execution only from Alpine's `/bin`. Other read-only
+/// paths, including `/proc` and `/etc`, remain non-executable.
+fn read_only_access(path: &Path, abi: ABI) -> BitFlags<AccessFs> {
+    let access = AccessFs::from_read(abi);
+    if path == Path::new("/bin") {
+        access | AccessFs::Execute
+    } else {
+        access
+    }
 }
 
 /// Tailor a rule's access mask to the inode referenced by its already-open FD.
@@ -725,6 +736,12 @@ mod tests {
             tailored_access(dir.path(), requested_access),
             requested_access
         );
+    }
+
+    #[test]
+    fn only_bin_read_only_access_includes_execute() {
+        assert!(read_only_access(Path::new("/bin"), ABI::V3).contains(AccessFs::Execute));
+        assert!(!read_only_access(Path::new("/usr"), ABI::V3).contains(AccessFs::Execute));
     }
 
     #[test]
