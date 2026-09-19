@@ -667,16 +667,9 @@ export OPENSHELL_E2E_GATEWAY_CA_CERT="${PKI_DIR}/ca.crt"
 
 HOST_PORT=$(e2e_pick_port)
 HEALTH_PORT=$(e2e_pick_port)
-if [ "$(uname -s)" = "Darwin" ]; then
-  # Podman Machine reserves IPv4 loopback for its callback-only listener.
-  PRIMARY_BIND_IP="::1"
-  CLI_ENDPOINT_HOST="localhost"
-  HEALTH_ENDPOINT_HOST="[::1]"
-else
-  PRIMARY_BIND_IP="127.0.0.1"
-  CLI_ENDPOINT_HOST="127.0.0.1"
-  HEALTH_ENDPOINT_HOST="127.0.0.1"
-fi
+PRIMARY_BIND_IP="127.0.0.1"
+CLI_ENDPOINT_HOST="127.0.0.1"
+HEALTH_ENDPOINT_HOST="127.0.0.1"
 STATE_DIR="${WORKDIR}/state"
 mkdir -p "${STATE_DIR}"
 export XDG_STATE_HOME="${STATE_DIR}"
@@ -715,7 +708,7 @@ e2e_write_podman_gateway_config \
 if [ -n "${OPENSHELL_PARITY_GATEWAY_CONFIG_CAPTURE:-}" ]; then
   cp "${GATEWAY_CONFIG}" "${OPENSHELL_PARITY_GATEWAY_CONFIG_CAPTURE}"
 fi
-EXTERNAL_DRIVER_CALLBACK_ENDPOINT="https://host.containers.internal:${HOST_PORT}"
+EXTERNAL_DRIVER_GRPC_ENDPOINT="https://127.0.0.1:${HOST_PORT}"
 EXTERNAL_DRIVER_HEALTH_CHECK_INTERVAL_SECS=10
 EXTERNAL_DRIVER_ENABLE_BIND_MOUNTS=true
 EXTERNAL_DRIVER_TLS_CA="${PKI_DIR}/ca.crt"
@@ -732,7 +725,7 @@ if [ -n "${OPENSHELL_PARITY_LAUNCH_MANIFEST_CAPTURE:-}" ]; then
   external_driver_environment=null
   if [ "${OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER:-0}" = "1" ]; then
     driver_transport=remote_uds
-    external_driver_grpc_endpoint="\"${EXTERNAL_DRIVER_CALLBACK_ENDPOINT}\""
+    external_driver_grpc_endpoint="\"${EXTERNAL_DRIVER_GRPC_ENDPOINT}\""
     external_driver_host_gateway_ip='"host-gateway"'
     driver_tls_ca_sha256="$(sha256sum "${EXTERNAL_DRIVER_TLS_CA}" | cut -d' ' -f1)"
     driver_tls_cert_sha256="$(sha256sum "${EXTERNAL_DRIVER_TLS_CERT}" | cut -d' ' -f1)"
@@ -744,7 +737,7 @@ if [ -n "${OPENSHELL_PARITY_LAUNCH_MANIFEST_CAPTURE:-}" ]; then
       "${SANDBOX_IMAGE_REQUEST}" \
       "${EXTERNAL_DRIVER_PULL_POLICY}" \
       "${EXTERNAL_DRIVER_HEALTH_CHECK_INTERVAL_SECS}" \
-      "${EXTERNAL_DRIVER_CALLBACK_ENDPOINT}" \
+      "${EXTERNAL_DRIVER_GRPC_ENDPOINT}" \
       "${HOST_PORT}" \
       "${PODMAN_NETWORK_NAME}" \
       "${PODMAN_STOP_TIMEOUT_SECS}" \
@@ -807,7 +800,7 @@ if [ "${OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER:-0}" = "1" ]; then
   OPENSHELL_SANDBOX_IMAGE="${SANDBOX_IMAGE_REQUEST}" \
   OPENSHELL_SANDBOX_IMAGE_PULL_POLICY="${EXTERNAL_DRIVER_PULL_POLICY}" \
   OPENSHELL_HEALTH_CHECK_INTERVAL_SECS="${EXTERNAL_DRIVER_HEALTH_CHECK_INTERVAL_SECS}" \
-  OPENSHELL_GRPC_ENDPOINT="${EXTERNAL_DRIVER_CALLBACK_ENDPOINT}" \
+  OPENSHELL_GRPC_ENDPOINT="${EXTERNAL_DRIVER_GRPC_ENDPOINT}" \
   OPENSHELL_GATEWAY_PORT="${HOST_PORT}" \
   OPENSHELL_NETWORK_NAME="${PODMAN_NETWORK_NAME}" \
   OPENSHELL_STOP_TIMEOUT="${PODMAN_STOP_TIMEOUT_SECS}" \
@@ -825,8 +818,8 @@ fi
 
 GATEWAY_ARGS=(
   --config "${GATEWAY_CONFIG}"
-  # compute_driver comes from the RPM template. Override the loopback address
-  # and port so Podman Machine can keep its IPv4 callback listener distinct.
+  # compute_driver comes from the RPM template. Override the loopback port for
+  # this isolated test gateway.
   --bind-address "${PRIMARY_BIND_IP}"
   --port "${HOST_PORT}"
   --health-port "${HEALTH_PORT}"

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use openshell_core::config::DEFAULT_SERVER_PORT;
 use openshell_core::driver_utils::{
     LABEL_MANAGED_BY, LABEL_MANAGED_BY_VALUE, LABEL_SANDBOX_ID, LABEL_SANDBOX_NAME,
     LABEL_SANDBOX_NAMESPACE,
@@ -17,12 +16,10 @@ use openshell_core::progress::{
     PROGRESS_STEP_STARTING_SANDBOX,
 };
 use openshell_core::proto::compute::v1::{
-    DriverResourceRequirements, DriverSandboxSpec, DriverSandboxTemplate,
-    GetGatewayListenerRequirementsRequest, GpuResourceRequirements, ResourceRequirements,
-    WorkloadIdentityRequest, gateway_listener_requirement::Selector,
+    DriverResourceRequirements, DriverSandboxSpec, DriverSandboxTemplate, GpuResourceRequirements,
+    ResourceRequirements, WorkloadIdentityRequest,
 };
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -124,23 +121,11 @@ fn runtime_config() -> DockerDriverRuntimeConfig {
         default_image: "image:latest".to_string(),
         image_pull_policy: ImagePullPolicy::IfNotPresent,
         sandbox_namespace: "default".to_string(),
-        network_name: DEFAULT_DOCKER_NETWORK_NAME.to_string(),
-        gateway_route: DockerGatewayRoute::Bridge {
-            bind_address: SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::new(172, 18, 0, 1)),
-                DEFAULT_SERVER_PORT,
-            ),
-        },
-        gateway_callback_bind_address: Some(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(172, 18, 0, 1)),
-            DEFAULT_SERVER_PORT,
-        )),
         stop_timeout_secs: DEFAULT_STOP_TIMEOUT_SECS,
         log_level: "info".to_string(),
         sandbox_binary: Arc::new(b"\x7fELFtest".to_vec()),
         supervisor_image_id: "sha256:supervisor-test".to_string(),
         supervisor_grpc_endpoint: "https://host.openshell.internal:8443".to_string(),
-        gateway_tls_server_name: None,
         ssh_socket_path: openshell_core::container_paths::SSH_SOCKET_PATH.to_string(),
         guest_tls: Some(DockerGuestTlsPaths {
             ca: PathBuf::from("/tmp/ca.crt"),
@@ -939,359 +924,6 @@ async fn tracing_in_process_stream_leaves_status_unset_when_dropped() {
             .all(|attribute| attribute.key.as_str() != "rpc.response.status_code")
     );
     provider.shutdown().unwrap();
-}
-
-#[tokio::test]
-async fn gateway_listener_requirements_report_managed_bridge_address() {
-    let config = runtime_config();
-    let expected_address = match config.gateway_route {
-        DockerGatewayRoute::Bridge { bind_address, .. } => bind_address,
-        DockerGatewayRoute::HostGateway => panic!("test config must use a managed bridge"),
-    };
-    let driver = test_driver_with_config(config);
-
-    let response = driver
-        .get_gateway_listener_requirements(Request::new(GetGatewayListenerRequirementsRequest {}))
-        .await
-        .unwrap()
-        .into_inner();
-
-    assert_eq!(response.requirements.len(), 1);
-    assert_eq!(
-        response.requirements[0].selector,
-        Some(Selector::ExactBindAddress(expected_address.to_string()))
-    );
-}
-
-#[tokio::test]
-async fn gateway_listener_requirements_are_empty_for_host_gateway_route() {
-    let mut config = runtime_config();
-    config.gateway_route = DockerGatewayRoute::HostGateway;
-    config.gateway_callback_bind_address = None;
-    let driver = test_driver_with_config(config);
-
-    let response = driver
-        .get_gateway_listener_requirements(Request::new(GetGatewayListenerRequirementsRequest {}))
-        .await
-        .unwrap()
-        .into_inner();
-
-    assert!(response.requirements.is_empty());
-}
-
-#[tokio::test]
-async fn host_gateway_route_reports_ipv4_loopback_callback_listener() {
-    let mut config = runtime_config();
-    config.gateway_route = DockerGatewayRoute::HostGateway;
-    config.gateway_callback_bind_address = Some("127.0.0.1:17670".parse().unwrap());
-    let driver = test_driver_with_config(config);
-
-    let response = driver
-        .get_gateway_listener_requirements(Request::new(GetGatewayListenerRequirementsRequest {}))
-        .await
-        .unwrap()
-        .into_inner();
-
-    assert_eq!(response.requirements.len(), 1);
-    assert_eq!(
-        response.requirements[0].selector,
-        Some(Selector::ExactBindAddress("127.0.0.1:17670".to_string()))
-    );
-}
-
-#[test]
-fn docker_bridge_gateway_ip_requires_ipv4_gateway() {
-    let network = bollard::models::NetworkInspect {
-        driver: Some(DOCKER_NETWORK_DRIVER.to_string()),
-        ipam: Some(bollard::models::Ipam {
-            config: Some(vec![
-                bollard::models::IpamConfig {
-                    gateway: Some("fd00::1".to_string()),
-                    ..Default::default()
-                },
-                bollard::models::IpamConfig {
-                    gateway: Some("172.18.0.1".to_string()),
-                    ..Default::default()
-                },
-            ]),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        docker_bridge_gateway_ip(DEFAULT_DOCKER_NETWORK_NAME, &network).unwrap(),
-        IpAddr::V4(Ipv4Addr::new(172, 18, 0, 1))
-    );
-
-    let ipv6_only_network = bollard::models::NetworkInspect {
-        driver: Some(DOCKER_NETWORK_DRIVER.to_string()),
-        ipam: Some(bollard::models::Ipam {
-            config: Some(vec![bollard::models::IpamConfig {
-                gateway: Some("fd00::1".to_string()),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    assert!(
-        docker_bridge_gateway_ip(DEFAULT_DOCKER_NETWORK_NAME, &ipv6_only_network)
-            .unwrap_err()
-            .to_string()
-            .contains("IPv4 IPAM gateway")
-    );
-}
-
-#[test]
-fn docker_gateway_route_uses_host_gateway_for_docker_desktop() {
-    let info = SystemInfo {
-        operating_system: Some("Docker Desktop".to_string()),
-        labels: Some(vec![
-            "com.docker.desktop.address=unix:///tmp/docker.sock".to_string(),
-        ]),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        docker_gateway_route(
-            &info,
-            IpAddr::V4(Ipv4Addr::new(172, 18, 0, 1)),
-            DEFAULT_SERVER_PORT,
-            None,
-        ),
-        DockerGatewayRoute::HostGateway
-    );
-}
-
-#[test]
-fn vm_backed_docker_daemon_uses_daemon_local_companion_transport() {
-    let desktop = SystemInfo {
-        operating_system: Some("Docker Desktop".to_string()),
-        ..Default::default()
-    };
-    let native = SystemInfo {
-        operating_system: Some("Ubuntu 24.04".to_string()),
-        ..Default::default()
-    };
-
-    assert!(uses_host_gateway_alias(&desktop));
-    assert!(!uses_host_gateway_alias(&native));
-}
-
-#[test]
-fn host_gateway_route_requests_ipv4_loopback_for_ipv6_primary() {
-    assert_eq!(
-        docker_gateway_callback_bind_address(
-            &DockerGatewayRoute::HostGateway,
-            "[::1]:17670".parse().unwrap(),
-        ),
-        Some("127.0.0.1:17670".parse().unwrap())
-    );
-}
-
-#[test]
-fn host_gateway_route_reuses_ipv4_primary_when_it_covers_loopback() {
-    for primary in ["127.0.0.1:17670", "0.0.0.0:17670"] {
-        assert_eq!(
-            docker_gateway_callback_bind_address(
-                &DockerGatewayRoute::HostGateway,
-                primary.parse().unwrap(),
-            ),
-            None,
-            "{primary} already covers the IPv4 loopback callback"
-        );
-    }
-}
-
-#[test]
-fn docker_gateway_route_uses_host_gateway_for_colima() {
-    let info = SystemInfo {
-        name: Some("colima".to_string()),
-        operating_system: Some("Ubuntu 24.04.4 LTS".to_string()),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        docker_gateway_route(
-            &info,
-            IpAddr::V4(Ipv4Addr::new(172, 20, 0, 1)),
-            DEFAULT_SERVER_PORT,
-            None,
-        ),
-        DockerGatewayRoute::HostGateway
-    );
-}
-
-#[test]
-fn docker_gateway_route_uses_host_gateway_for_colima_named_profile() {
-    let info = SystemInfo {
-        operating_system: Some("Ubuntu 24.04 LTS".to_string()),
-        // `colima start --profile <name>` sets the daemon hostname to
-        // `colima-<name>`; the prefix match still catches it.
-        name: Some("colima-default".to_string()),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        docker_gateway_route(
-            &info,
-            IpAddr::V4(Ipv4Addr::new(172, 18, 0, 1)),
-            DEFAULT_SERVER_PORT,
-            None,
-        ),
-        DockerGatewayRoute::HostGateway
-    );
-}
-
-#[test]
-fn docker_gateway_route_uses_host_gateway_for_rancher_desktop() {
-    let info = SystemInfo {
-        operating_system: Some("Alpine Linux v3.20".to_string()),
-        name: Some("lima-rancher-desktop".to_string()),
-        labels: Some(vec![
-            "dev.rancherdesktop.profile=Rancher Desktop".to_string(),
-        ]),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        docker_gateway_route(
-            &info,
-            IpAddr::V4(Ipv4Addr::new(172, 18, 0, 1)),
-            DEFAULT_SERVER_PORT,
-            None,
-        ),
-        DockerGatewayRoute::HostGateway
-    );
-}
-
-#[test]
-fn docker_gateway_route_uses_host_gateway_for_orbstack() {
-    let info = SystemInfo {
-        operating_system: Some("OrbStack".to_string()),
-        name: Some("orbstack".to_string()),
-        labels: Some(vec!["dev.orbstack.machine_type=docker".to_string()]),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        docker_gateway_route(
-            &info,
-            IpAddr::V4(Ipv4Addr::new(172, 18, 0, 1)),
-            DEFAULT_SERVER_PORT,
-            None,
-        ),
-        DockerGatewayRoute::HostGateway
-    );
-}
-
-#[test]
-fn docker_gateway_route_uses_bridge_gateway_for_linux_docker() {
-    let info = SystemInfo {
-        operating_system: Some("Ubuntu 24.04 LTS".to_string()),
-        ..Default::default()
-    };
-
-    let route = docker_gateway_route_for_host(
-        &info,
-        IpAddr::V4(Ipv4Addr::new(172, 18, 0, 1)),
-        DEFAULT_SERVER_PORT,
-        None,
-        false,
-    );
-
-    assert_eq!(
-        route,
-        DockerGatewayRoute::Bridge {
-            bind_address: "172.18.0.1:17670".parse().unwrap(),
-        }
-    );
-}
-
-#[test]
-fn docker_gateway_route_uses_host_gateway_when_host_runtime_requires_it() {
-    let info = SystemInfo {
-        operating_system: Some("Ubuntu 24.04 LTS".to_string()),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        docker_gateway_route_for_host(
-            &info,
-            IpAddr::V4(Ipv4Addr::new(10, 89, 10, 1)),
-            DEFAULT_SERVER_PORT,
-            None,
-            true,
-        ),
-        DockerGatewayRoute::HostGateway
-    );
-}
-
-#[test]
-fn docker_gateway_route_prefers_configured_host_gateway_ip() {
-    let info = SystemInfo {
-        operating_system: Some("Ubuntu 24.04 LTS".to_string()),
-        ..Default::default()
-    };
-
-    let route = docker_gateway_route(
-        &info,
-        IpAddr::V4(Ipv4Addr::new(172, 18, 0, 1)),
-        DEFAULT_SERVER_PORT,
-        Some(IpAddr::V4(Ipv4Addr::new(172, 20, 0, 4))),
-    );
-
-    assert_eq!(
-        route,
-        DockerGatewayRoute::Bridge {
-            bind_address: "172.20.0.4:17670".parse().unwrap(),
-        }
-    );
-}
-
-#[test]
-fn docker_supervisor_alias_matches_the_trusted_gateway_route() {
-    assert_eq!(
-        docker_supervisor_host_alias(&DockerGatewayRoute::Bridge {
-            bind_address: "172.20.0.4:17670".parse().unwrap(),
-        }),
-        "172.20.0.4"
-    );
-    assert_eq!(
-        docker_supervisor_host_alias(&DockerGatewayRoute::HostGateway),
-        "host-gateway"
-    );
-}
-
-#[test]
-fn docker_boundary_pins_only_concrete_host_gateway_addresses() {
-    assert_eq!(
-        docker_boundary_host_gateway_ip(&DockerGatewayRoute::Bridge {
-            bind_address: "172.20.0.4:17670".parse().unwrap(),
-        }),
-        Some(IpAddr::V4(Ipv4Addr::new(172, 20, 0, 4)))
-    );
-    assert_eq!(
-        docker_boundary_host_gateway_ip(&DockerGatewayRoute::HostGateway),
-        None
-    );
-}
-
-#[test]
-fn parse_optional_host_gateway_ip_rejects_invalid_values() {
-    assert_eq!(parse_optional_host_gateway_ip("").unwrap(), None);
-    assert_eq!(
-        parse_optional_host_gateway_ip("172.20.0.4").unwrap(),
-        Some(IpAddr::V4(Ipv4Addr::new(172, 20, 0, 4)))
-    );
-    assert!(
-        parse_optional_host_gateway_ip("not-an-ip")
-            .unwrap_err()
-            .to_string()
-            .contains("host_gateway_ip")
-    );
 }
 
 #[test]
@@ -2900,6 +2532,62 @@ fn build_container_create_body_disables_docker_networking() {
     );
     assert_eq!(host_config.extra_hosts, None);
     assert_eq!(host_config.dns, Some(vec!["127.0.0.53".to_string()]));
+}
+
+#[test]
+fn docker_supervisor_uses_host_network() {
+    let host = docker_supervisor_host_config(Vec::new(), "https://127.0.0.1:17670");
+
+    assert_eq!(host.network_mode.as_deref(), Some("host"));
+    assert_eq!(
+        host.extra_hosts,
+        Some(vec![
+            "host.openshell.internal:127.0.0.1".to_string(),
+            "host.docker.internal:127.0.0.1".to_string(),
+        ])
+    );
+    assert_eq!(host.cap_drop, Some(vec!["ALL".to_string()]));
+    assert_eq!(host.cap_add, None);
+}
+
+#[test]
+fn docker_supervisor_maps_host_aliases_to_the_gateway_address() {
+    let host = docker_supervisor_host_config(Vec::new(), "https://172.20.0.4:17670");
+
+    assert_eq!(
+        host.extra_hosts,
+        Some(vec![
+            "host.openshell.internal:172.20.0.4".to_string(),
+            "host.docker.internal:172.20.0.4".to_string(),
+        ])
+    );
+    assert_eq!(
+        docker_supervisor_host_address("https://172.20.0.4:17670"),
+        Some("172.20.0.4".parse().unwrap())
+    );
+}
+
+#[test]
+fn docker_supervisor_leaves_named_gateway_hosts_to_dns() {
+    let host = docker_supervisor_host_config(Vec::new(), "https://gateway.example.com:17670");
+
+    assert_eq!(host.extra_hosts, None);
+    assert_eq!(
+        docker_supervisor_host_address("https://gateway.example.com:17670"),
+        None
+    );
+}
+
+#[test]
+fn docker_supervisor_defaults_to_the_primary_loopback_endpoint() {
+    assert_eq!(
+        default_docker_supervisor_grpc_endpoint(17_670, false),
+        "http://127.0.0.1:17670"
+    );
+    assert_eq!(
+        default_docker_supervisor_grpc_endpoint(17_670, true),
+        "https://127.0.0.1:17670"
+    );
 }
 
 #[test]

@@ -613,7 +613,7 @@ mod tests {
         }
         assert_eq!(
             compiled_method_count,
-            103 + PROVIDER_READINESS_RPC_SIGNATURES.len(),
+            102 + PROVIDER_READINESS_RPC_SIGNATURES.len(),
             "classify every compiled RPC"
         );
         assert_eq!(

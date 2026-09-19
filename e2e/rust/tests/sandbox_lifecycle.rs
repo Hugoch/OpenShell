@@ -10,6 +10,7 @@ use openshell_e2e::harness::binary::{openshell_cmd, openshell_tty_cmd};
 use openshell_e2e::harness::cli::{run_cli, wait_for_sandbox_phase};
 use openshell_e2e::harness::output::{extract_field, strip_ansi};
 use openshell_e2e::harness::sandbox::SandboxGuard;
+use serial_test::serial;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::time::{Instant, sleep};
 
@@ -211,6 +212,7 @@ async fn reconnect_with_input_ownership(
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn sandbox_stop_start_preserves_workspace() {
     const SENTINEL: &str = "openshell-stop-start-sentinel";
     const SENTINEL_PATH: &str = "/sandbox/.openshell-stop-start-e2e";
@@ -287,6 +289,7 @@ async fn sandbox_stop_start_preserves_workspace() {
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn sandbox_can_be_deleted_while_stopped() {
     let mut sandbox = SandboxGuard::create_keep(
         &["sh", "-c", "echo stop-ready; exec sleep infinity"],
@@ -328,6 +331,7 @@ async fn sandbox_can_be_deleted_while_stopped() {
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn canonical_main_exit_zero_completes_persistent_sandbox() {
     let mut cmd = openshell_tty_cmd(&["sandbox", "create", "--", "echo", "OK"]);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -377,6 +381,7 @@ async fn canonical_main_exit_zero_completes_persistent_sandbox() {
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn canonical_main_nonzero_exit_preserves_status() {
     let mut cmd = openshell_tty_cmd(&[
         "sandbox",
@@ -429,6 +434,7 @@ async fn canonical_main_nonzero_exit_preserves_status() {
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn detached_canonical_main_exit_zero_reaches_completed() {
     const RELEASE_PATH: &str = "/sandbox/.openshell-detached-success-release";
     let script = format!("while [ ! -e '{RELEASE_PATH}' ]; do sleep 0.05; done; exit 0");
@@ -453,6 +459,7 @@ async fn detached_canonical_main_exit_zero_reaches_completed() {
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn detached_canonical_main_nonzero_exit_reaches_error() {
     const RELEASE_PATH: &str = "/sandbox/.openshell-detached-failure-release";
     let script = format!("while [ ! -e '{RELEASE_PATH}' ]; do sleep 0.05; done; exit 11");
@@ -477,6 +484,7 @@ async fn detached_canonical_main_nonzero_exit_reaches_error() {
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn canonical_main_and_exec_receive_declared_environment() {
     for mode in ["--tty", "--no-tty"] {
         let script = r#"printf 'declared_env=%s\n' "${REPRO_SENTINEL:-missing}"; while true; do sleep 1; done"#;
@@ -515,6 +523,7 @@ async fn canonical_main_and_exec_receive_declared_environment() {
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn detached_main_exit_during_provisioning_is_classified_as_workload_result() {
     let mut sandbox = SandboxGuard::create_detached_main(&["sh", "-c", "exit 11"])
         .await
@@ -548,6 +557,7 @@ async fn detached_main_exit_during_provisioning_is_classified_as_workload_result
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn canonical_tty_main_uses_sandbox_environment() {
     let script = r#"printf 'canonical_env home=%s user=%s term=%s\n' "$HOME" "$USER" "$TERM"; while true; do sleep 1; done"#;
     let mut sandbox =
@@ -584,6 +594,7 @@ async fn canonical_tty_main_uses_sandbox_environment() {
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn canonical_main_disconnect_reconnect_replays_history_for_same_process() {
     const FIRST_MARKER: &str = "sequence=0001";
     let script = r#"trap 'kill "$writer" 2>/dev/null || true' EXIT; (n=1; while true; do printf 'main_pid=%s sequence=%04d\n' "$$" "$n"; n=$((n + 1)); sleep 0.2; done) & writer=$!; while IFS= read -r line; do printf 'main_pid=%s input=%s\n' "$$" "$line"; done"#;
@@ -679,6 +690,7 @@ async fn canonical_main_disconnect_reconnect_replays_history_for_same_process() 
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn sandbox_create_with_no_keep_cleans_up_after_tty_command() {
     let name = format!("tty-{:015x}", rand::random::<u64>() & 0x0fff_ffff_ffff_ffff);
     // Capture startup diagnostics before --no-keep removes a failed container.
@@ -763,6 +775,7 @@ async fn sandbox_create_with_no_keep_cleans_up_after_tty_command() {
 }
 
 #[tokio::test]
+#[serial(sandbox_lifecycle)]
 async fn sandbox_create_with_no_keep_preserves_failure_then_cleans_up() {
     let mut cmd = openshell_tty_cmd(&[
         "sandbox",
