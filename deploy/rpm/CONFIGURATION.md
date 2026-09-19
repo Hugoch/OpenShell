@@ -24,9 +24,9 @@ compute_driver = "podman"
 ```
 
 The RPM does not override `bind_address`. The primary listener uses the
-built-in `127.0.0.1:17670` default. The Podman driver reports the callback
-interface it needs, and the gateway adds a separate listener scoped to that
-interface. This keeps the general API off unrelated host interfaces.
+built-in `127.0.0.1:17670` default. Host-networked Podman supervisors connect
+to this same loopback listener, so the gateway does not expose another host
+interface.
 
 `compute_driver = "podman"` pins the compute driver to Podman. Without
 this, the gateway auto-detects in order: Kubernetes, Podman, Docker. Pinning
@@ -68,8 +68,7 @@ systemctl --user edit openshell-gateway
 
 The RPM enables mutual TLS by default. The gateway requires a valid
 client certificate for all API connections. Its primary listener uses
-`127.0.0.1:17670`; Podman callback traffic uses the additional listener
-described in "Default configuration" above.
+`127.0.0.1:17670`; Podman supervisor sessions use that same listener.
 
 ### Auto-generated certificates
 
@@ -244,10 +243,10 @@ version = 2
 compute_driver = "podman"
 
 [openshell.drivers.podman]
+network_name = "openshell"
 default_image = "ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
 image_pull_policy = "if_not_present"
 health_check_interval_secs = 10
-network_name = "openshell"
 stop_timeout_secs = 10
 ```
 

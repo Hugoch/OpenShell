@@ -79,7 +79,7 @@ struct Args {
     )]
     sandbox_ssh_socket_path: String,
 
-    /// Podman bridge network name.
+    /// Podman network name retained for driver-managed resources.
     #[arg(long, env = "OPENSHELL_NETWORK_NAME", default_value = DEFAULT_NETWORK_NAME)]
     network_name: String,
 

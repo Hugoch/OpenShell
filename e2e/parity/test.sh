@@ -165,7 +165,7 @@ supervisor_runtime = f"localhost/openshell/supervisor@{image_digest}"
 base_runtime = f"docker.io/library/debian@{image_digest}"
 pull_policy = "missing" if schema == 1 else "if_not_present"
 gateway_port = 18181
-callback = f"https://host.containers.internal:{gateway_port}"
+grpc_endpoint = f"https://127.0.0.1:{gateway_port}"
 driver_socket = f"/tmp/{variant}-driver.sock"
 podman_socket = f"/tmp/{variant}-podman.sock"
 network = f"{variant}-network"
@@ -243,7 +243,7 @@ launch = {
 if external:
     launch.update(
         {
-            "external_driver_grpc_endpoint": callback,
+            "external_driver_grpc_endpoint": grpc_endpoint,
             "external_driver_host_gateway_ip": "host-gateway",
             "external_driver_userns": None,
             "external_driver_spiffe": False,
@@ -257,7 +257,7 @@ if external:
                 "OPENSHELL_SANDBOX_IMAGE_PULL_POLICY": pull_policy,
                 "OPENSHELL_SANDBOX_RUNTIME_IMAGE": sandbox_boundary,
                 "OPENSHELL_HEALTH_CHECK_INTERVAL_SECS": 10,
-                "OPENSHELL_GRPC_ENDPOINT": callback,
+                "OPENSHELL_GRPC_ENDPOINT": grpc_endpoint,
                 "OPENSHELL_GATEWAY_PORT": gateway_port,
                 "OPENSHELL_NETWORK_NAME": network,
                 "OPENSHELL_STOP_TIMEOUT": 15,

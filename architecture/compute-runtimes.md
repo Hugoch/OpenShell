@@ -51,8 +51,9 @@ creation. Drivers that enforce policy outside the standard supervisor fetch
 later revisions through `GetSandboxConfig` and acknowledge them through
 `ReportPolicyStatus`.
 Process-identity omissions are preserved across this boundary so every driver
-can apply its native image or runtime defaults. Driver-requested listeners are
-structurally validated and remain restricted to sandbox callback RPCs.
+can apply its native image or runtime defaults. Drivers connect supervisors to
+the operator-configured gateway endpoint; they do not request additional
+gateway listeners.
 
 Canonical main-process support is part of the `ComputeDriver` contract. Every
 in-tree and extension driver must forward the exact specification; it is not an

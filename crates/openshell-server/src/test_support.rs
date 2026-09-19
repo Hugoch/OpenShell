@@ -19,13 +19,11 @@ use openshell_core::proto::compute::v1::compute_driver_server::ComputeDriverServ
 use openshell_core::proto::compute::v1::{
     CreateSandboxRequest, CreateSandboxResponse, DeleteSandboxRequest, DeleteSandboxResponse,
     DeleteWorkspaceRequest, DeleteWorkspaceResponse, DriverSandbox, EnsureWorkspaceRequest,
-    EnsureWorkspaceResponse, GatewayListenerRequirement, GetCapabilitiesRequest,
-    GetCapabilitiesResponse, GetGatewayListenerRequirementsRequest,
-    GetGatewayListenerRequirementsResponse, GetSandboxRequest, GetSandboxResponse,
-    ListSandboxesRequest, ListSandboxesResponse, StartSandboxRequest, StartSandboxResponse,
-    StopSandboxRequest, StopSandboxResponse, ValidateSandboxCreateRequest,
+    EnsureWorkspaceResponse, GetCapabilitiesRequest, GetCapabilitiesResponse, GetSandboxRequest,
+    GetSandboxResponse, ListSandboxesRequest, ListSandboxesResponse, StartSandboxRequest,
+    StartSandboxResponse, StopSandboxRequest, StopSandboxResponse, ValidateSandboxCreateRequest,
     ValidateSandboxCreateResponse, WatchSandboxesEvent, WatchSandboxesRequest,
-    compute_driver_server::ComputeDriver, gateway_listener_requirement::Selector,
+    compute_driver_server::ComputeDriver,
 };
 use std::collections::HashMap;
 #[cfg(unix)]
@@ -96,7 +94,6 @@ pub fn authenticate_as_dev_user(mut request: Request<()>) -> Result<Request<()>,
 #[derive(Debug, Clone, PartialEq)]
 pub enum FakeComputeDriverCall {
     GetCapabilities,
-    GetGatewayListenerRequirements,
     ValidateSandboxCreate {
         sandbox: Option<DriverSandbox>,
     },
@@ -131,8 +128,6 @@ pub struct FakeComputeDriver {
 #[derive(Debug)]
 struct FakeComputeDriverState {
     capabilities: GetCapabilitiesResponse,
-    gateway_listener_requirements: Vec<GatewayListenerRequirement>,
-    gateway_listener_requirements_supported: bool,
     sandboxes: HashMap<String, DriverSandbox>,
     calls: Vec<FakeComputeDriverCall>,
     traceparents: Vec<String>,
@@ -160,8 +155,6 @@ impl FakeComputeDriver {
                     rootfs_tar_staging_dir: String::new(),
                     rootfs_tar_max_bytes: 0,
                 },
-                gateway_listener_requirements: Vec::new(),
-                gateway_listener_requirements_supported: true,
                 sandboxes: HashMap::new(),
                 calls: Vec::new(),
                 traceparents: Vec::new(),
@@ -190,29 +183,6 @@ impl FakeComputeDriver {
     #[must_use]
     pub fn with_gateway_manages_lifecycle(self) -> Self {
         self.with_state(|state| state.capabilities.gateway_manages_lifecycle = true);
-        self
-    }
-
-    #[must_use]
-    pub fn with_gateway_listener_requirement(
-        self,
-        bind_address: impl Into<String>,
-        reason: impl Into<String>,
-    ) -> Self {
-        self.with_state(|state| {
-            state
-                .gateway_listener_requirements
-                .push(GatewayListenerRequirement {
-                    reason: reason.into(),
-                    selector: Some(Selector::ExactBindAddress(bind_address.into())),
-                });
-        });
-        self
-    }
-
-    #[must_use]
-    pub fn without_gateway_listener_requirements_api(self) -> Self {
-        self.with_state(|state| state.gateway_listener_requirements_supported = false);
         self
     }
 
@@ -321,25 +291,6 @@ impl ComputeDriver for FakeComputeDriver {
             state.capabilities.clone()
         });
         Ok(Response::new(response))
-    }
-
-    async fn get_gateway_listener_requirements(
-        &self,
-        request: Request<GetGatewayListenerRequirementsRequest>,
-    ) -> Result<Response<GetGatewayListenerRequirementsResponse>, Status> {
-        self.record_traceparent(request.metadata());
-        self.with_state(|state| {
-            state
-                .calls
-                .push(FakeComputeDriverCall::GetGatewayListenerRequirements);
-            state
-                .gateway_listener_requirements_supported
-                .then(|| GetGatewayListenerRequirementsResponse {
-                    requirements: state.gateway_listener_requirements.clone(),
-                })
-                .map(Response::new)
-                .ok_or_else(|| Status::unimplemented("listener requirements unsupported"))
-        })
     }
 
     async fn validate_sandbox_create(

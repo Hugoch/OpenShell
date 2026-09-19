@@ -149,15 +149,6 @@ EOF
   printf '%s' "${name}" >"${config_home}/openshell/active_gateway"
 }
 
-if [[ -z "${OPENSHELL_BIND_ADDRESS:-}" && "$(uname -s)" == "Darwin" ]]; then
-  # Podman Machine reserves IPv4 loopback for its callback-only listener.
-  # Keep the primary listener distinct while using a hostname that resolves
-  # to IPv6 loopback for local CLI connections. An explicit bind address
-  # overrides this platform default.
-  PRIMARY_BIND_IP="::1"
-  CLI_ENDPOINT_HOST="localhost"
-fi
-
 if [[ ! "${GATEWAY_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "ERROR: OPENSHELL_PODMAN_GATEWAY_NAME must contain only letters, numbers, dots, underscores, or dashes" >&2
   exit 2

@@ -357,12 +357,12 @@ def verify_variant(
             f"{launch_path}: external driver pre-execution hash mismatch",
         )
         gateway_port = launch.get("gateway_port")
-        callback_endpoint = f"https://host.containers.internal:{gateway_port}"
+        grpc_endpoint = f"https://127.0.0.1:{gateway_port}"
         require(
             isinstance(gateway_port, int)
             and 0 < gateway_port <= 65535
-            and launch.get("external_driver_grpc_endpoint") == callback_endpoint,
-            f"{launch_path}: external driver callback endpoint is not isolated",
+            and launch.get("external_driver_grpc_endpoint") == grpc_endpoint,
+            f"{launch_path}: external driver gRPC endpoint is not isolated",
         )
         require(
             launch.get("external_driver_host_gateway_ip") == "host-gateway"
@@ -417,7 +417,7 @@ def verify_variant(
             and driver_environment["OPENSHELL_SANDBOX_IMAGE_PULL_POLICY"]
             == expected_policy
             and driver_environment["OPENSHELL_HEALTH_CHECK_INTERVAL_SECS"] == 10
-            and driver_environment["OPENSHELL_GRPC_ENDPOINT"] == callback_endpoint
+            and driver_environment["OPENSHELL_GRPC_ENDPOINT"] == grpc_endpoint
             and driver_environment["OPENSHELL_GATEWAY_PORT"] == gateway_port
             and isinstance(driver_environment["OPENSHELL_NETWORK_NAME"], str)
             and driver_environment["OPENSHELL_NETWORK_NAME"]
@@ -443,12 +443,12 @@ def verify_variant(
                 and Path(tls_input["path"]).is_absolute()
                 and isinstance(tls_input["sha256"], str)
                 and SHA256_RE.fullmatch(tls_input["sha256"]) is not None,
-                f"{launch_path}: invalid external driver callback TLS input {field}",
+                f"{launch_path}: invalid external driver TLS input {field}",
             )
             tls_paths.add(tls_input["path"])
         require(
             len(tls_paths) == 3,
-            f"{launch_path}: external driver callback TLS paths are not distinct",
+            f"{launch_path}: external driver TLS paths are not distinct",
         )
     else:
         require(

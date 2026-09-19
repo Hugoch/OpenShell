@@ -35,9 +35,9 @@ mediates every supported TCP and DNS operation, attributes it to the calling
 binary, and sends the request across the private channel. The supervisor
 authorizes the request before it opens an upstream connection. Docker's absent
 workload network is the mandatory outer fence if mediation fails or is
-bypassed. Only the trusted supervisor companion joins the driver-owned bridge,
-where it originates approved egress and can resolve other services on that
-network.
+bypassed. The trusted supervisor companion uses Docker host networking, where
+it reaches the gateway's primary loopback listener and originates approved
+egress.
 
 The driver copies trusted runtime bytes from the configured supervisor image
 through the Docker archive API. No workload launch depends on a host bind
@@ -73,7 +73,7 @@ LSM decisions remain authoritative.
 | `cap_drop = ALL`, no `cap_add`, no-new-privileges | Prevents either container from acquiring Linux capabilities. |
 | Docker default seccomp and AppArmor profiles | Retains runtime hardening; startup confirmation fails closed if nested seccomp notification is unavailable. |
 | `network_mode = none` on the workload | Removes direct external routes. |
-| Driver-owned bridge on the supervisor | Lets the trusted supervisor originate approved gateway and upstream connections and use Docker service discovery. |
+| `network_mode = host` on the supervisor | Lets the trusted supervisor reach the gateway's primary loopback listener and originate approved upstream connections. |
 | `restart_policy = no` | Keeps canonical main-process exit terminal. |
 | `PidsLimit` | Applies the configured sandbox PID budget. Omit `sandbox_pids_limit` to use OpenShell's default. Explicit zero is invalid. |
 | Private named volumes | One carries the authenticated sandbox/supervisor channel. The other is mounted only into the supervisor and contains its JWT and private gateway credentials. |
@@ -128,22 +128,25 @@ dynamically linked glibc `/openshell-supervisor` binary that runs in the
 host-networked supervisor container. Release and gateway image builds bake
 matching image tags into the binary.
 
-## Callback and TLS
+## Gateway session and TLS
 
 `OPENSHELL_ENDPOINT` and gateway authentication material are injected only into
 the supervisor companion. The workload never receives the sandbox JWT, gateway
 client TLS key, policy authority, or interception CA private key.
 
-When no endpoint is configured, the driver derives
-`host.openshell.internal:<gateway-port>`. Native Linux uses the managed bridge
-gateway. Docker Desktop and compatible VM-backed daemons use Docker's
-`host-gateway` route. A configured HTTPS server certificate must include the
+When no endpoint is configured, the supervisor connects to
+`127.0.0.1:<gateway-port>`. Set `grpc_endpoint` when the gateway is not on the
+Docker daemon host. A configured HTTPS server certificate must include the
 endpoint host in its subject alternative names.
 
-The driver pins a concrete managed-bridge address in the sandbox descriptor.
-For Docker's special `host-gateway` route, it leaves the address unpinned so
-the supervisor resolves the driver-injected alias in its own container. This
-avoids treating the Docker VM's loopback as the desktop host.
+The driver publishes host loopback as the backend address for
+`host.openshell.internal`. Policy DNS resolves that reserved name through the
+mediated path, so policies can reach host services without a Docker bridge,
+container DNS alias, or another gateway listener.
+
+Docker Engine on Linux supports host networking directly. Docker Desktop
+requires host networking to be enabled in Settings and does not support it
+when Enhanced Container Isolation is enabled.
 
 The supervisor owns these security-critical variables:
 
