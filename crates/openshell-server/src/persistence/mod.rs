@@ -33,8 +33,45 @@ pub type PersistenceResult<T> = Result<T, PersistenceError>;
 /// durable operation.
 pub struct AtomicSandboxProjection<'a> {
     pub sandbox_id: &'a str,
-    pub payload: &'a [u8],
+    pub annotations: &'a HashMap<String, String>,
     pub expected_resource_version: u64,
+}
+
+impl AtomicSandboxProjection<'_> {
+    fn apply(
+        &self,
+        payload: &[u8],
+        current_resource_version: u64,
+    ) -> PersistenceResult<(openshell_core::proto::Sandbox, bool)> {
+        use openshell_core::SetResourceVersion as _;
+        use prost::Message as _;
+
+        if self.expected_resource_version != 0
+            && self.expected_resource_version != current_resource_version
+        {
+            return Err(PersistenceError::Conflict {
+                current_resource_version: Some(current_resource_version),
+            });
+        }
+
+        let payload = migrate_legacy_time_fields("sandbox", payload)?;
+        let mut sandbox =
+            openshell_core::proto::Sandbox::decode(payload.as_slice()).map_err(|error| {
+                PersistenceError::Decode(format!("decode sandbox payload failed: {error}"))
+            })?;
+        sandbox.set_resource_version(current_resource_version);
+        let metadata = sandbox.metadata.as_mut().ok_or_else(|| {
+            PersistenceError::Decode("sandbox payload missing metadata".to_string())
+        })?;
+        let mut changed = false;
+        for (key, value) in self.annotations {
+            if metadata.annotations.get(key) != Some(value) {
+                metadata.annotations.insert(key.clone(), value.clone());
+                changed = true;
+            }
+        }
+        Ok((sandbox, changed))
+    }
 }
 
 /// Result of a compare-and-swap update that already has the current payload.

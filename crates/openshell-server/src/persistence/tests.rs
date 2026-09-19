@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    ObjectId, ObjectListQuery, ObjectName, ObjectType, PersistenceError, PolicyRecord, Store,
-    generate_name, test_store,
+    AtomicSandboxProjection, ObjectId, ObjectListQuery, ObjectName, ObjectType, PersistenceError,
+    PolicyRecord, Store, generate_name, test_store,
 };
 use crate::config_update_operation::{CommittedResponse, OperationTarget, new_record};
 use crate::policy_store::{AtomicPolicyRevisionWrite, PolicyStoreExt};
@@ -1408,6 +1408,81 @@ async fn configuration_transactions_fill_the_other_target_dimension() {
         .unwrap();
     assert_eq!(policy_operation.target_policy_version, 1);
     assert_eq!(policy_operation.target_settings_revision, 2);
+}
+
+async fn settings_projection_uses_locked_sandbox_version(store: Store) {
+    let suffix = uuid::Uuid::new_v4();
+    let sandbox_id = format!("settings-projection-{suffix}");
+    let sandbox_name = format!("settings-projection-name-{suffix}");
+    let sandbox = policy_test_sandbox(&sandbox_id, &sandbox_name);
+    store.put_message(&sandbox).await.unwrap();
+
+    let mut concurrent = store
+        .get_message::<Sandbox>(&sandbox_id)
+        .await
+        .unwrap()
+        .unwrap();
+    concurrent
+        .metadata
+        .as_mut()
+        .unwrap()
+        .annotations
+        .insert("concurrent".to_string(), "preserved".to_string());
+    store.put_message(&concurrent).await.unwrap();
+    let before = store
+        .get_message::<Sandbox>(&sandbox_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let before_version = before.metadata.as_ref().unwrap().resource_version;
+    let operation = config_operation_for(&before, 0, 1);
+    let requested = StdHashMap::from([("requested".to_string(), "applied".to_string())]);
+
+    store
+        .put_if_with_operation(
+            crate::grpc::policy::SANDBOX_SETTINGS_OBJECT_TYPE,
+            &format!("settings-projection-record-{suffix}"),
+            &sandbox_name,
+            "default",
+            br#"{"revision":1,"settings":{}}"#,
+            super::WriteCondition::MustCreate,
+            &operation,
+            Some(&AtomicSandboxProjection {
+                sandbox_id: &sandbox_id,
+                annotations: &requested,
+                expected_resource_version: 0,
+            }),
+        )
+        .await
+        .unwrap();
+
+    let after = store
+        .get_message::<Sandbox>(&sandbox_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let metadata = after.metadata.as_ref().unwrap();
+    assert_eq!(metadata.resource_version, before_version + 1);
+    assert_eq!(
+        metadata.annotations.get("concurrent").map(String::as_str),
+        Some("preserved")
+    );
+    assert_eq!(
+        metadata.annotations.get("requested").map(String::as_str),
+        Some("applied")
+    );
+}
+
+#[tokio::test]
+async fn sqlite_settings_projection_uses_locked_sandbox_version() {
+    settings_projection_uses_locked_sandbox_version(test_store().await).await;
+}
+
+#[tokio::test]
+#[ignore = "requires OPENSHELL_TEST_POSTGRES_URL pointing to a test database"]
+async fn postgres_settings_projection_uses_locked_sandbox_version() {
+    let url = std::env::var("OPENSHELL_TEST_POSTGRES_URL").expect("test database URL");
+    settings_projection_uses_locked_sandbox_version(Store::connect(&url).await.unwrap()).await;
 }
 
 #[tokio::test]

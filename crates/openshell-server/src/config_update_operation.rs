@@ -44,6 +44,35 @@ pub struct OperationWatchBus {
     inner: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
 }
 
+struct OperationSubscription {
+    bus: OperationWatchBus,
+    operation_id: String,
+    sender: tokio::sync::broadcast::Sender<()>,
+    receiver: tokio::sync::broadcast::Receiver<()>,
+}
+
+impl OperationSubscription {
+    async fn recv(&mut self) -> Result<(), tokio::sync::broadcast::error::RecvError> {
+        self.receiver.recv().await
+    }
+}
+
+impl Drop for OperationSubscription {
+    fn drop(&mut self) {
+        let mut inner = self
+            .bus
+            .inner
+            .lock()
+            .expect("operation watch bus lock poisoned");
+        let remove = inner.get(&self.operation_id).is_some_and(|current| {
+            current.same_channel(&self.sender) && self.sender.receiver_count() == 1
+        });
+        if remove {
+            inner.remove(&self.operation_id);
+        }
+    }
+}
+
 impl OperationWatchBus {
     #[must_use]
     pub fn new() -> Self {
@@ -63,8 +92,14 @@ impl OperationWatchBus {
             .clone()
     }
 
-    pub fn subscribe(&self, operation_id: &str) -> tokio::sync::broadcast::Receiver<()> {
-        self.sender_for(operation_id).subscribe()
+    fn subscribe(&self, operation_id: &str) -> OperationSubscription {
+        let sender = self.sender_for(operation_id);
+        OperationSubscription {
+            bus: self.clone(),
+            operation_id: operation_id.to_string(),
+            receiver: sender.subscribe(),
+            sender,
+        }
     }
 
     pub fn notify(&self, operation_id: &str) {
@@ -76,6 +111,14 @@ impl OperationWatchBus {
         if let Some(sender) = sender {
             let _ = sender.send(());
         }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("operation watch bus lock poisoned")
+            .len()
     }
 }
 
@@ -722,8 +765,20 @@ pub async fn wait_for_terminal(
     };
     let started = std::time::Instant::now();
     let deadline = tokio::time::Instant::now() + timeout;
-    // Subscribe first, then perform the authoritative read. A wakeup is only a
-    // hint; the fallback poll covers other replicas and process restarts.
+    let record = get_record(state, operation_id)
+        .await?
+        .ok_or_else(|| Status::not_found("update operation not found"))?;
+    let operation = public_operation(&record)?;
+    let operation_state = ConfigUpdateOperationState::try_from(operation.state).unwrap_or_default();
+    if terminal(operation_state) {
+        histogram!("openshell_config_update_operation_wait_seconds")
+            .record(started.elapsed().as_secs_f64());
+        return Ok(operation);
+    }
+
+    // Subscribe before the second authoritative read so a transition between
+    // the two reads cannot be missed. A wakeup is only a hint; the fallback
+    // poll covers other replicas and process restarts.
     let mut wake = state
         .config_update_operation_watch_bus
         .subscribe(operation_id);
@@ -1042,5 +1097,49 @@ mod tests {
             ConfigUpdateOperationState::try_from(after.operation.unwrap().state).unwrap(),
             ConfigUpdateOperationState::Pending
         );
+    }
+
+    #[test]
+    fn watch_subscription_drop_removes_only_its_channel() {
+        let bus = OperationWatchBus::new();
+        let old = bus.subscribe("operation");
+        assert_eq!(bus.len(), 1);
+
+        bus.notify("operation");
+        let replacement = bus.subscribe("operation");
+        drop(old);
+        assert_eq!(bus.len(), 1);
+
+        drop(replacement);
+        assert_eq!(bus.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn terminal_wait_does_not_register_a_watch_channel() {
+        let (state, record) = pending_test_operation().await;
+        let operation_id = record.operation.as_ref().unwrap().operation_id.clone();
+        mutate_record(&state, &operation_id, |stored| {
+            stored.operation.as_mut().unwrap().state = ConfigUpdateOperationState::Inactive.into();
+            true
+        })
+        .await
+        .unwrap();
+
+        wait_for_terminal(&state, &operation_id, Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(state.config_update_operation_watch_bus.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn timed_out_wait_removes_its_watch_channel() {
+        let (state, record) = pending_test_operation().await;
+        let operation_id = record.operation.as_ref().unwrap().operation_id.clone();
+
+        let error = wait_for_terminal(&state, &operation_id, Duration::from_millis(1))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::DeadlineExceeded);
+        assert_eq!(state.config_update_operation_watch_bus.len(), 0);
     }
 }

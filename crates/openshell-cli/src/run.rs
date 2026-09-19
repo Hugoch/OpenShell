@@ -73,6 +73,30 @@ use std::time::{Duration, Instant};
 use tonic::{Code, Status};
 
 const PROVISIONAL_CONTAINER_EXIT_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(5);
+const POLICY_WAIT_TIMEOUT_EXIT_CODE: i32 = 124;
+
+fn report_policy_wait_timeout(status: &Status) -> Option<i32> {
+    if status.code() != Code::DeadlineExceeded {
+        return None;
+    }
+    let operation_id = status
+        .metadata()
+        .get("operation-id")
+        .and_then(|value| value.to_str().ok());
+    if let Some(operation_id) = operation_id {
+        eprintln!(
+            "{} Timeout waiting for policy update operation {}; update remains committed",
+            "✗".red().bold(),
+            operation_id
+        );
+    } else {
+        eprintln!(
+            "{} Timeout waiting for policy update; update remains committed",
+            "✗".red().bold()
+        );
+    }
+    Some(POLICY_WAIT_TIMEOUT_EXIT_CODE)
+}
 
 fn report_config_update_operation(
     operation: Option<&ConfigUpdateOperation>,
@@ -4976,7 +5000,7 @@ pub async fn sandbox_policy_set(
     timeout_secs: u64,
     workspace: &str,
     tls: &TlsOptions,
-) -> Result<()> {
+) -> Result<i32> {
     let policy = load_sandbox_policy(Some(policy_path))?
         .ok_or_else(|| miette::miette!("No policy loaded from {policy_path}"))?;
 
@@ -4997,7 +5021,7 @@ pub async fn sandbox_policy_set(
         .and_then(|r| r.into_inner().revision)
         .map_or(0, |r| r.version);
 
-    let response = client
+    let response = match client
         .update_config(UpdateConfigRequest {
             sandbox: name.to_string(),
             workspace_scope: Some(openshell_core::proto::workspace_selector(
@@ -5016,7 +5040,16 @@ pub async fn sandbox_policy_set(
             ..Default::default()
         })
         .await
-        .into_diagnostic()?;
+    {
+        Ok(response) => response,
+        Err(status) if wait => {
+            if let Some(exit_code) = report_policy_wait_timeout(&status) {
+                return Ok(exit_code);
+            }
+            return Err(status).into_diagnostic();
+        }
+        Err(status) => return Err(status).into_diagnostic(),
+    };
 
     let resp = response.into_inner();
 
@@ -5027,7 +5060,7 @@ pub async fn sandbox_policy_set(
             resp.version,
             &resp.policy_hash[..12]
         );
-        return Ok(());
+        return Ok(0);
     }
 
     eprintln!(
@@ -5038,10 +5071,11 @@ pub async fn sandbox_policy_set(
     );
 
     if !wait {
-        return Ok(());
+        return Ok(0);
     }
 
-    report_config_update_operation(resp.operation.as_ref(), resp.version)
+    report_config_update_operation(resp.operation.as_ref(), resp.version)?;
+    Ok(0)
 }
 
 /// Preview or atomically submit explicitly scoped incremental policy operations.
@@ -5063,7 +5097,7 @@ pub async fn sandbox_policy_update(
     timeout_secs: u64,
     workspace: &str,
     tls: &TlsOptions,
-) -> Result<()> {
+) -> Result<i32> {
     if dry_run && wait {
         return Err(miette!("--wait cannot be combined with --dry-run"));
     }
@@ -5112,12 +5146,12 @@ pub async fn sandbox_policy_update(
         );
         print_policy_merge_warnings(&merged.warnings);
         print_sandbox_policy(&merged.policy);
-        return Ok(());
+        return Ok(0);
     }
 
     let current_version = current.version;
     let current_hash = current.policy_hash.clone();
-    let response = client
+    let response = match client
         .update_config(UpdateConfigRequest {
             sandbox: name.to_string(),
             workspace_scope: Some(openshell_core::proto::workspace_selector(
@@ -5136,8 +5170,16 @@ pub async fn sandbox_policy_update(
             ..Default::default()
         })
         .await
-        .into_diagnostic()?
-        .into_inner();
+    {
+        Ok(response) => response.into_inner(),
+        Err(status) if wait => {
+            if let Some(exit_code) = report_policy_wait_timeout(&status) {
+                return Ok(exit_code);
+            }
+            return Err(status).into_diagnostic();
+        }
+        Err(status) => return Err(status).into_diagnostic(),
+    };
 
     print_policy_merge_warnings(&merged.warnings);
 
@@ -5148,7 +5190,7 @@ pub async fn sandbox_policy_update(
             response.version,
             short_hash(&response.policy_hash)
         );
-        return Ok(());
+        return Ok(0);
     }
 
     eprintln!(
@@ -5159,10 +5201,11 @@ pub async fn sandbox_policy_update(
     );
 
     if !wait {
-        return Ok(());
+        return Ok(0);
     }
 
-    report_config_update_operation(response.operation.as_ref(), response.version)
+    report_config_update_operation(response.operation.as_ref(), response.version)?;
+    Ok(0)
 }
 
 pub async fn sandbox_policy_get(

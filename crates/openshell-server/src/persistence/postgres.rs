@@ -450,24 +450,48 @@ RETURNING resource_version, created_at_ms, updated_at_ms
             }
         };
         if let Some(projection) = sandbox_projection {
-            let result = sqlx::query(
+            let row = sqlx::query(
                 r"
+SELECT payload, resource_version
+FROM objects
+WHERE object_type = 'sandbox' AND id = $1
+FOR UPDATE
+",
+            )
+            .bind(projection.sandbox_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|error| map_db_error(&error))?
+            .ok_or_else(|| {
+                PersistenceError::Database(format!(
+                    "sandbox object {} not found",
+                    projection.sandbox_id
+                ))
+            })?;
+            let sandbox_payload: Vec<u8> = row.get("payload");
+            let current_version: i64 = row.try_get("resource_version").unwrap_or(1);
+            let current_version = current_version.max(1).cast_unsigned();
+            let (sandbox, changed) = projection.apply(&sandbox_payload, current_version)?;
+            if changed {
+                let result = sqlx::query(
+                    r"
 UPDATE objects
 SET payload = $2, updated_at_ms = $3, resource_version = resource_version + 1
 WHERE object_type = 'sandbox' AND id = $1 AND resource_version = $4
 ",
-            )
-            .bind(projection.sandbox_id)
-            .bind(projection.payload)
-            .bind(now_ms)
-            .bind(i64::try_from(projection.expected_resource_version).unwrap_or(i64::MAX))
-            .execute(&mut *tx)
-            .await
-            .map_err(|error| map_db_error(&error))?;
-            if result.rows_affected() != 1 {
-                return Err(PersistenceError::Conflict {
-                    current_resource_version: None,
-                });
+                )
+                .bind(projection.sandbox_id)
+                .bind(sandbox.encode_to_vec())
+                .bind(now_ms)
+                .bind(i64::try_from(current_version).unwrap_or(i64::MAX))
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| map_db_error(&error))?;
+                if result.rows_affected() != 1 {
+                    return Err(PersistenceError::Conflict {
+                        current_resource_version: Some(current_version),
+                    });
+                }
             }
         }
         insert_update_operation_postgres(&mut tx, &operation_record, now_ms).await?;

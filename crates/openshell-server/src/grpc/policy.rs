@@ -4167,14 +4167,10 @@ async fn handle_update_config_inner(
 
     let mut projected_annotations = response_annotations.clone();
     projected_annotations.extend(req.annotations.clone());
-    let sandbox_projection_payload = if projected_annotations == response_annotations {
+    let sandbox_projection_annotations = if projected_annotations == response_annotations {
         None
     } else {
-        let mut projected_sandbox = sandbox.clone();
-        if let Some(metadata) = projected_sandbox.metadata.as_mut() {
-            metadata.annotations.clone_from(&projected_annotations);
-        }
-        Some(projected_sandbox.encode_to_vec())
+        Some(&req.annotations)
     };
 
     if has_setting {
@@ -4225,11 +4221,10 @@ async fn handle_update_config_inner(
                     sandbox.object_name(),
                     &sandbox_settings,
                     &operation_record,
-                    sandbox_projection_payload
-                        .as_deref()
-                        .map(|payload| crate::persistence::AtomicSandboxProjection {
+                    sandbox_projection_annotations
+                        .map(|annotations| crate::persistence::AtomicSandboxProjection {
                             sandbox_id: &sandbox_id,
-                            payload,
+                            annotations,
                             expected_resource_version: req.expected_resource_version,
                         })
                         .as_ref(),
@@ -4313,11 +4308,10 @@ async fn handle_update_config_inner(
                 sandbox.object_name(),
                 &sandbox_settings,
                 &operation_record,
-                sandbox_projection_payload
-                    .as_deref()
-                    .map(|payload| crate::persistence::AtomicSandboxProjection {
+                sandbox_projection_annotations
+                    .map(|annotations| crate::persistence::AtomicSandboxProjection {
                         sandbox_id: &sandbox_id,
-                        payload,
+                        annotations,
                         expected_resource_version: req.expected_resource_version,
                     })
                     .as_ref(),
@@ -23587,7 +23581,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stopped_sandbox_setting_update_commits_with_inactive_operation() {
+    async fn stopped_sandbox_setting_update_with_default_version_commits_with_annotations() {
         let state = test_server_state().await;
         let mut sandbox = test_sandbox(
             "sb-inactive-operation",
@@ -23597,14 +23591,6 @@ mod tests {
         );
         sandbox.set_phase(openshell_core::proto::SandboxPhase::Stopped as i32);
         state.store.put_message(&sandbox).await.unwrap();
-        let sandbox = state
-            .store
-            .get_message_by_name::<Sandbox>("default", "inactive-operation")
-            .await
-            .unwrap()
-            .unwrap();
-        let expected_resource_version = sandbox.metadata.as_ref().unwrap().resource_version;
-
         let request = || {
             with_user(Request::new(UpdateConfigRequest {
                 sandbox: "inactive-operation".to_string(),
@@ -23615,7 +23601,7 @@ mod tests {
                 workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
                 consistency: ConfigUpdateConsistency::WaitForCompletion.into(),
                 idempotency_key: "inactive-setting-1".to_string(),
-                expected_resource_version,
+                expected_resource_version: 0,
                 annotations: HashMap::from([("change-ticket".to_string(), "1234".to_string())]),
                 ..Default::default()
             }))
