@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Minimal explicit policy for backend lifecycle suites that cannot consume the
+# locally migrated community-image fixture. Tests that need additional access
+# pass their own purpose-built policies.
+version: 1
