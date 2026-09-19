@@ -8,7 +8,7 @@ use openshell_bootstrap::{load_last_sandbox, save_last_sandbox};
 use openshell_cli::run;
 use openshell_cli::tls::TlsOptions;
 use openshell_core::proto::open_shell_server::{OpenShell, OpenShellServer};
-use openshell_core::proto::policy::{NetworkEndpoint, NetworkPolicyRule, SandboxPolicy};
+use openshell_core::proto::policy::{NetworkEndpoint, NetworkPolicyRule, PolicyDocument};
 use openshell_core::proto::{
     AttachSandboxProviderRequest, AttachSandboxProviderResponse, CreateProviderRequest,
     CreateSandboxRequest, CreateSshSessionRequest, CreateSshSessionResponse, DeleteProviderRequest,
@@ -487,7 +487,7 @@ impl OpenShell for TestOpenShell {
         assert_eq!(req.version, 3);
         assert!(!req.global);
 
-        let policy = SandboxPolicy {
+        let policy = PolicyDocument {
             version: 1,
             network_policies: std::iter::once((
                 "api".to_string(),
@@ -495,7 +495,7 @@ impl OpenShell for TestOpenShell {
                     name: "api".to_string(),
                     endpoints: vec![NetworkEndpoint {
                         host: "api.example.com".to_string(),
-                        port: 443,
+                        ports: vec![443],
                         protocol: "rest".to_string(),
                         enforcement: "enforce".to_string(),
                         access: "read-only".to_string(),

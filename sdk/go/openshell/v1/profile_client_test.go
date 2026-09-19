@@ -202,7 +202,7 @@ func seedProfile(mock *mockProfileServer, id, displayName string, category pb.Pr
 			{Name: "api-key", Description: "API Key", Required: true, Refresh: &pb.ProviderCredentialRefresh{}},
 		},
 		Endpoints: []*policyv1.NetworkEndpoint{
-			{Host: "localhost", Port: 8080, Protocol: "http"},
+			{Host: "localhost", Ports: []uint32{8080}, Protocol: "http"},
 		},
 		Binaries: []*policyv1.NetworkBinary{
 			{Path: "/usr/bin/provider"},
@@ -289,7 +289,7 @@ func TestProfileGet(t *testing.T) {
 	// Verify endpoint deep copy
 	require.Len(t, profile.Endpoints, 1)
 	assert.Equal(t, "localhost", profile.Endpoints[0].Host)
-	assert.Equal(t, uint32(8080), profile.Endpoints[0].Port)
+	assert.Equal(t, []uint32{8080}, profile.Endpoints[0].Ports)
 	// Verify binary deep copy
 	require.Len(t, profile.Binaries, 1)
 	assert.Equal(t, "/usr/bin/provider", profile.Binaries[0].Path)

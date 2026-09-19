@@ -2108,7 +2108,7 @@ trait StartupGateway: Send + Sync {
     async fn sync(
         &self,
         sandbox: &str,
-        policy: &openshell_core::proto::policy::SandboxPolicy,
+        policy: &openshell_core::proto::policy::PolicyDocument,
         workspace: &str,
     ) -> Result<openshell_core::grpc_client::SettingsPollResult>;
     async fn report(
@@ -2142,7 +2142,7 @@ impl StartupGateway for RemoteStartupGateway {
     async fn sync(
         &self,
         sandbox: &str,
-        policy: &openshell_core::proto::policy::SandboxPolicy,
+        policy: &openshell_core::proto::policy::PolicyDocument,
         workspace: &str,
     ) -> Result<openshell_core::grpc_client::SettingsPollResult> {
         openshell_core::grpc_client::sync_policy_and_fetch_snapshot(
@@ -5110,7 +5110,7 @@ network_policies:
   test:
     name: test
     endpoints:
-      - { host: example.com, port: 443 }
+      - { host: example.com, ports: [443] }
     binaries:
       - { path: /usr/bin/curl }
 "#,
@@ -5201,7 +5201,7 @@ network_policies:
     name: redis
     endpoints:
       - host: redis.example.com
-        port: 6379
+        ports: [6379]
         protocol: tcp
     binaries:
       - path: /usr/bin/redis-cli
@@ -5274,7 +5274,7 @@ network_policies:
         async fn sync(
             &self,
             _sandbox: &str,
-            _policy: &openshell_core::proto::policy::SandboxPolicy,
+            _policy: &openshell_core::proto::policy::PolicyDocument,
             _workspace: &str,
         ) -> Result<openshell_core::grpc_client::SettingsPollResult> {
             self.snapshot("").await

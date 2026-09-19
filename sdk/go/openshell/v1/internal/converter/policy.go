@@ -5,12 +5,13 @@ package converter
 
 import (
 	"fmt"
+	"strings"
 
+	"buf.build/go/protovalidate"
 	"github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	policyv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1"
 	sbv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -78,8 +79,8 @@ func PolicyChunkFromProto(c *pb.PolicyChunk) *types.PolicyChunk {
 		ReviewToken:                  c.GetReviewToken(),
 		CurrentEffectivePolicyHash:   c.GetCurrentEffectivePolicyHash(),
 		CandidateEffectivePolicyHash: c.GetCandidateEffectivePolicyHash(),
-		CurrentEffectivePolicy:       SandboxPolicyFromProto(c.GetCurrentEffectivePolicy()),
-		CandidateEffectivePolicy:     SandboxPolicyFromProto(c.GetCandidateEffectivePolicy()),
+		CurrentEffectivePolicy:       PolicyDocumentFromProto(c.GetCurrentEffectivePolicy()),
+		CandidateEffectivePolicy:     PolicyDocumentFromProto(c.GetCandidateEffectivePolicy()),
 	}
 }
 
@@ -106,15 +107,15 @@ func DraftPolicyFromProto(r *pb.GetDraftPolicyResponse) *types.DraftPolicy {
 	return result
 }
 
-// --- SandboxPolicy ---
+// --- PolicyDocument ---
 
-// SandboxPolicyFromProto converts a proto SandboxPolicy to an SDK SandboxPolicy.
+// PolicyDocumentFromProto converts a proto PolicyDocument to an SDK PolicyDocument.
 // Returns nil for nil input. All slice and map fields are deep-copied.
-func SandboxPolicyFromProto(p *policyv1.SandboxPolicy) *types.SandboxPolicy {
+func PolicyDocumentFromProto(p *policyv1.PolicyDocument) *types.PolicyDocument {
 	if p == nil {
 		return nil
 	}
-	result := &types.SandboxPolicy{
+	result := &types.PolicyDocument{
 		Version:    p.GetVersion(),
 		Filesystem: filesystemPolicyFromProto(p.GetFilesystemPolicy()),
 		Landlock:   landlockPolicyFromProto(p.GetLandlock()),
@@ -139,31 +140,357 @@ func SandboxPolicyFromProto(p *policyv1.SandboxPolicy) *types.SandboxPolicy {
 	return result
 }
 
-// SandboxPolicyFromInternalProto converts the supervisor's internal policy
-// response through the wire-compatible authored schema. Runtime-only fields
-// are discarded at this SDK boundary.
-func SandboxPolicyFromInternalProto(p *sbv1.SandboxPolicy) *types.SandboxPolicy {
+// PolicyDocumentFromInternalProto projects the supervisor's internal policy
+// response onto the authored policy contract. The schemas deliberately are
+// not wire-compatible: the internal message uses enums and normalized matcher
+// fields, and it carries runtime-only authority that must not cross this SDK
+// boundary.
+func PolicyDocumentFromInternalProto(p *sbv1.SandboxPolicy) *types.PolicyDocument {
 	if p == nil {
 		return nil
 	}
-	payload, err := proto.Marshal(p)
-	if err != nil {
-		return nil
-	}
-	public := &policyv1.SandboxPolicy{}
-	if err := proto.Unmarshal(payload, public); err != nil {
-		return nil
-	}
-	return SandboxPolicyFromProto(public)
+	return PolicyDocumentFromProto(publicPolicyFromInternalProto(p))
 }
 
-// SandboxPolicyToProto converts an SDK SandboxPolicy to a proto SandboxPolicy.
+func publicPolicyFromInternalProto(p *sbv1.SandboxPolicy) *policyv1.PolicyDocument {
+	result := &policyv1.PolicyDocument{Version: p.GetVersion()}
+	if filesystem := p.GetFilesystem(); filesystem != nil {
+		result.FilesystemPolicy = &policyv1.FilesystemPolicy{
+			IncludeWorkdir: filesystem.GetIncludeWorkdir(),
+			ReadOnly:       CopyStringSlice(filesystem.GetReadOnly()),
+			ReadWrite:      CopyStringSlice(filesystem.GetReadWrite()),
+		}
+	}
+	if landlock := p.GetLandlock(); landlock != nil {
+		result.Landlock = &policyv1.LandlockPolicy{Compatibility: landlock.GetCompatibility()}
+	}
+	if process := p.GetProcess(); process != nil {
+		result.Process = &policyv1.ProcessPolicy{
+			RunAsUser:  process.GetRunAsUser(),
+			RunAsGroup: process.GetRunAsGroup(),
+		}
+	}
+	if policies := p.GetNetworkPolicies(); policies != nil {
+		result.NetworkPolicies = make(map[string]*policyv1.NetworkPolicyRule, len(policies))
+		for name, rule := range policies {
+			if rule != nil {
+				result.NetworkPolicies[name] = publicNetworkRuleFromInternalProto(rule)
+			}
+		}
+	}
+	if middlewares := p.GetNetworkMiddlewares(); middlewares != nil {
+		result.NetworkMiddlewares = make(map[string]*policyv1.NetworkMiddleware, len(middlewares))
+		for name, middleware := range middlewares {
+			if middleware == nil {
+				continue
+			}
+			converted := &policyv1.NetworkMiddleware{
+				Name:       middleware.GetName(),
+				Middleware: middleware.GetMiddleware(),
+				Config:     middleware.GetConfig(),
+				OnError:    middleware.GetOnError(),
+				Order:      middleware.GetOrder(),
+			}
+			if endpoints := middleware.GetEndpoints(); endpoints != nil {
+				converted.Endpoints = &policyv1.MiddlewareEndpointSelector{
+					Include: CopyStringSlice(endpoints.GetInclude()),
+					Exclude: CopyStringSlice(endpoints.GetExclude()),
+				}
+			}
+			result.NetworkMiddlewares[name] = converted
+		}
+	}
+	return result
+}
+
+func publicNetworkRuleFromInternalProto(rule *sbv1.NetworkPolicyRule) *policyv1.NetworkPolicyRule {
+	result := &policyv1.NetworkPolicyRule{Name: rule.GetName()}
+	if endpoints := rule.GetEndpoints(); len(endpoints) > 0 {
+		result.Endpoints = make([]*policyv1.NetworkEndpoint, 0, len(endpoints))
+		for _, endpoint := range endpoints {
+			if endpoint != nil {
+				result.Endpoints = append(result.Endpoints, publicNetworkEndpointFromInternalProto(endpoint))
+			}
+		}
+	}
+	if binaries := rule.GetBinaries(); len(binaries) > 0 {
+		result.Binaries = make([]*policyv1.NetworkBinary, 0, len(binaries))
+		for _, binary := range binaries {
+			if binary != nil {
+				result.Binaries = append(result.Binaries, &policyv1.NetworkBinary{Path: binary.GetPath()})
+			}
+		}
+	}
+	return result
+}
+
+func publicNetworkEndpointFromInternalProto(endpoint *sbv1.NetworkEndpoint) *policyv1.NetworkEndpoint {
+	protocol := endpoint.GetProtocol()
+	result := &policyv1.NetworkEndpoint{
+		Host:                         endpoint.GetHost(),
+		Protocol:                     protocol,
+		Tls:                          publicTLSMode(endpoint.GetTls()),
+		Enforcement:                  publicEnforcementMode(endpoint.GetEnforcement()),
+		Access:                       publicAccessPreset(endpoint.GetAccess()),
+		AllowedIps:                   CopyStringSlice(endpoint.GetAllowedIps()),
+		AllowEncodedSlash:            endpoint.GetAllowEncodedSlash(),
+		PersistedQueries:             endpoint.GetPersistedQueries(),
+		GraphqlMaxBodyBytes:          endpoint.GetGraphqlMaxBodyBytes(),
+		Path:                         endpoint.GetPath(),
+		WebsocketCredentialRewrite:   endpoint.GetWebsocketCredentialRewrite(),
+		RequestBodyCredentialRewrite: endpoint.GetRequestBodyCredentialRewrite(),
+		AllowUninspectedCredentials:  endpoint.GetAllowUninspectedCredentials(),
+		CredentialSigning:            endpoint.GetCredentialSigning(),
+		SigningService:               endpoint.GetSigningService(),
+		SigningRegion:                endpoint.GetSigningRegion(),
+	}
+	if ports := endpoint.GetPorts(); len(ports) > 0 {
+		result.Ports = append([]uint32(nil), ports...)
+	} else if port := endpoint.GetPort(); port != 0 {
+		// Older internal records may still use the legacy scalar port. The
+		// authored contract has only the canonical list representation.
+		result.Ports = []uint32{port}
+	}
+	if binding := endpoint.GetCredentialBinding(); binding != nil {
+		result.CredentialBinding = &policyv1.NetworkCredentialBinding{Provider: binding.GetProvider()}
+	}
+	if operations := endpoint.GetGraphqlPersistedQueries(); len(operations) > 0 {
+		result.GraphqlPersistedQueries = make(map[string]*policyv1.GraphqlOperation, len(operations))
+		for name, operation := range operations {
+			if operation != nil {
+				result.GraphqlPersistedQueries[name] = &policyv1.GraphqlOperation{
+					OperationType: operation.GetOperationType(),
+					OperationName: operation.GetOperationName(),
+					Fields:        CopyStringSlice(operation.GetFields()),
+				}
+			}
+		}
+	}
+	if rules := endpoint.GetRules(); len(rules) > 0 {
+		result.Rules = make([]*policyv1.L7Rule, 0, len(rules))
+		for _, rule := range rules {
+			if rule != nil {
+				result.Rules = append(result.Rules, publicL7RuleFromInternalProto(protocol, endpoint.GetMcp(), rule))
+			}
+		}
+	}
+	if rules := endpoint.GetDenyRules(); len(rules) > 0 {
+		result.DenyRules = make([]*policyv1.L7DenyRule, 0, len(rules))
+		for _, rule := range rules {
+			if rule != nil {
+				result.DenyRules = append(result.DenyRules, publicL7DenyRuleFromInternalProto(protocol, endpoint.GetMcp(), rule))
+			}
+		}
+	}
+	if strings.EqualFold(protocol, "mcp") {
+		if options := endpoint.GetMcp(); options != nil || endpoint.GetJsonRpcMaxBodyBytes() != 0 {
+			result.Mcp = &policyv1.McpConfig{MaxBodyBytes: endpoint.GetJsonRpcMaxBodyBytes()}
+			if options != nil {
+				result.Mcp.Versions = CopyStringSlice(options.GetVersions())
+				result.Mcp.StrictToolNames = CopyBoolPtr(options.StrictToolNames)
+				result.Mcp.AllowAllKnownMcpMethods = CopyBoolPtr(options.AllowAllKnownMcpMethods)
+			}
+		}
+	} else if endpoint.GetJsonRpcMaxBodyBytes() != 0 {
+		result.JsonRpc = &policyv1.JsonRpcConfig{MaxBodyBytes: endpoint.GetJsonRpcMaxBodyBytes()}
+	}
+	return result
+}
+
+func publicL7RuleFromInternalProto(protocol string, options *sbv1.McpOptions, rule *sbv1.L7Rule) *policyv1.L7Rule {
+	result := &policyv1.L7Rule{}
+	if allow := rule.GetAllow(); allow != nil {
+		tool, params := publicParamsFromInternalProto(protocol, allow.GetParams())
+		result.Allow = &policyv1.L7Allow{
+			Method:        publicMCPMethod(protocol, options, allow.GetMethod(), tool != nil),
+			Path:          allow.GetPath(),
+			Command:       allow.GetCommand(),
+			Query:         publicMatcherMapFromInternalProto(allow.GetQuery()),
+			OperationType: allow.GetOperationType(),
+			OperationName: allow.GetOperationName(),
+			Fields:        CopyStringSlice(allow.GetFields()),
+			Tool:          tool,
+			Params:        params,
+		}
+	}
+	return result
+}
+
+func publicL7DenyRuleFromInternalProto(protocol string, options *sbv1.McpOptions, rule *sbv1.L7DenyRule) *policyv1.L7DenyRule {
+	tool, params := publicParamsFromInternalProto(protocol, rule.GetParams())
+	return &policyv1.L7DenyRule{
+		Method:        publicMCPMethod(protocol, options, rule.GetMethod(), tool != nil),
+		Path:          rule.GetPath(),
+		Command:       rule.GetCommand(),
+		Query:         publicMatcherMapFromInternalProto(rule.GetQuery()),
+		OperationType: rule.GetOperationType(),
+		OperationName: rule.GetOperationName(),
+		Fields:        CopyStringSlice(rule.GetFields()),
+		Tool:          tool,
+		Params:        params,
+	}
+}
+
+func publicMCPMethod(protocol string, options *sbv1.McpOptions, method string, hasTool bool) string {
+	if !strings.EqualFold(protocol, "mcp") {
+		return method
+	}
+	if !hasTool && method == "*" {
+		return ""
+	}
+	if hasTool && method == "tools/call" && options != nil && options.GetAllowAllKnownMcpMethods() {
+		return ""
+	}
+	return method
+}
+
+func publicParamsFromInternalProto(protocol string, params map[string]*sbv1.L7QueryMatcher) (*policyv1.Matcher, map[string]*policyv1.ParameterMatcher) {
+	if len(params) == 0 {
+		return nil, nil
+	}
+	remaining := params
+	var tool *policyv1.Matcher
+	if strings.EqualFold(protocol, "mcp") {
+		remaining = make(map[string]*sbv1.L7QueryMatcher, len(params))
+		for name, matcher := range params {
+			if name == "name" {
+				tool = publicMatcherFromInternalProto(matcher)
+			} else {
+				remaining[name] = matcher
+			}
+		}
+		if nested, ok := publicNestedParamsFromInternalProto(remaining); ok {
+			return tool, nested
+		}
+	}
+	return tool, publicFlatParamsFromInternalProto(remaining)
+}
+
+func publicNestedParamsFromInternalProto(params map[string]*sbv1.L7QueryMatcher) (map[string]*policyv1.ParameterMatcher, bool) {
+	if len(params) == 0 {
+		return nil, true
+	}
+	result := make(map[string]*policyv1.ParameterMatcher, len(params))
+	for name, matcher := range params {
+		parts := strings.Split(name, ".")
+		if len(parts) == 0 {
+			return nil, false
+		}
+		current := result
+		for index, part := range parts {
+			if part == "" {
+				return nil, false
+			}
+			last := index == len(parts)-1
+			existing, found := current[part]
+			if last {
+				if found {
+					return nil, false
+				}
+				current[part] = &policyv1.ParameterMatcher{Kind: &policyv1.ParameterMatcher_Matcher{
+					Matcher: publicMatcherFromInternalProto(matcher),
+				}}
+				continue
+			}
+			if !found {
+				existing = &policyv1.ParameterMatcher{Kind: &policyv1.ParameterMatcher_Object{
+					Object: &policyv1.ParameterObject{Fields: make(map[string]*policyv1.ParameterMatcher)},
+				}}
+				current[part] = existing
+			}
+			object := existing.GetObject()
+			if object == nil {
+				return nil, false
+			}
+			current = object.Fields
+		}
+	}
+	return result, true
+}
+
+func publicFlatParamsFromInternalProto(params map[string]*sbv1.L7QueryMatcher) map[string]*policyv1.ParameterMatcher {
+	if len(params) == 0 {
+		return nil
+	}
+	result := make(map[string]*policyv1.ParameterMatcher, len(params))
+	for name, matcher := range params {
+		result[name] = &policyv1.ParameterMatcher{Kind: &policyv1.ParameterMatcher_Matcher{
+			Matcher: publicMatcherFromInternalProto(matcher),
+		}}
+	}
+	return result
+}
+
+func publicMatcherMapFromInternalProto(matchers map[string]*sbv1.L7QueryMatcher) map[string]*policyv1.Matcher {
+	if len(matchers) == 0 {
+		return nil
+	}
+	result := make(map[string]*policyv1.Matcher, len(matchers))
+	for name, matcher := range matchers {
+		result[name] = publicMatcherFromInternalProto(matcher)
+	}
+	return result
+}
+
+func publicMatcherFromInternalProto(matcher *sbv1.L7QueryMatcher) *policyv1.Matcher {
+	if matcher != nil && len(matcher.GetAny()) > 0 {
+		return &policyv1.Matcher{Kind: &policyv1.Matcher_Any{Any: &policyv1.AnyMatcher{
+			Values: CopyStringSlice(matcher.GetAny()),
+		}}}
+	}
+	glob := ""
+	if matcher != nil {
+		glob = matcher.GetGlob()
+	}
+	return &policyv1.Matcher{Kind: &policyv1.Matcher_Glob{Glob: glob}}
+}
+
+func publicTLSMode(mode sbv1.NetworkTlsMode) string {
+	// Numeric cases keep the explicit projection compatible with deprecated
+	// internal enum values without making new SDK code depend on their names.
+	switch int32(mode) {
+	case 1:
+		return "skip"
+	case 2:
+		return "terminate"
+	case 3:
+		return "passthrough"
+	default:
+		return ""
+	}
+}
+
+func publicEnforcementMode(mode sbv1.NetworkEnforcementMode) string {
+	switch mode {
+	case sbv1.NetworkEnforcementMode_NETWORK_ENFORCEMENT_MODE_ENFORCE:
+		return "enforce"
+	case sbv1.NetworkEnforcementMode_NETWORK_ENFORCEMENT_MODE_AUDIT:
+		return "audit"
+	default:
+		return ""
+	}
+}
+
+func publicAccessPreset(preset sbv1.NetworkAccessPreset) string {
+	switch preset {
+	case sbv1.NetworkAccessPreset_NETWORK_ACCESS_PRESET_READ_ONLY:
+		return "read-only"
+	case sbv1.NetworkAccessPreset_NETWORK_ACCESS_PRESET_READ_WRITE:
+		return "read-write"
+	case sbv1.NetworkAccessPreset_NETWORK_ACCESS_PRESET_FULL:
+		return "full"
+	default:
+		return ""
+	}
+}
+
+// PolicyDocumentToProto converts an SDK PolicyDocument to a proto PolicyDocument.
 // Returns nil for nil input. All slice and map fields are deep-copied.
-func SandboxPolicyToProto(p *types.SandboxPolicy) *policyv1.SandboxPolicy {
+func PolicyDocumentToProto(p *types.PolicyDocument) *policyv1.PolicyDocument {
 	if p == nil {
 		return nil
 	}
-	result := &policyv1.SandboxPolicy{
+	result := &policyv1.PolicyDocument{
 		Version:          p.Version,
 		FilesystemPolicy: filesystemPolicyToProto(p.Filesystem),
 		Landlock:         landlockPolicyToProto(p.Landlock),
@@ -184,10 +511,10 @@ func SandboxPolicyToProto(p *types.SandboxPolicy) *policyv1.SandboxPolicy {
 	return result
 }
 
-// SandboxPolicyToProtoChecked converts middleware configuration without
+// PolicyDocumentToProtoChecked converts middleware configuration without
 // silently discarding values unsupported by protobuf Struct.
-func SandboxPolicyToProtoChecked(p *types.SandboxPolicy) (*policyv1.SandboxPolicy, error) {
-	result := SandboxPolicyToProto(p)
+func PolicyDocumentToProtoChecked(p *types.PolicyDocument) (*policyv1.PolicyDocument, error) {
+	result := PolicyDocumentToProto(p)
 	if p == nil {
 		return result, nil
 	}
@@ -200,6 +527,9 @@ func SandboxPolicyToProtoChecked(p *types.SandboxPolicy) (*policyv1.SandboxPolic
 			return nil, fmt.Errorf("network middleware %q config: %w", name, err)
 		}
 		result.NetworkMiddlewares[name].Config = config
+	}
+	if err := protovalidate.Validate(result); err != nil {
+		return nil, fmt.Errorf("policy document validation: %w", err)
 	}
 	return result, nil
 }
@@ -321,7 +651,7 @@ func SandboxPolicyRevisionFromProto(r *pb.SandboxPolicyRevision) *types.SandboxP
 		LoadError:  r.GetLoadError(),
 		CreatedAt:  TimeFromProto(r.GetCreatedTime()),
 		LoadedAt:   TimeFromProto(r.GetLoadedTime()),
-		Policy:     SandboxPolicyFromProto(r.GetPolicy()),
+		Policy:     PolicyDocumentFromProto(r.GetPolicy()),
 		Provenance: CopyStringMap(r.GetProvenance()),
 	}
 }

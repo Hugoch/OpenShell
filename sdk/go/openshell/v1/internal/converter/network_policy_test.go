@@ -20,11 +20,10 @@ func TestNetworkPolicyRuleFromProto(t *testing.T) {
 		Endpoints: []*policyv1.NetworkEndpoint{
 			{
 				Host:                         "api.example.com",
-				Port:                         443,
 				Protocol:                     "rest",
-				Tls:                          sbv1.NetworkTlsMode_NETWORK_TLS_MODE_SKIP,
-				Enforcement:                  sbv1.NetworkEnforcementMode_NETWORK_ENFORCEMENT_MODE_ENFORCE,
-				Access:                       sbv1.NetworkAccessPreset_NETWORK_ACCESS_PRESET_READ_ONLY,
+				Tls:                          "skip",
+				Enforcement:                  "enforce",
+				Access:                       "read-only",
 				Ports:                        []uint32{80, 443},
 				AllowedIps:                   []string{"10.0.0.1", "10.0.0.2"},
 				AllowEncodedSlash:            true,
@@ -97,7 +96,6 @@ func TestNetworkPolicyRuleFromProto(t *testing.T) {
 	require.Len(t, rule.Endpoints, 1)
 	ep := rule.Endpoints[0]
 	assert.Equal(t, "api.example.com", ep.Host)
-	assert.Equal(t, uint32(443), ep.Port)
 	assert.Equal(t, "rest", ep.Protocol)
 	assert.Equal(t, v1.NetworkTLSModeSkip, ep.TLS)
 	assert.Equal(t, v1.NetworkEnforcementModeEnforce, ep.Enforcement)
@@ -177,7 +175,6 @@ func TestNetworkPolicyRuleRoundTrip(t *testing.T) {
 		Endpoints: []v1.PolicyNetworkEndpoint{
 			{
 				Host:                         "gql.example.com",
-				Port:                         8080,
 				Protocol:                     "graphql",
 				TLS:                          v1.NetworkTLSModeSkip,
 				Enforcement:                  v1.NetworkEnforcementModeAudit,
@@ -250,7 +247,6 @@ func TestNetworkPolicyRuleRoundTrip(t *testing.T) {
 	assert.Equal(t, original.Name, roundTrip.Name)
 	require.Len(t, roundTrip.Endpoints, 1)
 	assert.Equal(t, original.Endpoints[0].Host, roundTrip.Endpoints[0].Host)
-	assert.Equal(t, original.Endpoints[0].Port, roundTrip.Endpoints[0].Port)
 	assert.Equal(t, original.Endpoints[0].Protocol, roundTrip.Endpoints[0].Protocol)
 	assert.Equal(t, original.Endpoints[0].TLS, roundTrip.Endpoints[0].TLS)
 	assert.Equal(t, original.Endpoints[0].Enforcement, roundTrip.Endpoints[0].Enforcement)

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"slices"
 
+	"buf.build/go/protovalidate"
 	v1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	policyv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/policyv1"
 	sbv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // --- SettingValue oneof conversion ---
@@ -134,8 +136,8 @@ func SandboxConfigFromProto(resp *sbv1.GetSandboxConfigResponse) *v1.SandboxConf
 		PolicyValidationFailureMode: resp.GetPolicyValidationFailureMode(),
 	}
 
-	// Convert proto SandboxPolicy to typed SDK SandboxPolicy.
-	sc.Policy = SandboxPolicyFromInternalProto(resp.GetPolicy())
+	// Project the supervisor's internal effective policy onto the public SDK model.
+	sc.Policy = PolicyDocumentFromInternalProto(resp.GetPolicy())
 
 	// Deep-copy settings map.
 	if m := resp.GetSettings(); len(m) > 0 {
@@ -193,8 +195,8 @@ func ConfigUpdateToProto(cu *v1.ConfigUpdate) (*pb.UpdateConfigRequest, error) {
 		req.Sandbox = cu.Name
 	}
 
-	// Convert typed SDK SandboxPolicy to proto SandboxPolicy.
-	policy, err := SandboxPolicyToProtoChecked(cu.Policy)
+	// Convert typed SDK PolicyDocument to proto PolicyDocument.
+	policy, err := PolicyDocumentToProtoChecked(cu.Policy)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +290,61 @@ func PolicyMergeOperationToProto(op *v1.PolicyMergeOperation) (*pb.PolicyMergeOp
 			},
 		}
 	}
+	if err := validatePolicyMergeOperationContract(pmo); err != nil {
+		return nil, err
+	}
 	return pmo, nil
+}
+
+func validatePolicyMergeOperationContract(operation *pb.PolicyMergeOperation) error {
+	validate := func(name string, message interface{ ProtoReflect() protoreflect.Message }) error {
+		if err := protovalidate.Validate(message); err != nil {
+			return fmt.Errorf("%s validation: %w", name, err)
+		}
+		return nil
+	}
+
+	switch op := operation.GetOperation().(type) {
+	case *pb.PolicyMergeOperation_AddRule:
+		document := &policyv1.PolicyDocument{
+			Version: 1,
+			NetworkPolicies: map[string]*policyv1.NetworkPolicyRule{
+				op.AddRule.GetRuleName(): op.AddRule.GetRule(),
+			},
+		}
+		return validate("add rule", document)
+	case *pb.PolicyMergeOperation_AddDenyRules:
+		for index, rule := range op.AddDenyRules.GetDenyRules() {
+			if err := validate(fmt.Sprintf("deny rule [%d]", index), rule); err != nil {
+				return err
+			}
+		}
+		return validateL7TargetBinaries(op.AddDenyRules.GetTarget(), validate)
+	case *pb.PolicyMergeOperation_AddAllowRules:
+		for index, rule := range op.AddAllowRules.GetRules() {
+			if err := validate(fmt.Sprintf("allow rule [%d]", index), rule); err != nil {
+				return err
+			}
+		}
+		return validateL7TargetBinaries(op.AddAllowRules.GetTarget(), validate)
+	default:
+		return nil
+	}
+}
+
+func validateL7TargetBinaries(
+	target *pb.L7RuleTarget,
+	validate func(string, interface{ ProtoReflect() protoreflect.Message }) error,
+) error {
+	if target == nil {
+		return nil
+	}
+	for index, binary := range target.GetBinaries() {
+		if err := validate(fmt.Sprintf("target binary [%d]", index), binary); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // l7RuleTargetToProto preserves the caller's declaration without inferring scope.

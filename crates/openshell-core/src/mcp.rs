@@ -115,7 +115,7 @@ mod tests {
             description: "source-owned description".to_string(),
             endpoints: vec![crate::proto::policy::NetworkEndpoint {
                 host: "mcp.example.com".to_string(),
-                port: 443,
+                ports: vec![443],
                 protocol: protocol.to_string(),
                 mcp: options,
                 ..crate::proto::policy::NetworkEndpoint::default()
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(profile.display_name, original.display_name);
         assert_eq!(profile.description, original.description);
         assert_eq!(profile.endpoints[0].host, original.endpoints[0].host);
-        assert_eq!(profile.endpoints[0].port, original.endpoints[0].port);
+        assert_eq!(profile.endpoints[0].ports, original.endpoints[0].ports);
         assert_eq!(
             profile.endpoints[0].protocol,
             original.endpoints[0].protocol

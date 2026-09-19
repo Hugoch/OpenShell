@@ -3366,10 +3366,13 @@ impl App {
                         } else {
                             format!(" path={}", endpoint.path)
                         };
-                        format!(
-                            "{}:{} {protocol} {access}{path}",
-                            endpoint.host, endpoint.port
-                        )
+                        let ports = endpoint
+                            .ports
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        format!("{}:{ports} {protocol} {access}{path}", endpoint.host)
                     })
                     .collect::<Vec<_>>();
                 if lines.is_empty() {

@@ -3439,7 +3439,7 @@ network_policies:
     name: parity
     endpoints:
       - host: rest.parity.test
-        port: 443
+        ports: [443]
         path: /items/**
         protocol: rest
         enforcement: enforce
@@ -3447,7 +3447,7 @@ network_policies:
         rules:
           - allow: { method: GET, path: /items/** }
       - host: graphql.parity.test
-        port: 443
+        ports: [443]
         path: /graphql
         protocol: graphql
         enforcement: enforce
@@ -3458,7 +3458,7 @@ network_policies:
               operation_name: GetWidget
               fields: [id, name]
       - host: websocket.parity.test
-        port: 443
+        ports: [443]
         path: /graphql
         protocol: websocket
         enforcement: enforce
@@ -3469,7 +3469,7 @@ network_policies:
               operation_type: subscription
               fields: [messageAdded]
       - host: jsonrpc.parity.test
-        port: 443
+        ports: [443]
         path: /rpc
         protocol: json-rpc
         enforcement: enforce
@@ -3477,7 +3477,7 @@ network_policies:
         rules:
           - allow: { method: status.get }
       - host: mcp.parity.test
-        port: 443
+        ports: [443]
         path: /mcp
         protocol: mcp
         enforcement: enforce
@@ -3665,7 +3665,7 @@ network_policies:
     name: matchers
     endpoints:
       - host: matchers.parity.test
-        port: 443
+        ports: [443]
         protocol: {protocol}
         enforcement: enforce
         rules:
@@ -3777,7 +3777,7 @@ network_policies:
     name: parity
     endpoints:
       - host: sql-l4.parity.test
-        port: 443
+        ports: [443]
         protocol: "{protocol}"
         {fields}
     binaries:
@@ -8741,7 +8741,7 @@ network_policies:
     name: native_tcp
     endpoints:
       - host: database.example.com
-        port: 5432
+        ports: [5432]
         protocol: tcp
     binaries:
       - path: /usr/bin/client
@@ -8789,7 +8789,7 @@ network_policies:
     name: native_tcp
     endpoints:
       - host: database.example.com
-        port: 5432
+        ports: [5432]
         protocol: tcp
         credential_binding:
           provider: database
@@ -10977,7 +10977,7 @@ network_policies:
   grant:
     endpoints:
       - host: example.com
-        port: 443
+        ports: [443]
         protocol: rest
         enforcement: enforce
         rules: [{{ allow: {{ method: GET, path: "/**" }} }}]
@@ -10985,7 +10985,7 @@ network_policies:
   deny:
     endpoints:
       - host: example.com
-        port: 443
+        ports: [443]
         protocol: rest
         enforcement: enforce
         rules: [{{ allow: {{ method: GET, path: "/**" }} }}]

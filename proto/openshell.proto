@@ -959,7 +959,7 @@ message SandboxSpec {
   // Container or VM template used to provision the sandbox.
   SandboxTemplate template = 6;
   // Required sandbox policy configuration.
-  openshell.policy.v1.SandboxPolicy policy = 7;
+  openshell.policy.v1.PolicyDocument policy = 7;
   // Provider names to attach to this sandbox.
   repeated string providers = 8;
   // Portable resource requirements used by the gateway for driver selection
@@ -2542,7 +2542,7 @@ message UpdateConfigRequest {
   //
   // Global scope (`global=true`):
   // - applies to all sandboxes in full (no merge).
-  openshell.policy.v1.SandboxPolicy policy = 2;
+  openshell.policy.v1.PolicyDocument policy = 2;
   // Optional single setting key to mutate.
   string setting_key = 3;
   // Setting value for upsert operations.
@@ -2753,7 +2753,7 @@ message SandboxPolicyRevision {
   // Time when this revision was loaded by the sandbox. Absent if not loaded.
   google.protobuf.Timestamp loaded_time = 106;
   // The full policy (only populated when explicitly requested).
-  openshell.policy.v1.SandboxPolicy policy = 7;
+  openshell.policy.v1.PolicyDocument policy = 7;
   // Immutable provenance supplied with this policy revision.
   map<string, string> provenance = 8;
 }
@@ -3100,8 +3100,8 @@ message PolicyChunk {
   string candidate_effective_policy_hash = 22;
   // Complete effective policies used for review. These contain policy
   // configuration only; credential secret values are never materialized.
-  openshell.policy.v1.SandboxPolicy current_effective_policy = 23;
-  openshell.policy.v1.SandboxPolicy candidate_effective_policy = 24;
+  openshell.policy.v1.PolicyDocument current_effective_policy = 23;
+  openshell.policy.v1.PolicyDocument candidate_effective_policy = 24;
 }
 
 // Notification that the draft policy was updated.

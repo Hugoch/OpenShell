@@ -1165,13 +1165,13 @@ pub(super) async fn resolve_provider_environment_from_records_with_policy_bindin
                 .endpoints
                 .iter()
                 .flat_map(|endpoint| {
-                    endpoint_ports(endpoint.port, &endpoint.ports)
-                        .into_iter()
-                        .map(move |port| StaticCredentialEndpointBinding {
+                    endpoint.ports.iter().copied().map(move |port| {
+                        StaticCredentialEndpointBinding {
                             host: endpoint.host.clone(),
                             port,
                             path: endpoint.path.clone(),
-                        })
+                        }
+                    })
                 })
                 .collect::<Vec<_>>()
         });
@@ -1521,7 +1521,7 @@ fn insert_dynamic_credentials_for_profile(
             continue;
         }
         for endpoint in &profile.endpoints {
-            for port in endpoint_ports(endpoint.port, &endpoint.ports) {
+            for &port in &endpoint.ports {
                 insert_dynamic_credentials_for_endpoint(
                     dynamic_creds,
                     &endpoint.host,
@@ -1533,14 +1533,6 @@ fn insert_dynamic_credentials_for_profile(
                 );
             }
         }
-    }
-}
-
-fn endpoint_ports(port: u32, ports: &[u32]) -> Vec<u32> {
-    if ports.is_empty() {
-        if port == 0 { Vec::new() } else { vec![port] }
-    } else {
-        ports.iter().copied().filter(|port| *port != 0).collect()
     }
 }
 
@@ -2104,7 +2096,7 @@ fn dynamic_token_grant_bindings_for_profile(
             continue;
         }
         for endpoint in &profile.endpoints {
-            for port in endpoint_ports(endpoint.port, &endpoint.ports) {
+            for &port in &endpoint.ports {
                 push_dynamic_token_grant_bindings_for_endpoint(
                     &mut bindings,
                     provider_name,
@@ -3676,10 +3668,10 @@ async fn profile_attached_sandbox_diagnostics(
                     .credentials
                     .keys()
                     .any(|key| !is_non_injectable_provider_credential(&provider, key));
-                let has_usable_endpoint = profile.to_proto().endpoints.iter().any(|endpoint| {
-                    !endpoint_ports(endpoint.port, &endpoint.ports).is_empty()
-                        && !endpoint.host.trim().is_empty()
-                });
+                let has_usable_endpoint =
+                    profile.to_proto().endpoints.iter().any(|endpoint| {
+                        !endpoint.ports.is_empty() && !endpoint.host.trim().is_empty()
+                    });
                 let has_policy_binding = super::policy::policy_has_credential_binding_for_provider(
                     &base_policy,
                     provider_name,
@@ -5352,7 +5344,7 @@ mod tests {
                 .iter()
                 .map(|(host, _)| NetworkEndpoint {
                     host: (*host).to_string(),
-                    port: 80,
+                    ports: vec![80],
                     ..Default::default()
                 })
                 .collect(),
@@ -5387,7 +5379,7 @@ mod tests {
         profile.credentials = vec![token_grant_credential("access_token")];
         profile.endpoints = vec![NetworkEndpoint {
             host: host.to_string(),
-            port,
+            ports: vec![port],
             path: path.to_string(),
             protocol: "rest".to_string(),
             access: "full".to_string(),
@@ -5530,7 +5522,7 @@ mod tests {
         profile.credentials = vec![token_grant_credential("access_token")];
         profile.endpoints = vec![NetworkEndpoint {
             host: "api.example.com".to_string(),
-            port: 443,
+            ports: vec![443],
             path: "/v1/**".to_string(),
             protocol: "rest".to_string(),
             access: "full".to_string(),
@@ -5620,7 +5612,7 @@ mod tests {
         updated_profile.display_name = "Updated API".to_string();
         updated_profile.endpoints = vec![NetworkEndpoint {
             host: "api.updated.example".to_string(),
-            port: 443,
+            ports: vec![443],
             ..Default::default()
         }];
         let response = handle_update_provider_profiles(
@@ -5890,7 +5882,7 @@ mod tests {
         profile.credentials = vec![token_grant_credential("access_token")];
         profile.endpoints = vec![NetworkEndpoint {
             host: "api.example.com".to_string(),
-            port: 443,
+            ports: vec![443],
             path: "/v1/**".to_string(),
             protocol: "rest".to_string(),
             access: "full".to_string(),
@@ -6142,7 +6134,7 @@ mod tests {
         let mut profile = custom_profile(id);
         profile.endpoints.push(NetworkEndpoint {
             host: String::new(),
-            port: 0,
+            ports: vec![0],
             ..Default::default()
         });
         profile
@@ -6601,7 +6593,7 @@ mod tests {
         let mut initial_profile = custom_profile("fanout-ambiguity");
         initial_profile.endpoints.push(NetworkEndpoint {
             host: "other.example.com".to_string(),
-            port: 443,
+            ports: vec![443],
             ..Default::default()
         });
         let imported = handle_import_provider_profiles(
@@ -6645,7 +6637,7 @@ mod tests {
                 }),
                 spec: Some(SandboxSpec {
                     providers: vec!["fanout-provider".to_string()],
-                    policy: Some(openshell_core::proto::policy::SandboxPolicy {
+                    policy: Some(openshell_core::proto::policy::PolicyDocument {
                         version: 1,
                         network_policies: HashMap::from([(
                             "base".to_string(),
@@ -6653,7 +6645,7 @@ mod tests {
                                 name: "base".to_string(),
                                 endpoints: vec![NetworkEndpoint {
                                     host: "api.example.com".to_string(),
-                                    port: 443,
+                                    ports: vec![443],
                                     ..Default::default()
                                 }],
                                 ..Default::default()
@@ -6672,7 +6664,7 @@ mod tests {
         conflicting_profile.resource_version = resource_version;
         conflicting_profile.endpoints.push(NetworkEndpoint {
             host: "api.example.com".to_string(),
-            port: 443,
+            ports: vec![443],
             tls: "skip".to_string(),
             ..Default::default()
         });
@@ -6889,6 +6881,10 @@ mod tests {
     #[tokio::test]
     async fn import_provider_profiles_rejects_mixed_batch_without_partial_import() {
         let state = test_server_state().await;
+        let mut oversized = custom_profile("bulk-bad");
+        oversized.binaries.push(NetworkBinary {
+            path: "x".repeat(4097),
+        });
         let response = handle_import_provider_profiles(
             &state,
             authed_request(ImportProviderProfilesRequest {
@@ -6899,7 +6895,7 @@ mod tests {
                         source: "bulk-one.yaml".to_string(),
                     },
                     ProviderProfileImportItem {
-                        profile: Some(custom_profile_with_invalid_endpoint("bulk-bad")),
+                        profile: Some(oversized),
                         source: "bulk-bad.yaml".to_string(),
                     },
                     ProviderProfileImportItem {
@@ -6920,8 +6916,10 @@ mod tests {
         assert!(response.profiles.is_empty());
         assert!(response.diagnostics.iter().any(|diagnostic| {
             diagnostic.profile_id == "bulk-bad"
-                && diagnostic.field == "endpoints[0]"
-                && diagnostic.message.contains("invalid endpoint")
+                && diagnostic.field == "profile"
+                && diagnostic
+                    .message
+                    .contains("invalid authored network policy")
         }));
 
         for id in ["bulk-one", "bulk-two"] {
@@ -7055,8 +7053,10 @@ mod tests {
         assert!(!response.valid);
         assert!(response.diagnostics.iter().any(|diagnostic| {
             diagnostic.profile_id == "lint-bad"
-                && diagnostic.field == "endpoints[0]"
-                && diagnostic.message.contains("invalid endpoint")
+                && diagnostic.field == "profile"
+                && diagnostic
+                    .message
+                    .contains("invalid authored network policy")
         }));
 
         for id in ["lint-one", "lint-two"] {
@@ -9834,7 +9834,7 @@ mod tests {
         profile.credentials = vec![static_credential("token", "GITHUB_TOKEN", true)];
         profile.endpoints = vec![NetworkEndpoint {
             host: "github.enterprise.example".to_string(),
-            port: 443,
+            ports: vec![443],
             allow_uninspected_credentials: true,
             ..Default::default()
         }];
@@ -10004,7 +10004,7 @@ mod tests {
         ];
         profile.endpoints = vec![NetworkEndpoint {
             host: "api.example.com".to_string(),
-            port: 443,
+            ports: vec![443],
             allow_uninspected_credentials: true,
             ..Default::default()
         }];
@@ -11019,7 +11019,7 @@ mod tests {
         profile.credentials = vec![refreshable_credential("access_token", "ACCESS_TOKEN")];
         profile.endpoints = vec![NetworkEndpoint {
             host: "api.example.com".to_string(),
-            port: 443,
+            ports: vec![443],
             path: "/v1/**".to_string(),
             protocol: "rest".to_string(),
             access: "full".to_string(),

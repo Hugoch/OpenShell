@@ -534,7 +534,7 @@ mod tests {
         let rule = proposals[0].proposed_rule.as_ref().unwrap();
         assert_eq!(rule.endpoints.len(), 1);
         assert_eq!(rule.endpoints[0].host, "api.example.com");
-        assert_eq!(rule.endpoints[0].port, 443);
+        assert_eq!(rule.endpoints[0].ports, vec![443]);
         assert_eq!(rule.binaries.len(), 1);
         assert_eq!(rule.binaries[0].path, "/usr/bin/curl");
         // No L7 fields when no samples provided.

@@ -6,15 +6,16 @@ syntax = "proto3";
 package openshell.policy.v1;
 
 import "google/protobuf/struct.proto";
+import "buf/validate/validate.proto";
 
 // Author-controlled sandbox policy.
 //
 // This package is the public policy contract used by policy files and SDKs.
 // Runtime-derived authority and normalization state live in
 // openshell.sandbox.v1 and cannot be supplied through these messages.
-message SandboxPolicy {
+message PolicyDocument {
   // Authored policy schema version. The only supported value is 1.
-  uint32 version = 1;
+  uint32 version = 1 [(buf.validate.field).uint32.const = 1];
   // Filesystem access policy. Absence enables the runtime workdir default;
   // a present empty message explicitly disables that default.
   FilesystemPolicy filesystem_policy = 2;
@@ -23,9 +24,15 @@ message SandboxPolicy {
   // Process identity policy.
   ProcessPolicy process = 4;
   // Network rules keyed by stable policy-local name.
-  map<string, NetworkPolicyRule> network_policies = 5;
+  map<string, NetworkPolicyRule> network_policies = 5 [(buf.validate.field).map = {
+    max_pairs: 1024,
+    keys: {string: {min_len: 1, max_len: 256}}
+  }];
   // Reusable middleware configs keyed by stable policy-local name.
-  map<string, NetworkMiddleware> network_middlewares = 6;
+  map<string, NetworkMiddleware> network_middlewares = 6 [(buf.validate.field).map = {
+    max_pairs: 1024,
+    keys: {string: {min_len: 1, max_len: 256}}
+  }];
 }
 
 message FilesystemPolicy {
@@ -47,22 +54,33 @@ message ProcessPolicy {
 message NetworkPolicyRule {
   // Display name. An empty value falls back to the surrounding map key.
   string name = 1;
-  repeated NetworkEndpoint endpoints = 2;
-  repeated NetworkBinary binaries = 3;
+  repeated NetworkEndpoint endpoints = 2 [(buf.validate.field).repeated.max_items = 4096];
+  // Omitted and empty both match no process.
+  repeated NetworkBinary binaries = 3 [(buf.validate.field).repeated.max_items = 4096];
 }
 
 message NetworkEndpoint {
-  string host = 1;
-  // Compatibility shorthand for a single port. Mutually exclusive with ports.
-  uint32 port = 2;
+  string host = 1 [(buf.validate.field).string.max_len = 4096];
+  reserved 2;
+  reserved "port";
   string protocol = 3;
   string tls = 4;
   string enforcement = 5;
   string access = 6;
-  repeated L7Rule rules = 7;
-  repeated string allowed_ips = 8;
-  repeated uint32 ports = 9;
-  repeated L7DenyRule deny_rules = 10;
+  repeated L7Rule rules = 7 [(buf.validate.field).repeated.max_items = 16384];
+  repeated string allowed_ips = 8 [(buf.validate.field).repeated = {
+    max_items: 4096,
+    items: {string: {min_len: 1, max_len: 4096}}
+  }];
+  // Every endpoint has one nonempty, duplicate-free port list. Tag 9 remains
+  // stable because earlier review builds exposed this repeated field.
+  repeated uint32 ports = 9 [(buf.validate.field).repeated = {
+    min_items: 1,
+    max_items: 65535,
+    unique: true,
+    items: {uint32: {gte: 1, lte: 65535}}
+  }];
+  repeated L7DenyRule deny_rules = 10 [(buf.validate.field).repeated.max_items = 16384];
   bool allow_encoded_slash = 11;
   string persisted_queries = 12;
   map<string, GraphqlOperation> graphql_persisted_queries = 13;
@@ -109,7 +127,7 @@ message GraphqlOperation {
 }
 
 message L7Rule {
-  L7Allow allow = 1;
+  L7Allow allow = 1 [(buf.validate.field).required = true];
 }
 
 message L7Allow {
@@ -138,28 +156,39 @@ message L7DenyRule {
 
 message Matcher {
   oneof kind {
-    string glob = 1;
+    option (buf.validate.oneof).required = true;
+    string glob = 1 [(buf.validate.field).string = {min_len: 1, max_len: 4096}];
     AnyMatcher any = 2;
   }
 }
 
 message AnyMatcher {
-  repeated string values = 1;
+  repeated string values = 1 [(buf.validate.field).repeated = {
+    min_items: 1,
+    max_items: 1024,
+    unique: true,
+    items: {string: {min_len: 1, max_len: 4096}}
+  }];
 }
 
 message ParameterMatcher {
   oneof kind {
+    option (buf.validate.oneof).required = true;
     Matcher matcher = 1;
     ParameterObject object = 2;
   }
 }
 
 message ParameterObject {
-  map<string, ParameterMatcher> fields = 1;
+  map<string, ParameterMatcher> fields = 1 [(buf.validate.field).map = {
+    min_pairs: 1,
+    max_pairs: 1024,
+    keys: {string: {min_len: 1, max_len: 256}}
+  }];
 }
 
 message NetworkBinary {
-  string path = 1;
+  string path = 1 [(buf.validate.field).string = {min_len: 1, max_len: 4096}];
 }
 
 message NetworkMiddleware {

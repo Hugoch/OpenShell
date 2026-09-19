@@ -83,6 +83,18 @@ def main() -> None:
             "-m",
             "grpc_tools.protoc",
             "-Iproto",
+            "--python_out=python",
+            "--pyi_out=python",
+            "proto/buf/validate/validate.proto",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "grpc_tools.protoc",
+            "-Iproto",
             "--python_out=python/openshell/_proto",
             "--pyi_out=python/openshell/_proto",
             "--grpc_python_out=python/openshell/_proto",

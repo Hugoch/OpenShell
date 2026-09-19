@@ -96,13 +96,13 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 pub(super) fn lower_public_policy(
-    policy: authored::SandboxPolicy,
+    policy: authored::PolicyDocument,
 ) -> Result<ProtoSandboxPolicy, Status> {
     openshell_policy::lower_authored_policy(policy)
         .map_err(|error| Status::invalid_argument(format!("invalid authored policy: {error}")))
 }
 
-fn project_public_policy(policy: &ProtoSandboxPolicy) -> Result<authored::SandboxPolicy, Status> {
+fn project_public_policy(policy: &ProtoSandboxPolicy) -> Result<authored::PolicyDocument, Status> {
     openshell_policy::project_base_policy(policy)
         .map_err(|error| Status::internal(format!("failed to project public policy: {error}")))
 }
@@ -2122,11 +2122,7 @@ fn signed_endpoint_is_covered(
 }
 
 fn authored_endpoint_ports(endpoint: &authored::NetworkEndpoint) -> Vec<u32> {
-    if endpoint.ports.is_empty() {
-        vec![endpoint.port]
-    } else {
-        endpoint.ports.clone()
-    }
+    endpoint.ports.clone()
 }
 
 fn endpoint_ports_for_validation(endpoint: &NetworkEndpoint) -> Vec<u32> {
@@ -6775,6 +6771,13 @@ fn parse_proto_l7_target(
     let target = target.ok_or_else(|| {
         Status::invalid_argument(format!("merge_operations[{index}] requires an L7 target"))
     })?;
+    for binary in &target.binaries {
+        openshell_policy::validate_authored_network_binary(binary).map_err(|error| {
+            Status::invalid_argument(format!(
+                "merge_operations[{index}].target binary is invalid: {error}"
+            ))
+        })?;
+    }
     // An omitted binary declaration must never become any-binary authority.
     // The wire format permits both fields, so enforce the exclusive choice here.
     let binaries = match (target.any_binary, target.binaries.is_empty()) {
@@ -6987,6 +6990,14 @@ fn validate_operator_merged_credential_policy(
     validate_uninspected_credentialed_endpoints(effective_policy)
 }
 
+fn validate_merged_authored_contract(policy: &ProtoSandboxPolicy) -> Result<(), Status> {
+    // Fragment validation cannot see document-level limits. Project the full
+    // merged base and lower it through the same portable contract used by
+    // replacement requests before a proposal is staged or persisted.
+    let authored = project_public_policy(policy)?;
+    lower_public_policy(authored).map(|_| ())
+}
+
 fn stage_validated_merge_operation(
     current_policy: &ProtoSandboxPolicy,
     operation: &PolicyMergeOp,
@@ -6997,6 +7008,7 @@ fn stage_validated_merge_operation(
         .map_err(map_policy_merge_error)?;
     let candidate = merged.policy;
     validate_canonical_policy_size(&candidate, "merge_operations")?;
+    validate_merged_authored_contract(&candidate)?;
     validate_policy_safety(&candidate)?;
     validate_candidate_effective_policy(&candidate, validation_context.provider_layers)?;
     let mut effective = if validation_context.provider_layers.is_empty() {
@@ -7060,6 +7072,7 @@ async fn apply_merge_operations_with_retry(
         let merged = merge_policy(current_policy, operations).map_err(map_policy_merge_error)?;
         let new_policy = merged.policy;
         validate_canonical_policy_size(&new_policy, "merge_operations")?;
+        validate_merged_authored_contract(&new_policy)?;
         let hash = deterministic_policy_hash(&new_policy);
 
         if let Some(baseline_policy) = baseline_policy {
@@ -7610,14 +7623,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tonic::Code;
 
-    fn authored_policy(mut policy: ProtoSandboxPolicy) -> authored::SandboxPolicy {
+    fn authored_policy(mut policy: ProtoSandboxPolicy) -> authored::PolicyDocument {
         if policy.version == 0 {
             policy.version = 1;
         }
         openshell_policy::project_base_policy(&policy).expect("test policy must be authorable")
     }
 
-    fn authored_mcp_policy_with_versions(versions: &[&str]) -> authored::SandboxPolicy {
+    fn authored_mcp_policy_with_versions(versions: &[&str]) -> authored::PolicyDocument {
         let mut policy = authored_policy(mcp_policy_with_versions(&["2025-11-25"]));
         policy.network_policies.get_mut("mcp").unwrap().endpoints[0]
             .mcp
@@ -7667,13 +7680,13 @@ mod tests {
         }
     }
 
-    impl IntoTestPolicy<authored::SandboxPolicy> for ProtoSandboxPolicy {
-        fn into_test_policy(self) -> authored::SandboxPolicy {
+    impl IntoTestPolicy<authored::PolicyDocument> for ProtoSandboxPolicy {
+        fn into_test_policy(self) -> authored::PolicyDocument {
             authored_policy(self)
         }
     }
 
-    impl IntoTestPolicy<ProtoSandboxPolicy> for authored::SandboxPolicy {
+    impl IntoTestPolicy<ProtoSandboxPolicy> for authored::PolicyDocument {
         fn into_test_policy(self) -> ProtoSandboxPolicy {
             openshell_policy::lower_authored_policy(self).expect("test policy must lower")
         }
@@ -8461,7 +8474,7 @@ mod tests {
 
     #[test]
     fn public_policy_boundary_rejects_structurally_incomplete_messages() {
-        let mut missing_allow = authored::SandboxPolicy {
+        let mut missing_allow = authored::PolicyDocument {
             version: 1,
             ..Default::default()
         };
@@ -8470,7 +8483,7 @@ mod tests {
             authored::NetworkPolicyRule {
                 endpoints: vec![authored::NetworkEndpoint {
                     host: "api.example.com".to_string(),
-                    port: 443,
+                    ports: vec![443],
                     rules: vec![authored::L7Rule { allow: None }],
                     ..Default::default()
                 }],
@@ -8480,7 +8493,7 @@ mod tests {
 
         let mut missing_matcher_kind = authored_policy(
             openshell_policy::parse_sandbox_policy(
-                "version: 1\nnetwork_policies:\n  api:\n    endpoints:\n      - { host: api.example.com, port: 443 }\n",
+                "version: 1\nnetwork_policies:\n  api:\n    endpoints:\n      - { host: api.example.com, ports: [443] }\n",
             )
             .unwrap(),
         );
@@ -8497,7 +8510,7 @@ mod tests {
             }),
         }];
 
-        let mut oversized_port = authored::SandboxPolicy {
+        let mut oversized_port = authored::PolicyDocument {
             version: 1,
             ..Default::default()
         };
@@ -8506,7 +8519,7 @@ mod tests {
             authored::NetworkPolicyRule {
                 endpoints: vec![authored::NetworkEndpoint {
                     host: "api.example.com".to_string(),
-                    port: 65_536,
+                    ports: vec![65_536],
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -8517,7 +8530,7 @@ mod tests {
             ("missing allow", missing_allow),
             ("missing matcher kind", missing_matcher_kind),
             ("oversized port", oversized_port),
-            ("missing version", authored::SandboxPolicy::default()),
+            ("missing version", authored::PolicyDocument::default()),
         ] {
             let Err(error) = lower_public_policy(policy) else {
                 panic!("{name} unexpectedly lowered");
@@ -8580,14 +8593,29 @@ mod tests {
 
         for (case, policy) in cases {
             let sandbox_id = format!("stored-invalid-{case}");
+            let sandbox_name = format!("stored-invalid-{case}");
+            let valid_shell = test_sandbox(
+                &sandbox_id,
+                &sandbox_name,
+                openshell_policy::restrictive_default_policy(),
+                Vec::new(),
+            );
+            let payload = crate::storage_proto::encode_sandbox(&valid_shell)
+                .expect("encode valid durable sandbox shell");
+            let mut stored = crate::storage_proto::StoredSandbox::decode(payload.as_slice())
+                .expect("decode durable sandbox shell");
+            stored.spec.as_mut().expect("stored sandbox spec").policy = Some(policy);
             state
                 .store
-                .put_message(&test_sandbox(
+                .put_if(
+                    "sandbox",
                     &sandbox_id,
-                    &format!("stored-invalid-{case}"),
-                    policy,
-                    Vec::new(),
-                ))
+                    &sandbox_name,
+                    "default",
+                    &stored.encode_to_vec(),
+                    None,
+                    crate::persistence::WriteCondition::MustCreate,
+                )
                 .await
                 .expect("store legacy sandbox spec");
 
@@ -8604,9 +8632,11 @@ mod tests {
             .await
             .expect_err("invalid stored spec must fail before history backfill");
 
-            assert_eq!(error.code(), Code::FailedPrecondition, "{case}");
+            // The public Sandbox projection now validates while decoding the
+            // durable internal policy, before config admission can inspect it.
+            assert_eq!(error.code(), Code::Internal, "{case}");
             assert!(
-                error.message().contains(STORED_POLICY_SOURCE_SPEC),
+                error.message().contains("decode sandbox payload failed"),
                 "{case}"
             );
             assert!(
@@ -8653,6 +8683,51 @@ mod tests {
                 .contains("policy serialized size exceeds maximum"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn incremental_merge_rejects_policy_over_portable_rule_limit() {
+        let mut current = ProtoSandboxPolicy {
+            version: 1,
+            ..Default::default()
+        };
+        for index in 0..1024 {
+            current.network_policies.insert(
+                format!("rule-{index}"),
+                NetworkPolicyRule {
+                    endpoints: vec![NetworkEndpoint {
+                        host: format!("api-{index}.example.com"),
+                        port: 443,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            );
+        }
+        let operation = PolicyMergeOp::AddRule {
+            rule_name: "rule-over-limit".to_string(),
+            rule: NetworkPolicyRule {
+                endpoints: vec![NetworkEndpoint {
+                    host: "overflow.example.com".to_string(),
+                    port: 443,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        };
+
+        let error = stage_validated_merge_operation(
+            &current,
+            &operation,
+            PolicyMergeValidationContext {
+                provider_layers: &[],
+                credential_binding: None,
+            },
+        )
+        .expect_err("a 1025th network policy must be rejected");
+
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("network_policies"), "{error}");
     }
 
     #[tokio::test]
@@ -10443,6 +10518,9 @@ mod tests {
         }
         let mut target = l7_scope_target();
         target.binaries[0].path.clear();
+        invalid_targets.push(target);
+        let mut target = l7_scope_target();
+        target.binaries[0].path = "x".repeat(4097);
         invalid_targets.push(target);
 
         for target in invalid_targets {

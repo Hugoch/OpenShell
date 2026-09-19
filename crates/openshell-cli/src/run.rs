@@ -43,7 +43,7 @@ use openshell_bootstrap::{
     GatewayMetadata, clear_last_sandbox_if_matches, get_gateway_metadata, save_last_sandbox,
 };
 use openshell_core::net::set_tcp_nodelay_best_effort;
-use openshell_core::proto::policy::SandboxPolicy as AuthoredSandboxPolicy;
+use openshell_core::proto::policy::PolicyDocument;
 use openshell_core::proto::{
     ApproveAllDraftChunksRequest, ApproveDraftChunkRequest, BeginRootfsTarStagingRequest,
     ClearDraftChunksRequest, CreateSandboxRequest, CreateSandboxTemplateRequest,
@@ -1476,7 +1476,7 @@ fn merge_rootfs_tar_driver_config(
 /// Resolution order: `--policy` flag > `OPENSHELL_SANDBOX_POLICY` env var.
 /// Returns `None` when no policy source is configured, allowing the server
 /// to apply its own default.
-fn load_sandbox_policy(cli_path: Option<&str>) -> Result<Option<AuthoredSandboxPolicy>> {
+fn load_sandbox_policy(cli_path: Option<&str>) -> Result<Option<PolicyDocument>> {
     openshell_policy::load_authored_policy(cli_path)
 }
 
@@ -5603,9 +5603,9 @@ fn policy_for_view(policy: &SandboxPolicy, view: PolicyGetView) -> Cow<'_, Sandb
 }
 
 fn authored_policy_for_view(
-    policy: &AuthoredSandboxPolicy,
+    policy: &PolicyDocument,
     view: PolicyGetView,
-) -> Cow<'_, AuthoredSandboxPolicy> {
+) -> Cow<'_, PolicyDocument> {
     if view != PolicyGetView::Base {
         return Cow::Borrowed(policy);
     }
@@ -6370,7 +6370,7 @@ mod tests {
             load_error: load_error.to_string(),
             created_time: openshell_core::time::timestamp_from_millis(100).ok(),
             loaded_time: openshell_core::time::timestamp_from_millis(200).ok(),
-            policy: Some(openshell_core::proto::policy::SandboxPolicy::default()),
+            policy: Some(openshell_core::proto::policy::PolicyDocument::default()),
             provenance: std::collections::HashMap::from([(
                 "source".to_string(),
                 "provider-composition".to_string(),

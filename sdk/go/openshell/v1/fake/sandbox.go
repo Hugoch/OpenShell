@@ -54,13 +54,13 @@ func copySandboxSpec(s types.SandboxSpec) types.SandboxSpec {
 		v := *s.GPUCount
 		s.GPUCount = &v
 	}
-	s.Policy = copySandboxPolicy(s.Policy)
+	s.Policy = copyPolicyDocument(s.Policy)
 	return s
 }
 
-// copySandboxPolicy returns a deep copy of a SandboxPolicy pointer.
+// copyPolicyDocument returns a deep copy of a PolicyDocument pointer.
 // All sub-policies, slices, and map entries are duplicated.
-func copySandboxPolicy(p *types.SandboxPolicy) *types.SandboxPolicy {
+func copyPolicyDocument(p *types.PolicyDocument) *types.PolicyDocument {
 	if p == nil {
 		return nil
 	}
@@ -384,7 +384,7 @@ func (c *fakeSandboxClient) CreateFromTemplate(_ context.Context, workspace, nam
 
 	resolvedSpec := sandboxSpecFromWorkloadTemplate(template)
 	resolvedSpec.Providers = copyStringSlice(spec.Providers)
-	resolvedSpec.Policy = copySandboxPolicy(spec.Policy)
+	resolvedSpec.Policy = copyPolicyDocument(spec.Policy)
 	resolvedSpec.Command = copyStringSlice(spec.Command)
 	resolvedSpec.TTY = spec.TTY
 

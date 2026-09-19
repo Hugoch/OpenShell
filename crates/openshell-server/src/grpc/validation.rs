@@ -1417,9 +1417,9 @@ mod tests {
     #[test]
     fn validate_sandbox_spec_rejects_oversized_policy() {
         use openshell_core::proto::policy::NetworkPolicyRule;
-        use openshell_core::proto::policy::SandboxPolicy as ProtoSandboxPolicy;
+        use openshell_core::proto::policy::PolicyDocument as ProtoPolicyDocument;
 
-        let mut policy = ProtoSandboxPolicy::default();
+        let mut policy = ProtoPolicyDocument::default();
         let big_name = "x".repeat(MAX_POLICY_SIZE);
         policy
             .network_policies

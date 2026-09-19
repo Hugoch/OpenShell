@@ -824,10 +824,16 @@ fn validation_issue_summary(validation: &str) -> String {
 }
 
 fn format_endpoint_summary(endpoint: &NetworkEndpoint) -> String {
-    let host_port = if endpoint.port > 0 {
-        format!("{}:{}", endpoint.host, endpoint.port)
-    } else {
+    let host_port = if endpoint.ports.is_empty() {
         endpoint.host.clone()
+    } else {
+        let ports = endpoint
+            .ports
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{}:{ports}", endpoint.host)
     };
 
     let mut tags = vec![endpoint_layer_label(endpoint).to_string()];

@@ -206,7 +206,7 @@ fn policy_yaml_with_dynamic_rule() -> String {
 name: example-api
 endpoints:
 - host: example.com
-  port: 443
+  ports: [443]
   protocol: rest
   enforcement: enforce
   access: read-only"#,
@@ -621,7 +621,7 @@ fn sandbox_policy_sync_requires_current_signed_governance_policy() {
     let mut widened = state.policy.clone();
     widened["networkPolicies"]["sandbox_added"] = json!({
         "name": "sandbox-added",
-        "endpoints": [{"host": "sandbox-added.example", "port": 443}],
+        "endpoints": [{"host": "sandbox-added.example", "ports": [443]}],
     });
     let copied_annotations = service
         .evaluate_inner(&sandbox_evaluation(

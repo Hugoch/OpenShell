@@ -264,7 +264,7 @@ mod tests {
     const STORAGE_V1_SCHEMA_SHA256: &str =
         "1df02ba6a9656566dea0388ba9fbcf84bb56895db7ec97ffa2d44fa0636e4fd4";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "2c601672270745be88fc78cf24338b714ba2e6ea0c7b137aab468f864e9cb684";
+        "3254980f1f6a8503f9c338666ad60e0d901b1c63fabd1ed6fc6f0b362f6d9cfe";
     const DURABLE_SCHEMA_SHA256: &str =
         "23c871a4cb4390be6e7d3ba7bfde3284f803927eac72f19a0e52286457edce7d";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
@@ -770,6 +770,59 @@ mod tests {
         hex::decode(encoded).expect("checked-in legacy fixture must be valid hex")
     }
 
+    fn legacy_endpoint_with_duplicate_set_values() -> openshell_core::proto::NetworkEndpoint {
+        let mut policy = openshell_policy::parse_sandbox_policy(
+            r"
+version: 1
+network_policies:
+  legacy:
+    endpoints:
+      - host: legacy.example.com
+        ports: [443]
+        protocol: mcp
+        mcp: {}
+        rules:
+          - allow:
+              method: tools/call
+              tool:
+                any:
+                  values: [read_status]
+",
+        )
+        .expect("valid baseline policy");
+        let mut endpoint = policy
+            .network_policies
+            .remove("legacy")
+            .unwrap()
+            .endpoints
+            .pop()
+            .unwrap();
+        endpoint.ports.push(443);
+
+        let duplicate_matcher = openshell_core::proto::L7QueryMatcher {
+            glob: String::new(),
+            any: vec!["same".to_string(), "same".to_string()],
+        };
+        let allow = endpoint.rules[0].allow.as_mut().unwrap();
+        allow
+            .query
+            .insert("state".to_string(), duplicate_matcher.clone());
+        allow
+            .params
+            .insert("arguments.mode".to_string(), duplicate_matcher.clone());
+        allow.params.get_mut("name").unwrap().any = vec!["read_status".into(); 2];
+        endpoint.deny_rules.push(openshell_core::proto::L7DenyRule {
+            method: "tools/call".to_string(),
+            query: HashMap::from([("state".to_string(), duplicate_matcher.clone())]),
+            params: HashMap::from([
+                ("name".to_string(), duplicate_matcher.clone()),
+                ("arguments.mode".to_string(), duplicate_matcher),
+            ]),
+            ..Default::default()
+        });
+        endpoint
+    }
+
     #[test]
     fn sandbox_payload_without_endpoint_status_decodes() {
         use openshell_core::proto::{Sandbox, SandboxPhase};
@@ -801,8 +854,9 @@ network_policies:
     name: mcp
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
+        enforcement: enforce
         rules:
           - allow:
               method: tools/call
@@ -824,12 +878,70 @@ network_policies:
         let stored = StoredSandbox::decode(payload.as_slice()).unwrap();
         let internal = stored.spec.unwrap().policy.unwrap();
         assert!(internal.network_policies["mcp"].endpoints[0].mcp.is_some());
+        assert!(
+            Sandbox::decode(payload.as_slice()).is_err(),
+            "the private durable envelope must not be decoded as the public API message"
+        );
 
         let decoded = decode_sandbox(&payload).unwrap();
         let decoded_policy = decoded.spec.unwrap().policy.unwrap();
         assert_eq!(
+            decoded_policy.network_policies["mcp"].endpoints[0].enforcement,
+            "enforce"
+        );
+        assert_eq!(
             openshell_policy::lower_authored_policy(decoded_policy).unwrap(),
             openshell_policy::lower_authored_policy(policy).unwrap()
+        );
+    }
+
+    #[test]
+    fn legacy_duplicate_ports_survive_sandbox_status_rewrite() {
+        let mut internal_policy = openshell_core::proto::SandboxPolicy {
+            version: 1,
+            ..Default::default()
+        };
+        internal_policy.network_policies.insert(
+            "legacy".to_string(),
+            openshell_core::proto::NetworkPolicyRule {
+                name: "legacy".to_string(),
+                endpoints: vec![legacy_endpoint_with_duplicate_set_values()],
+                ..Default::default()
+            },
+        );
+        let payload = StoredSandbox {
+            spec: Some(StoredSandboxSpec {
+                policy: Some(internal_policy),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+        .encode_to_vec();
+
+        let mut sandbox = decode_sandbox(&payload).expect("legacy sandbox should decode");
+        assert_eq!(
+            sandbox
+                .spec
+                .as_ref()
+                .unwrap()
+                .policy
+                .as_ref()
+                .unwrap()
+                .network_policies["legacy"]
+                .endpoints[0]
+                .ports,
+            [443]
+        );
+        sandbox.status = Some(SandboxStatus {
+            phase: SandboxPhase::Ready as i32,
+            ..Default::default()
+        });
+
+        let rewritten = encode_sandbox(&sandbox).expect("status-only rewrite should encode");
+        let stored = StoredSandbox::decode(rewritten.as_slice()).unwrap();
+        assert_eq!(
+            stored.spec.unwrap().policy.unwrap().network_policies["legacy"].endpoints[0].ports,
+            [443]
         );
     }
 
@@ -843,7 +955,7 @@ network_policies:
     name: profile
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
         rules:
           - allow:
@@ -882,6 +994,27 @@ network_policies:
             openshell_policy::lower_authored_rule("profile", decoded_rule).unwrap(),
             openshell_policy::lower_authored_rule("profile", authored_rule).unwrap()
         );
+    }
+
+    #[test]
+    fn legacy_duplicate_ports_survive_provider_profile_rewrite() {
+        let payload = StoredProviderProfileWire {
+            profile: Some(StoredProviderProfileData {
+                id: "legacy-profile".to_string(),
+                display_name: "Legacy Profile".to_string(),
+                endpoints: vec![legacy_endpoint_with_duplicate_set_values()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+        .encode_to_vec();
+
+        let profile = decode_provider_profile(&payload).expect("legacy profile should decode");
+        assert_eq!(profile.profile.as_ref().unwrap().endpoints[0].ports, [443]);
+
+        let rewritten = encode_provider_profile(&profile).expect("profile rewrite should encode");
+        let stored = StoredProviderProfileWire::decode(rewritten.as_slice()).unwrap();
+        assert_eq!(stored.profile.unwrap().endpoints[0].ports, [443]);
     }
 
     #[test]

@@ -65,7 +65,6 @@ func NetworkPolicyRuleToProto(r *types.NetworkPolicyRule) *policyv1.NetworkPolic
 func policyNetworkEndpointFromProto(ep *policyv1.NetworkEndpoint) types.PolicyNetworkEndpoint {
 	result := types.PolicyNetworkEndpoint{
 		Host:                         ep.GetHost(),
-		Port:                         ep.GetPort(),
 		Protocol:                     ep.GetProtocol(),
 		TLS:                          types.NetworkTLSMode(ep.GetTls()),
 		Enforcement:                  types.NetworkEnforcementMode(ep.GetEnforcement()),
@@ -127,11 +126,10 @@ func policyNetworkEndpointFromProto(ep *policyv1.NetworkEndpoint) types.PolicyNe
 func policyNetworkEndpointToProto(ep *types.PolicyNetworkEndpoint) *policyv1.NetworkEndpoint {
 	result := &policyv1.NetworkEndpoint{
 		Host:                         ep.Host,
-		Port:                         ep.Port,
 		Protocol:                     ep.Protocol,
-		Tls:                          sbv1.NetworkTlsMode(ep.TLS),
-		Enforcement:                  sbv1.NetworkEnforcementMode(ep.Enforcement),
-		Access:                       sbv1.NetworkAccessPreset(ep.Access),
+		Tls:                          string(ep.TLS),
+		Enforcement:                  string(ep.Enforcement),
+		Access:                       string(ep.Access),
 		AllowEncodedSlash:            ep.AllowEncodedSlash,
 		PersistedQueries:             ep.PersistedQueries,
 		GraphqlMaxBodyBytes:          ep.GraphqlMaxBodyBytes,

@@ -130,7 +130,7 @@ mod tests {
             id: "governed-mcp".to_string(),
             endpoints: vec![NetworkEndpoint {
                 host: "mcp.example.com".to_string(),
-                port: 443,
+                ports: vec![443],
                 protocol: "mcp".to_string(),
                 mcp: versions.map(|versions| McpConfig {
                     versions: versions

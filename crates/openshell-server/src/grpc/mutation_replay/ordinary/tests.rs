@@ -9,7 +9,7 @@ use crate::grpc::mutation_replay::{Admission, OBJECT_TYPE, OriginalMutation, fin
 use crate::grpc::test_support::{authed_request, test_server_state};
 use openshell_core::proto::datamodel::v1::ObjectMeta;
 use openshell_core::proto::policy::{
-    NetworkBinary, NetworkEndpoint, NetworkPolicyRule, SandboxPolicy,
+    NetworkBinary, NetworkEndpoint, NetworkPolicyRule, PolicyDocument,
 };
 use openshell_core::proto::{
     DeletionOutcome, DraftChunkApproval, GetDraftPolicyRequest, PolicyChunk,
@@ -1006,7 +1006,7 @@ async fn draft_receipts_replay_after_chunk_state_and_review_tokens_change() {
     let sandbox = Sandbox {
         metadata: Some(meta(name)),
         spec: Some(SandboxSpec {
-            policy: Some(SandboxPolicy {
+            policy: Some(PolicyDocument {
                 version: 1,
                 ..Default::default()
             }),
@@ -1019,7 +1019,7 @@ async fn draft_receipts_replay_after_chunk_state_and_review_tokens_change() {
         name: name.into(),
         endpoints: vec![NetworkEndpoint {
             host: format!("{name}.example.com"),
-            port: 443,
+            ports: vec![443],
             ..Default::default()
         }],
         binaries: vec![NetworkBinary {

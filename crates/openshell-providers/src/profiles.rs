@@ -37,8 +37,12 @@ pub enum ProfileError {
     MissingId,
     #[error("duplicate provider profile id: {0}")]
     DuplicateId(String),
-    #[error("provider profile '{id}' has invalid endpoint '{host}:{port}'")]
-    InvalidEndpoint { id: String, host: String, port: u32 },
+    #[error("provider profile '{id}' has invalid endpoint '{host}' ports {ports:?}")]
+    InvalidEndpoint {
+        id: String,
+        host: String,
+        ports: Vec<u32>,
+    },
     /// An MCP endpoint declared a malformed exact revision allowlist.
     #[error("provider profile '{id}' has invalid MCP configuration in '{field}': {message}")]
     InvalidMcpConfiguration {
@@ -54,8 +58,8 @@ pub enum ProfileError {
         field: String,
         message: String,
     },
-    #[error("provider profile contains an invalid authored policy endpoint: {0}")]
-    InvalidAuthoredEndpoint(String),
+    #[error("provider profile contains invalid authored network policy: {0}")]
+    InvalidAuthoredPolicy(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,11 +324,12 @@ pub struct DiscoveryProfile {
     pub credentials: Vec<String>,
 }
 
-// These YAML/JSON DTOs mirror the network policy protos intentionally. Keep
-// every lossless conversion below in sync with proto/sandbox.proto. If a field
-// is added to NetworkEndpoint, L7Rule, L7Allow, L7DenyRule, L7QueryMatcher,
-// GraphqlOperation, or NetworkBinary, add it here and in both conversion
-// directions unless the import/lint path explicitly rejects it.
+// These provider-owned YAML/JSON DTOs mirror the authored network policy
+// messages intentionally. Keep every lossless conversion below in sync with
+// proto/policy.proto. If a field is added to NetworkEndpoint, L7Rule, L7Allow,
+// L7DenyRule, Matcher, GraphqlOperation, or NetworkBinary, add it here and in
+// both conversion directions unless the import/lint path explicitly rejects
+// it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -332,7 +337,6 @@ pub struct DiscoveryProfile {
 )]
 pub struct EndpointProfile {
     pub host: String,
-    pub port: u32,
     pub protocol: String,
     pub tls: String,
     pub access: String,
@@ -371,11 +375,9 @@ pub struct EndpointProfile {
     clippy::struct_excessive_bools,
     reason = "Endpoint profile mirror preserves independent policy schema toggles."
 )]
-#[serde(remote = "EndpointProfile")]
+#[serde(remote = "EndpointProfile", deny_unknown_fields)]
 struct EndpointProfileSerde {
     host: String,
-    #[serde(default, skip_serializing_if = "is_zero")]
-    port: u32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     protocol: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -735,6 +737,18 @@ impl ProviderTypeProfile {
 
     /// Convert an untrusted public protobuf profile without panicking.
     pub fn try_from_proto(profile: &ProviderProfile) -> Result<Self, ProfileError> {
+        // Validate the complete authored rule before splitting it into the
+        // profile DTO. Per-endpoint validation misses aggregate constraints
+        // such as endpoint/binary counts and would let an import fail only
+        // after an earlier profile in the same batch had been persisted.
+        let authored_rule = authored::NetworkPolicyRule {
+            name: "provider-profile".to_string(),
+            endpoints: profile.endpoints.clone(),
+            binaries: profile.binaries.clone(),
+        };
+        let network_rule = openshell_policy::lower_authored_rule("provider-profile", authored_rule)
+            .map_err(|error| ProfileError::InvalidAuthoredPolicy(error.to_string()))?;
+
         Ok(Self {
             id: profile.id.clone(),
             resource_version: profile.resource_version,
@@ -762,15 +776,17 @@ impl ProviderTypeProfile {
                     token_grant: credential.token_grant.as_ref().map(token_grant_from_proto),
                 })
                 .collect(),
-            endpoints: profile
+            endpoints: network_rule
                 .endpoints
                 .iter()
-                .map(authored_endpoint_from_proto)
-                .collect::<Result<Vec<_>, _>>()?,
-            binaries: profile
+                .map(endpoint_from_proto)
+                .collect(),
+            binaries: network_rule
                 .binaries
                 .iter()
-                .map(authored_binary_from_proto)
+                .map(|binary| BinaryProfile {
+                    path: binary.path.clone(),
+                })
                 .collect(),
             inference_capable: profile.inference_capable,
             discovery: profile
@@ -1565,7 +1581,15 @@ fn discovery_to_proto(discovery: &DiscoveryProfile) -> ProviderProfileDiscovery 
 fn endpoint_to_proto(endpoint: &EndpointProfile) -> NetworkEndpoint {
     NetworkEndpoint {
         host: endpoint.host.clone(),
-        port: endpoint.port,
+        // The runtime schema still carries its legacy scalar. Public authored
+        // input has one canonical representation, so only populate the
+        // scalar when it represents the complete repeated-port set.
+        port: endpoint
+            .ports
+            .first()
+            .copied()
+            .filter(|_| endpoint.ports.len() == 1)
+            .unwrap_or(0),
         protocol: endpoint.protocol.clone(),
         tls: network_tls_mode_from_str(&endpoint.tls).map_or(-1, |value| value as i32),
         enforcement: network_enforcement_mode_from_str(&endpoint.enforcement)
@@ -1626,29 +1650,17 @@ fn authored_endpoint_to_proto(endpoint: &EndpointProfile) -> authored::NetworkEn
         .expect("projected provider profile rule must retain its endpoint")
 }
 
-fn authored_endpoint_from_proto(
-    endpoint: &authored::NetworkEndpoint,
-) -> Result<EndpointProfile, ProfileError> {
-    let rule = authored::NetworkPolicyRule {
-        name: "provider-profile".to_string(),
-        endpoints: vec![endpoint.clone()],
-        binaries: Vec::new(),
-    };
-    let internal = openshell_policy::lower_authored_rule("provider-profile", rule)
-        .map_err(|error| ProfileError::InvalidAuthoredEndpoint(error.to_string()))?;
-    Ok(endpoint_from_proto(internal.endpoints.first().ok_or_else(
-        || {
-            ProfileError::InvalidAuthoredEndpoint(
-                "lowered provider profile rule did not retain its endpoint".to_string(),
-            )
-        },
-    )?))
-}
-
 fn endpoint_from_proto(endpoint: &NetworkEndpoint) -> EndpointProfile {
+    let ports = if endpoint.ports.is_empty() {
+        (endpoint.port != 0)
+            .then_some(endpoint.port)
+            .into_iter()
+            .collect()
+    } else {
+        endpoint.ports.clone()
+    };
     let mut profile = EndpointProfile {
         host: endpoint.host.clone(),
-        port: endpoint.port,
         protocol: endpoint.protocol.clone(),
         tls: network_tls_mode_to_str(endpoint.tls)
             .map_or_else(|| format!("unknown({})", endpoint.tls), str::to_owned),
@@ -1664,7 +1676,7 @@ fn endpoint_from_proto(endpoint: &NetworkEndpoint) -> EndpointProfile {
             Some(endpoint.rules.iter().map(rule_from_proto).collect())
         },
         allowed_ips: endpoint.allowed_ips.clone(),
-        ports: endpoint.ports.clone(),
+        ports,
         deny_rules: if endpoint.deny_rules.is_empty() {
             None
         } else {
@@ -1760,12 +1772,6 @@ fn binary_to_proto(binary: &BinaryProfile) -> NetworkBinary {
 
 fn authored_binary_to_proto(binary: &BinaryProfile) -> authored::NetworkBinary {
     authored::NetworkBinary {
-        path: binary.path.clone(),
-    }
-}
-
-fn authored_binary_from_proto(binary: &authored::NetworkBinary) -> BinaryProfile {
-    BinaryProfile {
         path: binary.path.clone(),
     }
 }
@@ -2057,7 +2063,7 @@ fn validate_profiles(profiles: &[ProviderTypeProfile]) -> Result<(), ProfileErro
         return Err(ProfileError::InvalidEndpoint {
             id: profile.id.clone(),
             host: endpoint.host.clone(),
-            port: endpoint.port,
+            ports: endpoint.ports.clone(),
         });
     }
     Err(ProfileError::ValidationError {
@@ -2568,7 +2574,10 @@ pub fn validate_profile_set(
                     source,
                     profile_id,
                     format!("endpoints[{index}]"),
-                    format!("invalid endpoint '{}:{}'", endpoint.host, endpoint.port),
+                    format!(
+                        "invalid endpoint '{}' ports {:?}",
+                        endpoint.host, endpoint.ports
+                    ),
                 ));
             }
             collect_mcp_profile_diagnostics(source, profile_id, index, endpoint, &mut diagnostics);
@@ -2937,8 +2946,8 @@ pub fn validate_profile_set(
                     profile_id,
                     format!("endpoints[{index}].allow_uninspected_credentials"),
                     format!(
-                        "credentialed endpoint '{}:{}' uses {mode}; configure L7 inspection or explicitly set allow_uninspected_credentials: true",
-                        endpoint.host, endpoint.port
+                        "credentialed endpoint '{}' ports {:?} uses {mode}; configure L7 inspection or explicitly set allow_uninspected_credentials: true",
+                        endpoint.host, endpoint.ports
                     ),
                 ));
             }
@@ -3022,13 +3031,11 @@ fn endpoint_is_valid(endpoint: &EndpointProfile) -> bool {
     if endpoint.host.trim().is_empty() {
         return false;
     }
-    if !endpoint.ports.is_empty() {
-        return endpoint
+    !endpoint.ports.is_empty()
+        && endpoint
             .ports
             .iter()
-            .all(|port| (1..=65_535).contains(port));
-    }
-    (1..=65_535).contains(&endpoint.port)
+            .all(|port| (1..=65_535).contains(port))
 }
 
 fn additional_l7_profile_fields(endpoint: &EndpointProfile) -> Vec<&'static str> {
@@ -3224,7 +3231,7 @@ fn validate_token_grant_audience_overrides(
     let mut bindings: Vec<TokenGrantOverrideBinding> = Vec::new();
     for (override_index, override_config) in token_grant.audience_overrides.iter().enumerate() {
         for endpoint in endpoints {
-            for port in endpoint_ports(endpoint.port, &endpoint.ports) {
+            for &port in &endpoint.ports {
                 if !token_grant_override_matches_endpoint(override_config, &endpoint.host, port) {
                     continue;
                 }
@@ -3277,14 +3284,6 @@ fn validate_token_grant_audience_overrides(
         }
     }
     diagnostics
-}
-
-fn endpoint_ports(port: u32, ports: &[u32]) -> Vec<u32> {
-    if ports.is_empty() {
-        if port == 0 { Vec::new() } else { vec![port] }
-    } else {
-        ports.iter().copied().filter(|port| *port != 0).collect()
-    }
 }
 
 fn token_grant_override_matches_endpoint(
@@ -3706,10 +3705,15 @@ credentials:
                 .to_proto()
                 .endpoints
                 .iter()
-                .map(|endpoint| StaticCredentialEndpointBinding {
-                    host: endpoint.host.clone(),
-                    port: endpoint.port,
-                    path: endpoint.path.clone(),
+                .flat_map(|endpoint| {
+                    endpoint
+                        .ports
+                        .iter()
+                        .map(|&port| StaticCredentialEndpointBinding {
+                            host: endpoint.host.clone(),
+                            port,
+                            path: endpoint.path.clone(),
+                        })
                 })
                 .collect(),
         };
@@ -3738,27 +3742,29 @@ credentials:
             {
                 assert!(!endpoint.request_body_credential_rewrite);
                 assert!(!endpoint.allow_uninspected_credentials);
-                let (_, classifier, _) = state.resolver_and_body_classifier_for_endpoint(
-                    &endpoint.host,
-                    u16::try_from(endpoint.port).unwrap(),
-                    "/v1/responses",
-                );
-                let classifier = classifier.unwrap();
-                for token in [
-                    "openshell:resolve:env:KEY".to_owned(),
-                    state.snapshot().child_env["GITHUB_TOKEN"].clone(),
-                    state.snapshot().child_env[&model_key].clone(),
-                ] {
-                    let body = format!(r#"{{"tool_output":"Token: {token}"}}"#);
-                    let mut guard = BodyPlaceholderGuard::new(Some(&classifier));
-                    let mut forwarded = guard.push(body.as_bytes()).unwrap();
-                    forwarded.extend(guard.finish().unwrap());
-                    assert_eq!(forwarded, body.as_bytes());
+                for &port in &endpoint.ports {
+                    let (_, classifier, _) = state.resolver_and_body_classifier_for_endpoint(
+                        &endpoint.host,
+                        u16::try_from(port).unwrap(),
+                        "/v1/responses",
+                    );
+                    let classifier = classifier.unwrap();
+                    for token in [
+                        "openshell:resolve:env:KEY".to_owned(),
+                        state.snapshot().child_env["GITHUB_TOKEN"].clone(),
+                        state.snapshot().child_env[&model_key].clone(),
+                    ] {
+                        let body = format!(r#"{{"tool_output":"Token: {token}"}}"#);
+                        let mut guard = BodyPlaceholderGuard::new(Some(&classifier));
+                        let mut forwarded = guard.push(body.as_bytes()).unwrap();
+                        forwarded.extend(guard.finish().unwrap());
+                        assert_eq!(forwarded, body.as_bytes());
+                    }
+                    assert_eq!(
+                        classifier.check(&state.snapshot().child_env[&model_key]),
+                        Ok(())
+                    );
                 }
-                assert_eq!(
-                    classifier.check(&state.snapshot().child_env[&model_key]),
-                    Ok(())
-                );
             }
         }
     }
@@ -3839,7 +3845,7 @@ credentials:
         let git_transport = proto
             .endpoints
             .iter()
-            .find(|endpoint| endpoint.host == "github.com" && endpoint.port == 443)
+            .find(|endpoint| endpoint.host == "github.com" && endpoint.ports.contains(&443))
             .expect("github.com git transport endpoint");
 
         // The git transport carries explicit rules rather than an access preset
@@ -4031,7 +4037,7 @@ id: policy-only
 display_name: Policy Only
 endpoints:
   - host: example.com
-    port: 443
+    ports: [443]
 ",
         )
         .expect("profile");
@@ -4155,7 +4161,7 @@ id: mcp-example
 display_name: MCP Example
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     path: /mcp
     protocol: mcp
     mcp:
@@ -4246,7 +4252,7 @@ id: mcp-example
 display_name: MCP Example
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ["2025-03-26", "2025-11-25"]
@@ -4383,7 +4389,7 @@ id: mcp-params
 display_name: MCP Params
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -4427,7 +4433,7 @@ binaries:
     fn mcp_endpoint_profile_direct_serde_materializes_and_emits_the_pinned_default() {
         let endpoint_yaml = r"
 host: mcp.example.com
-port: 443
+ports: [443]
 protocol: mcp
 ";
         let endpoint = serde_yml::from_str::<EndpointProfile>(endpoint_yaml)
@@ -4438,7 +4444,7 @@ protocol: mcp
         ))
         .expect("YAML endpoint vector omission must default");
         let json_vector = serde_json::from_str::<Vec<EndpointProfile>>(
-            r#"[{"host":"mcp.example.com","port":443,"protocol":"mcp"},{"host":"mcp.example.com","port":443,"protocol":"mcp","mcp":{}}]"#,
+            r#"[{"host":"mcp.example.com","ports":[443],"protocol":"mcp"},{"host":"mcp.example.com","ports":[443],"protocol":"mcp","mcp":{}}]"#,
         )
         .expect("JSON endpoint vector omissions must default");
 
@@ -4501,7 +4507,7 @@ protocol: mcp
             "{versions: [latest]}",
         ] {
             let yaml = format!(
-                "- host: mcp.example.com\n  port: 443\n  protocol: mcp\n  mcp: {invalid_mcp}\n"
+                "- host: mcp.example.com\n  ports: [443]\n  protocol: mcp\n  mcp: {invalid_mcp}\n"
             );
             assert!(
                 serde_yml::from_str::<Vec<EndpointProfile>>(&yaml).is_err(),
@@ -4529,7 +4535,7 @@ id: mcp-example
 display_name: MCP Example
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
 ";
         let omitted_versions = r"
@@ -4537,7 +4543,7 @@ id: mcp-example
 display_name: MCP Example
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp: {}
 ";
@@ -4547,7 +4553,7 @@ id: mcp-example
 display_name: MCP Example
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['{}']
@@ -4560,11 +4566,11 @@ endpoints:
         let omitted_versions =
             parse_profile_yaml(omitted_versions).expect("omitted versions must default");
         let omitted_options_json = parse_profile_json(
-            r#"{"id":"mcp-example","display_name":"MCP Example","endpoints":[{"host":"mcp.example.com","port":443,"protocol":"mcp"}]}"#,
+            r#"{"id":"mcp-example","display_name":"MCP Example","endpoints":[{"host":"mcp.example.com","ports":[443],"protocol":"mcp"}]}"#,
         )
         .expect("omitted JSON MCP options must default");
         let omitted_versions_json = parse_profile_json(
-            r#"{"id":"mcp-example","display_name":"MCP Example","endpoints":[{"host":"mcp.example.com","port":443,"protocol":"mcp","mcp":{}}]}"#,
+            r#"{"id":"mcp-example","display_name":"MCP Example","endpoints":[{"host":"mcp.example.com","ports":[443],"protocol":"mcp","mcp":{}}]}"#,
         )
         .expect("omitted JSON versions must default");
         let explicit_default =
@@ -4631,7 +4637,7 @@ id: mcp-example
 display_name: MCP Example
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       {invalid_mcp}
@@ -4648,7 +4654,7 @@ id: rest-example
 display_name: REST Example
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     mcp:
       versions: ['2025-11-25']
@@ -4667,7 +4673,7 @@ id: mcp-example
 display_name: MCP Example
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp: null
 ";
@@ -4679,49 +4685,44 @@ endpoints:
         assert!(serde_yml::from_value::<ProviderTypeProfile>(&value).is_err());
 
         for json in [
-            r#"{"id":"mcp-example","display_name":"MCP Example","endpoints":[{"host":"mcp.example.com","port":443,"protocol":"mcp","mcp":null}]}"#,
-            r#"{"id":"mcp-example","display_name":"MCP Example","endpoints":[{"host":"mcp.example.com","port":443,"protocol":"mcp","mcp":{"versions":null}}]}"#,
+            r#"{"id":"mcp-example","display_name":"MCP Example","endpoints":[{"host":"mcp.example.com","ports":[443],"protocol":"mcp","mcp":null}]}"#,
+            r#"{"id":"mcp-example","display_name":"MCP Example","endpoints":[{"host":"mcp.example.com","ports":[443],"protocol":"mcp","mcp":{"versions":null}}]}"#,
         ] {
             assert!(parse_profile_json(json).is_err());
         }
     }
 
     #[test]
-    fn endpoint_profile_preserves_unknown_field_tolerance() {
+    fn endpoint_profile_rejects_unknown_fields() {
         let endpoint_yaml = r"
 host: api.example.com
-port: 443
+ports: [443]
 protocol: rest
 access: full
 future_endpoint_option: true
 ";
-        let endpoint_json = r#"{"host":"api.example.com","port":443,"protocol":"rest","access":"full","future_endpoint_option":true}"#;
+        let endpoint_json = r#"{"host":"api.example.com","ports":[443],"protocol":"rest","access":"full","future_endpoint_option":true}"#;
 
-        let yaml_endpoint = serde_yml::from_str::<EndpointProfile>(endpoint_yaml)
-            .expect("unknown endpoint fields remain forward-compatible in YAML");
-        let json_endpoint = serde_json::from_str::<EndpointProfile>(endpoint_json)
-            .expect("unknown endpoint fields remain forward-compatible in JSON");
-        assert_eq!(yaml_endpoint.host, "api.example.com");
-        assert_eq!(json_endpoint, yaml_endpoint);
+        assert!(serde_yml::from_str::<EndpointProfile>(endpoint_yaml).is_err());
+        assert!(serde_json::from_str::<EndpointProfile>(endpoint_json).is_err());
 
         let profile_yaml = format!(
             "id: future-profile\ndisplay_name: Future profile\nendpoints:\n  - {}",
             endpoint_yaml.trim_start().replace('\n', "\n    ")
         );
-        parse_profile_yaml(&profile_yaml)
-            .expect("nested endpoint parsing must retain the prior unknown-field tolerance");
+        assert!(parse_profile_yaml(&profile_yaml).is_err());
     }
 
     #[test]
     fn mcp_options_profile_rejects_unknown_fields_across_parsing_routes() {
         let endpoint_yaml = r"
 host: mcp.example.com
-port: 443
+ports: [443]
 protocol: mcp
 mcp:
   version: ['2025-11-25']
 ";
-        let endpoint_json = r#"{"host":"mcp.example.com","port":443,"protocol":"mcp","mcp":{"versionss":["2025-11-25"]}}"#;
+        let endpoint_json = r#"{"host":"mcp.example.com","ports":[443],"protocol":"mcp","mcp":{"versionss":["2025-11-25"]}}"#;
 
         assert!(serde_yml::from_str::<EndpointProfile>(endpoint_yaml).is_err());
         assert!(serde_json::from_str::<EndpointProfile>(endpoint_json).is_err());
@@ -4759,7 +4760,7 @@ id: mcp-example
 display_name: MCP Example
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: [draft]
@@ -4792,7 +4793,7 @@ id: uppercase-mcp
 display_name: Uppercase MCP
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: MCP
     mcp:
       versions: ['2025-11-25', '2025-03-26']
@@ -4816,7 +4817,7 @@ id: uppercase-mcp
 display_name: Uppercase MCP
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: MCP
     rules:
       - allow:
@@ -4842,7 +4843,7 @@ id: Invalid-Id
 display_name: MCP Example
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     mcp:
       versions: ['2025-11-25']
@@ -4852,7 +4853,7 @@ id: Invalid-Id
 display_name: REST Example
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     mcp:
       versions: ['2025-11-25']
@@ -4882,12 +4883,12 @@ id: mcp-priority
 display_name: MCP Priority
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     mcp:
       versions: ['2025-11-25']
   - host: ""
-    port: 443
+    ports: [443]
 "#;
 
         assert!(matches!(
@@ -5451,7 +5452,7 @@ credentials:
           audience: api://beta
 endpoints:
   - host: alpha.default.svc.cluster.local
-    port: 80
+    ports: [80]
     path: /v1/**
     protocol: rest
     access: full
@@ -5493,7 +5494,7 @@ credentials:
           audience: api://admin
 endpoints:
   - host: alpha.default.svc.cluster.local
-    port: 80
+    ports: [80]
     path: /v1/**
     protocol: rest
     access: full
@@ -5565,7 +5566,7 @@ display_name: Advanced
 category: other
 endpoints:
   - host: graphql.example.com
-    port: 443
+    ports: [443]
     protocol: graphql
     access: read-only
     persisted_queries: allow_registered
@@ -5621,7 +5622,6 @@ binaries:
         );
 
         let rest_ep = &proto.endpoints[1];
-        assert_eq!(rest_ep.port, 0);
         assert_eq!(rest_ep.ports, vec![443, 8443]);
         assert_eq!(rest_ep.tls, "terminate");
         assert_eq!(rest_ep.allowed_ips, vec!["10.0.0.0/24"]);
@@ -5682,7 +5682,7 @@ credentials:
     env_vars: [TOKEN]
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
 ",
         )
         .expect("profile should parse");
@@ -5695,7 +5695,7 @@ display_name: Signed
 credentials: []
 endpoints:
   - host: s3.example.com
-    port: 443
+    ports: [443]
     credential_signing: sigv4
 ",
         )
@@ -5709,7 +5709,7 @@ display_name: Plain
 credentials: []
 endpoints:
   - host: pypi.org
-    port: 443
+    ports: [443]
 ",
         )
         .expect("profile should parse");
@@ -5727,7 +5727,7 @@ credentials:
     env_vars: [TOKEN]
 endpoints:
   - host: raw.example.com
-    port: 443
+    ports: [443]
 ",
         )
         .expect("profile should parse");
@@ -5745,7 +5745,7 @@ credentials:
     env_vars: [TOKEN]
 endpoints:
   - host: raw.example.com
-    port: 443
+    ports: [443]
     allow_uninspected_credentials: true
 ",
         )
@@ -5777,7 +5777,7 @@ discovery:
   credentials: [api_key, missing_key]
 endpoints:
   - host: ""
-    port: 0
+    ports: [0]
 binaries: ["", /usr/bin/broken]
 "#,
         )
@@ -5921,7 +5921,7 @@ id: bad-endpoint
 display_name: Bad Endpoint
 endpoints:
   - host: api.example.com
-    port: 0
+    ports: [0]
 "])
         .unwrap_err();
 
@@ -5935,7 +5935,7 @@ id: bad-l7
 display_name: Bad L7
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     access: read-write
     rules:
@@ -6387,7 +6387,7 @@ id: invalid-modes
 display_name: Invalid modes
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     tls: skp
     enforcement: enforc
@@ -6423,7 +6423,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: openrouter.ai
-    port: 443
+    ports: [443]
     protocol: rest
     enforcement: enforce
 binaries:
@@ -6456,7 +6456,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     access: read-write
 binaries:
@@ -6488,7 +6488,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: database.example.com
-    port: 5432
+    ports: [5432]
     protocol: tcp
     tls: skip
     allow_uninspected_credentials: true
@@ -6522,7 +6522,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: database.example.com
-    port: 5432
+    ports: [5432]
     protocol: tcp
     enforcement: enforce
     path: /query
@@ -6594,7 +6594,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: ftp
 binaries:
   - /usr/bin/app
@@ -6626,7 +6626,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     access: full
     rules:
@@ -6663,7 +6663,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     access: full
     rules: []
@@ -6697,7 +6697,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     rules:
       - allow: {}
@@ -6731,7 +6731,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     access: full
     deny_rules: []
@@ -6765,7 +6765,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -6805,7 +6805,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -6847,7 +6847,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -6886,7 +6886,7 @@ id: mcp-deny-params
 display_name: MCP Deny Params
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -6930,7 +6930,7 @@ id: mcp-tool
 display_name: MCP Tool
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -6977,7 +6977,7 @@ id: mcp-deny-tool
 display_name: MCP Deny Tool
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7019,7 +7019,7 @@ id: mcp-both
 display_name: MCP Both
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7076,7 +7076,7 @@ id: mcp-broad
 display_name: MCP Broad
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7111,7 +7111,7 @@ id: mcp-glob
 display_name: MCP Glob
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7146,7 +7146,7 @@ id: mcp-deny-broad
 display_name: MCP Deny Broad
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7181,7 +7181,7 @@ id: mcp-deny-ok
 display_name: MCP Deny OK
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7218,7 +7218,7 @@ id: mcp-scalar-tool
 display_name: MCP Scalar Tool
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7272,7 +7272,7 @@ id: mcp-deny-both
 display_name: MCP Deny Both
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7307,7 +7307,7 @@ id: mcp-bad-method
 display_name: MCP Bad Method
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7339,7 +7339,7 @@ id: mcp-deny-bad-method
 display_name: MCP Deny Bad Method
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7371,7 +7371,7 @@ id: mcp-no-method
 display_name: MCP No Method
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7402,7 +7402,7 @@ id: mcp-both
 display_name: MCP Both
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7437,7 +7437,7 @@ id: mcp-tool-only
 display_name: MCP Tool Only
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7467,7 +7467,7 @@ id: mcp-deny-both
 display_name: MCP Deny Both
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7509,7 +7509,7 @@ discovery:
   credentials: [api_key]
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     deny_rules:
       - method: POST
 binaries:
@@ -7535,7 +7535,7 @@ id: empty-rules
 display_name: Empty Rules
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7563,7 +7563,7 @@ id: empty-deny-rules
 display_name: Empty Deny Rules
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7595,7 +7595,7 @@ id: bad-params
 display_name: Bad Params
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7629,7 +7629,7 @@ id: glob-and-any
 display_name: Glob And Any
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7663,7 +7663,7 @@ id: empty-matcher
 display_name: Empty Matcher
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7693,7 +7693,7 @@ id: wildcard-no-strict
 display_name: Wildcard No Strict
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7727,7 +7727,7 @@ id: wildcard-strict
 display_name: Wildcard Strict
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7761,7 +7761,7 @@ id: bad-method-glob
 display_name: Bad Method Glob
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7792,7 +7792,7 @@ id: mcp-path
 display_name: MCP Path
 endpoints:
   - host: mcp.example.com
-    port: 443
+    ports: [443]
     protocol: mcp
     mcp:
       versions: ['2025-11-25']
@@ -7824,7 +7824,7 @@ id: rest-tool
 display_name: REST Tool
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     rules:
       - allow:
@@ -7854,7 +7854,7 @@ id: rest-mcp-opts
 display_name: REST MCP Options
 endpoints:
   - host: api.example.com
-    port: 443
+    ports: [443]
     protocol: rest
     mcp:
       versions: ['2025-11-25']

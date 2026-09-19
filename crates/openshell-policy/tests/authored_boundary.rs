@@ -16,7 +16,7 @@ network_policies:
   mcp:
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
         mcp: {}
         rules:
@@ -77,4 +77,20 @@ fn projection_removes_internal_authority_without_mutating_internal_policy() {
     assert!(!lowered_endpoint.provider_credentialed);
     assert!(internal.network_policies["advisor"].endpoints[0].advisor_proposed);
     assert!(internal.network_policies["advisor"].endpoints[0].provider_credentialed);
+}
+
+#[test]
+fn omitted_and_empty_public_binary_lists_lower_to_no_binary_matches() {
+    for binaries in ["", "    binaries: []\n"] {
+        let source = format!(
+            "version: 1\nnetwork_policies:\n  api:\n    endpoints:\n      - host: api.example.com\n        ports: [443]\n{binaries}"
+        );
+        let authored = parse_authored_policy(&source).expect("public policy must parse");
+        let lowered = lower_authored_policy(authored).expect("public policy must lower");
+
+        assert!(
+            lowered.network_policies["api"].binaries.is_empty(),
+            "omitted and explicit-empty public lists must remain the same no-match scope"
+        );
+    }
 }

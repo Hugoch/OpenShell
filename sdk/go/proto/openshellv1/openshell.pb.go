@@ -2065,7 +2065,7 @@ type SandboxSpec struct {
 	// Container or VM template used to provision the sandbox.
 	Template *SandboxTemplate `protobuf:"bytes,6,opt,name=template,proto3" json:"template,omitempty"`
 	// Required sandbox policy configuration.
-	Policy *policyv1.SandboxPolicy `protobuf:"bytes,7,opt,name=policy,proto3" json:"policy,omitempty"`
+	Policy *policyv1.PolicyDocument `protobuf:"bytes,7,opt,name=policy,proto3" json:"policy,omitempty"`
 	// Provider names to attach to this sandbox.
 	Providers []string `protobuf:"bytes,8,rep,name=providers,proto3" json:"providers,omitempty"`
 	// Portable resource requirements used by the gateway for driver selection
@@ -2135,7 +2135,7 @@ func (x *SandboxSpec) GetTemplate() *SandboxTemplate {
 	return nil
 }
 
-func (x *SandboxSpec) GetPolicy() *policyv1.SandboxPolicy {
+func (x *SandboxSpec) GetPolicy() *policyv1.PolicyDocument {
 	if x != nil {
 		return x.Policy
 	}
@@ -10914,7 +10914,7 @@ type UpdateConfigRequest struct {
 	//
 	// Global scope (`global=true`):
 	// - applies to all sandboxes in full (no merge).
-	Policy *policyv1.SandboxPolicy `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
+	Policy *policyv1.PolicyDocument `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
 	// Optional single setting key to mutate.
 	SettingKey string `protobuf:"bytes,3,opt,name=setting_key,json=settingKey,proto3" json:"setting_key,omitempty"`
 	// Setting value for upsert operations.
@@ -10985,7 +10985,7 @@ func (x *UpdateConfigRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelector
 	return nil
 }
 
-func (x *UpdateConfigRequest) GetPolicy() *policyv1.SandboxPolicy {
+func (x *UpdateConfigRequest) GetPolicy() *policyv1.PolicyDocument {
 	if x != nil {
 		return x.Policy
 	}
@@ -12270,7 +12270,7 @@ type SandboxPolicyRevision struct {
 	// Time when this revision was loaded by the sandbox. Absent if not loaded.
 	LoadedTime *timestamppb.Timestamp `protobuf:"bytes,106,opt,name=loaded_time,json=loadedTime,proto3" json:"loaded_time,omitempty"`
 	// The full policy (only populated when explicitly requested).
-	Policy *policyv1.SandboxPolicy `protobuf:"bytes,7,opt,name=policy,proto3" json:"policy,omitempty"`
+	Policy *policyv1.PolicyDocument `protobuf:"bytes,7,opt,name=policy,proto3" json:"policy,omitempty"`
 	// Immutable provenance supplied with this policy revision.
 	Provenance    map[string]string `protobuf:"bytes,8,rep,name=provenance,proto3" json:"provenance,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
@@ -12349,7 +12349,7 @@ func (x *SandboxPolicyRevision) GetLoadedTime() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *SandboxPolicyRevision) GetPolicy() *policyv1.SandboxPolicy {
+func (x *SandboxPolicyRevision) GetPolicy() *policyv1.PolicyDocument {
 	if x != nil {
 		return x.Policy
 	}
@@ -14166,8 +14166,8 @@ type PolicyChunk struct {
 	CandidateEffectivePolicyHash string `protobuf:"bytes,22,opt,name=candidate_effective_policy_hash,json=candidateEffectivePolicyHash,proto3" json:"candidate_effective_policy_hash,omitempty"`
 	// Complete effective policies used for review. These contain policy
 	// configuration only; credential secret values are never materialized.
-	CurrentEffectivePolicy   *policyv1.SandboxPolicy `protobuf:"bytes,23,opt,name=current_effective_policy,json=currentEffectivePolicy,proto3" json:"current_effective_policy,omitempty"`
-	CandidateEffectivePolicy *policyv1.SandboxPolicy `protobuf:"bytes,24,opt,name=candidate_effective_policy,json=candidateEffectivePolicy,proto3" json:"candidate_effective_policy,omitempty"`
+	CurrentEffectivePolicy   *policyv1.PolicyDocument `protobuf:"bytes,23,opt,name=current_effective_policy,json=currentEffectivePolicy,proto3" json:"current_effective_policy,omitempty"`
+	CandidateEffectivePolicy *policyv1.PolicyDocument `protobuf:"bytes,24,opt,name=candidate_effective_policy,json=candidateEffectivePolicy,proto3" json:"candidate_effective_policy,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -14356,14 +14356,14 @@ func (x *PolicyChunk) GetCandidateEffectivePolicyHash() string {
 	return ""
 }
 
-func (x *PolicyChunk) GetCurrentEffectivePolicy() *policyv1.SandboxPolicy {
+func (x *PolicyChunk) GetCurrentEffectivePolicy() *policyv1.PolicyDocument {
 	if x != nil {
 		return x.CurrentEffectivePolicy
 	}
 	return nil
 }
 
-func (x *PolicyChunk) GetCandidateEffectivePolicy() *policyv1.SandboxPolicy {
+func (x *PolicyChunk) GetCandidateEffectivePolicy() *policyv1.PolicyDocument {
 	if x != nil {
 		return x.CandidateEffectivePolicy
 	}
@@ -17132,12 +17132,12 @@ const file_openshell_proto_rawDesc = "" +
 	"\bmetadata\x18\x01 \x01(\v2\".openshell.datamodel.v1.ObjectMetaR\bmetadata\x12-\n" +
 	"\x04spec\x18\x02 \x01(\v2\x19.openshell.v1.SandboxSpecR\x04spec\x123\n" +
 	"\x06status\x18\x03 \x01(\v2\x1b.openshell.v1.SandboxStatusR\x06status\x12t\n" +
-	"\x1ecreated_from_workload_template\x18\x14 \x01(\v2/.openshell.v1.SandboxWorkloadTemplateProvenanceR\x1bcreatedFromWorkloadTemplateJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x05phaseR\x16current_policy_version\"\xbe\x04\n" +
+	"\x1ecreated_from_workload_template\x18\x14 \x01(\v2/.openshell.v1.SandboxWorkloadTemplateProvenanceR\x1bcreatedFromWorkloadTemplateJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x05phaseR\x16current_policy_version\"\xbf\x04\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\tlog_level\x18\x01 \x01(\tR\blogLevel\x12L\n" +
 	"\venvironment\x18\x05 \x03(\v2*.openshell.v1.SandboxSpec.EnvironmentEntryR\venvironment\x129\n" +
-	"\btemplate\x18\x06 \x01(\v2\x1d.openshell.v1.SandboxTemplateR\btemplate\x12:\n" +
-	"\x06policy\x18\a \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x06policy\x12\x1c\n" +
+	"\btemplate\x18\x06 \x01(\v2\x1d.openshell.v1.SandboxTemplateR\btemplate\x12;\n" +
+	"\x06policy\x18\a \x01(\v2#.openshell.policy.v1.PolicyDocumentR\x06policy\x12\x1c\n" +
 	"\tproviders\x18\b \x03(\tR\tproviders\x12W\n" +
 	"\x15resource_requirements\x18\t \x01(\v2\".openshell.v1.ResourceRequirementsR\x14resourceRequirements\x12\x18\n" +
 	"\acommand\x18\f \x03(\tR\acommand\x12\x10\n" +
@@ -17872,11 +17872,11 @@ const file_openshell_proto_rawDesc = "" +
 	"\rexpires_after\x18f \x01(\v2\x19.google.protobuf.DurationR\fexpiresAfter\x12\x1d\n" +
 	"\n" +
 	"token_type\x18\x03 \x01(\tR\ttokenTypeJ\x04\b\x02\x10\x03R\n" +
-	"expires_in\"\xa8\x05\n" +
+	"expires_in\"\xa9\x05\n" +
 	"\x13UpdateConfigRequest\x12R\n" +
 	"\x0fworkspace_scope\x18\n" +
-	" \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12:\n" +
-	"\x06policy\x18\x02 \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x06policy\x12\x1f\n" +
+	" \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12;\n" +
+	"\x06policy\x18\x02 \x01(\v2#.openshell.policy.v1.PolicyDocumentR\x06policy\x12\x1f\n" +
 	"\vsetting_key\x18\x03 \x01(\tR\n" +
 	"settingKey\x12G\n" +
 	"\rsetting_value\x18\x04 \x01(\v2\".openshell.sandbox.v1.SettingValueR\fsettingValue\x12%\n" +
@@ -17980,7 +17980,7 @@ const file_openshell_proto_rawDesc = "" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12I\n" +
 	"\tadmission\x18\x02 \x01(\v2+.openshell.v1.SandboxConfigurationAdmissionR\tadmission\x120\n" +
 	"\x14expected_instance_id\x18\x03 \x01(\tR\x12expectedInstanceId\"$\n" +
-	"\"ReportSandboxConfigurationResponse\"\x9a\x04\n" +
+	"\"ReportSandboxConfigurationResponse\"\x9b\x04\n" +
 	"\x15SandboxPolicyRevision\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12\x1f\n" +
 	"\vpolicy_hash\x18\x02 \x01(\tR\n" +
@@ -17990,8 +17990,8 @@ const file_openshell_proto_rawDesc = "" +
 	"load_error\x18\x04 \x01(\tR\tloadError\x12=\n" +
 	"\fcreated_time\x18i \x01(\v2\x1a.google.protobuf.TimestampR\vcreatedTime\x12;\n" +
 	"\vloaded_time\x18j \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"loadedTime\x12:\n" +
-	"\x06policy\x18\a \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x06policy\x12S\n" +
+	"loadedTime\x12;\n" +
+	"\x06policy\x18\a \x01(\v2#.openshell.policy.v1.PolicyDocumentR\x06policy\x12S\n" +
 	"\n" +
 	"provenance\x18\b \x03(\v23.openshell.v1.SandboxPolicyRevision.ProvenanceEntryR\n" +
 	"provenance\x1a=\n" +
@@ -18123,7 +18123,7 @@ const file_openshell_proto_rawDesc = "" +
 	"\x16NetworkActivitySummary\x124\n" +
 	"\x16network_activity_count\x18\x01 \x01(\rR\x14networkActivityCount\x12.\n" +
 	"\x13denied_action_count\x18\x02 \x01(\rR\x11deniedActionCount\x12H\n" +
-	"\x10denials_by_group\x18\x03 \x03(\v2\x1e.openshell.v1.DenialGroupCountR\x0edenialsByGroup\"\xf6\t\n" +
+	"\x10denials_by_group\x18\x03 \x03(\v2\x1e.openshell.v1.DenialGroupCountR\x0edenialsByGroup\"\xf8\t\n" +
 	"\vPolicyChunk\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1b\n" +
@@ -18148,9 +18148,9 @@ const file_openshell_proto_rawDesc = "" +
 	"\x11application_error\x18\x13 \x01(\tR\x10applicationError\x12!\n" +
 	"\freview_token\x18\x14 \x01(\tR\vreviewToken\x12A\n" +
 	"\x1dcurrent_effective_policy_hash\x18\x15 \x01(\tR\x1acurrentEffectivePolicyHash\x12E\n" +
-	"\x1fcandidate_effective_policy_hash\x18\x16 \x01(\tR\x1ccandidateEffectivePolicyHash\x12\\\n" +
-	"\x18current_effective_policy\x18\x17 \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x16currentEffectivePolicy\x12`\n" +
-	"\x1acandidate_effective_policy\x18\x18 \x01(\v2\".openshell.policy.v1.SandboxPolicyR\x18candidateEffectivePolicyJ\x04\b\t\x10\n" +
+	"\x1fcandidate_effective_policy_hash\x18\x16 \x01(\tR\x1ccandidateEffectivePolicyHash\x12]\n" +
+	"\x18current_effective_policy\x18\x17 \x01(\v2#.openshell.policy.v1.PolicyDocumentR\x16currentEffectivePolicy\x12a\n" +
+	"\x1acandidate_effective_policy\x18\x18 \x01(\v2#.openshell.policy.v1.PolicyDocumentR\x18candidateEffectivePolicyJ\x04\b\t\x10\n" +
 	"J\x04\b\n" +
 	"\x10\vJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\rcreated_at_msR\rdecided_at_msR\rfirst_seen_msR\flast_seen_ms\"\x96\x01\n" +
 	"\x11DraftPolicyUpdate\x12#\n" +
@@ -18923,7 +18923,7 @@ var file_openshell_proto_goTypes = []any{
 	nil,                                                  // 264: openshell.v1.CreateWorkspaceRequest.LabelsEntry
 	(*timestamppb.Timestamp)(nil),                        // 265: google.protobuf.Timestamp
 	(*datamodelv1.ObjectMeta)(nil),                       // 266: openshell.datamodel.v1.ObjectMeta
-	(*policyv1.SandboxPolicy)(nil),                       // 267: openshell.policy.v1.SandboxPolicy
+	(*policyv1.PolicyDocument)(nil),                      // 267: openshell.policy.v1.PolicyDocument
 	(*structpb.Struct)(nil),                              // 268: google.protobuf.Struct
 	(*durationpb.Duration)(nil),                          // 269: google.protobuf.Duration
 	(*datamodelv1.WorkspaceSelector)(nil),                // 270: openshell.datamodel.v1.WorkspaceSelector
@@ -18960,7 +18960,7 @@ var file_openshell_proto_depIdxs = []int32{
 	44,  // 15: openshell.v1.Sandbox.created_from_workload_template:type_name -> openshell.v1.SandboxWorkloadTemplateProvenance
 	244, // 16: openshell.v1.SandboxSpec.environment:type_name -> openshell.v1.SandboxSpec.EnvironmentEntry
 	37,  // 17: openshell.v1.SandboxSpec.template:type_name -> openshell.v1.SandboxTemplate
-	267, // 18: openshell.v1.SandboxSpec.policy:type_name -> openshell.policy.v1.SandboxPolicy
+	267, // 18: openshell.v1.SandboxSpec.policy:type_name -> openshell.policy.v1.PolicyDocument
 	35,  // 19: openshell.v1.SandboxSpec.resource_requirements:type_name -> openshell.v1.ResourceRequirements
 	36,  // 20: openshell.v1.ResourceRequirements.gpu:type_name -> openshell.v1.GpuResourceRequirements
 	245, // 21: openshell.v1.SandboxTemplate.labels:type_name -> openshell.v1.SandboxTemplate.LabelsEntry
@@ -19147,7 +19147,7 @@ var file_openshell_proto_depIdxs = []int32{
 	3,   // 202: openshell.v1.GetSandboxProviderEnvironmentResponse.readiness_reason:type_name -> openshell.v1.ProviderReadinessReason
 	269, // 203: openshell.v1.ExchangeProviderSubjectTokenResponse.expires_after:type_name -> google.protobuf.Duration
 	270, // 204: openshell.v1.UpdateConfigRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	267, // 205: openshell.v1.UpdateConfigRequest.policy:type_name -> openshell.policy.v1.SandboxPolicy
+	267, // 205: openshell.v1.UpdateConfigRequest.policy:type_name -> openshell.policy.v1.PolicyDocument
 	275, // 206: openshell.v1.UpdateConfigRequest.setting_value:type_name -> openshell.sandbox.v1.SettingValue
 	156, // 207: openshell.v1.UpdateConfigRequest.merge_operations:type_name -> openshell.v1.PolicyMergeOperation
 	261, // 208: openshell.v1.UpdateConfigRequest.annotations:type_name -> openshell.v1.UpdateConfigRequest.AnnotationsEntry
@@ -19174,7 +19174,7 @@ var file_openshell_proto_depIdxs = []int32{
 	11,  // 229: openshell.v1.SandboxPolicyRevision.status:type_name -> openshell.v1.PolicyStatus
 	265, // 230: openshell.v1.SandboxPolicyRevision.created_time:type_name -> google.protobuf.Timestamp
 	265, // 231: openshell.v1.SandboxPolicyRevision.loaded_time:type_name -> google.protobuf.Timestamp
-	267, // 232: openshell.v1.SandboxPolicyRevision.policy:type_name -> openshell.policy.v1.SandboxPolicy
+	267, // 232: openshell.v1.SandboxPolicyRevision.policy:type_name -> openshell.policy.v1.PolicyDocument
 	263, // 233: openshell.v1.SandboxPolicyRevision.provenance:type_name -> openshell.v1.SandboxPolicyRevision.ProvenanceEntry
 	270, // 234: openshell.v1.GetSandboxLogsRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
 	265, // 235: openshell.v1.GetSandboxLogsRequest.since_time:type_name -> google.protobuf.Timestamp
@@ -19202,8 +19202,8 @@ var file_openshell_proto_depIdxs = []int32{
 	265, // 257: openshell.v1.PolicyChunk.decided_time:type_name -> google.protobuf.Timestamp
 	265, // 258: openshell.v1.PolicyChunk.first_seen_time:type_name -> google.protobuf.Timestamp
 	265, // 259: openshell.v1.PolicyChunk.last_seen_time:type_name -> google.protobuf.Timestamp
-	267, // 260: openshell.v1.PolicyChunk.current_effective_policy:type_name -> openshell.policy.v1.SandboxPolicy
-	267, // 261: openshell.v1.PolicyChunk.candidate_effective_policy:type_name -> openshell.policy.v1.SandboxPolicy
+	267, // 260: openshell.v1.PolicyChunk.current_effective_policy:type_name -> openshell.policy.v1.PolicyDocument
+	267, // 261: openshell.v1.PolicyChunk.candidate_effective_policy:type_name -> openshell.policy.v1.PolicyDocument
 	270, // 262: openshell.v1.SubmitPolicyAnalysisRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
 	198, // 263: openshell.v1.SubmitPolicyAnalysisRequest.summaries:type_name -> openshell.v1.DenialSummary
 	201, // 264: openshell.v1.SubmitPolicyAnalysisRequest.proposed_chunks:type_name -> openshell.v1.PolicyChunk

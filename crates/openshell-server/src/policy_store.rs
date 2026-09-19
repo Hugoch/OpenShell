@@ -678,8 +678,9 @@ mod tests {
                     }),
                     ..Default::default()
                 };
-                let result =
-                    project_policy_revision_onto_sandbox(&write, &sandbox.encode_to_vec(), 1);
+                let payload = crate::storage_proto::encode_sandbox(&sandbox)
+                    .expect("encode durable sandbox fixture");
+                let result = project_policy_revision_onto_sandbox(&write, &payload, 1);
                 if activated == Some(false) && state != Admission::Accepted {
                     let (projected, changed) = result.unwrap();
                     assert!(changed);

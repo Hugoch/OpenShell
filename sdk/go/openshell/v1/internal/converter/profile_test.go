@@ -64,7 +64,7 @@ func TestProfileCategoryToProto(t *testing.T) {
 func TestNetworkEndpointFromProto(t *testing.T) {
 	proto := &policyv1.NetworkEndpoint{
 		Host:     "api.example.com",
-		Port:     443,
+		Ports:    []uint32{443},
 		Protocol: "rest",
 	}
 
@@ -72,7 +72,7 @@ func TestNetworkEndpointFromProto(t *testing.T) {
 
 	require.NotNil(t, ep)
 	assert.Equal(t, "api.example.com", ep.Host)
-	assert.Equal(t, uint32(443), ep.Port)
+	assert.Equal(t, []uint32{443}, ep.Ports)
 	assert.Equal(t, "rest", ep.Protocol)
 }
 
@@ -84,7 +84,7 @@ func TestNetworkEndpointFromProto_Nil(t *testing.T) {
 func TestNetworkEndpointToProto(t *testing.T) {
 	ep := &v1.NetworkEndpoint{
 		Host:     "api.example.com",
-		Port:     443,
+		Ports:    []uint32{443},
 		Protocol: "rest",
 	}
 
@@ -92,7 +92,7 @@ func TestNetworkEndpointToProto(t *testing.T) {
 
 	require.NotNil(t, proto)
 	assert.Equal(t, "api.example.com", proto.Host)
-	assert.Equal(t, uint32(443), proto.Port)
+	assert.Equal(t, []uint32{443}, proto.Ports)
 	assert.Equal(t, "rest", proto.Protocol)
 }
 
@@ -471,7 +471,7 @@ func TestProviderProfileFromProto(t *testing.T) {
 			{Name: "API_KEY", Description: "key", Required: true},
 		},
 		Endpoints: []*policyv1.NetworkEndpoint{
-			{Host: "api.anthropic.com", Port: 443, Protocol: "rest"},
+			{Host: "api.anthropic.com", Ports: []uint32{443}, Protocol: "rest"},
 		},
 		Binaries: []*policyv1.NetworkBinary{
 			{Path: "/usr/bin/claude"},
@@ -505,7 +505,7 @@ func TestProviderProfileFromProto(t *testing.T) {
 
 	require.Len(t, profile.Endpoints, 1)
 	assert.Equal(t, "api.anthropic.com", profile.Endpoints[0].Host)
-	assert.Equal(t, uint32(443), profile.Endpoints[0].Port)
+	assert.Equal(t, []uint32{443}, profile.Endpoints[0].Ports)
 
 	require.Len(t, profile.Binaries, 1)
 	assert.Equal(t, "/usr/bin/claude", profile.Binaries[0].Path)
@@ -542,7 +542,7 @@ func TestProviderProfileToProto(t *testing.T) {
 			{Name: "API_KEY", Description: "key", Required: true, Secret: true},
 		},
 		Endpoints: []v1.NetworkEndpoint{
-			{Host: "api.anthropic.com", Port: 443, Protocol: "rest"},
+			{Host: "api.anthropic.com", Ports: []uint32{443}, Protocol: "rest"},
 		},
 		Binaries: []v1.NetworkBinary{
 			{Path: "/usr/bin/claude"},
@@ -671,7 +671,7 @@ func TestProviderProfileRoundTrip(t *testing.T) {
 			},
 		},
 		Endpoints: []v1.NetworkEndpoint{
-			{Host: "agent.example.com", Port: 8080, Protocol: "websocket"},
+			{Host: "agent.example.com", Ports: []uint32{8080}, Protocol: "websocket"},
 		},
 		Binaries: []v1.NetworkBinary{
 			{Path: "/bin/agent"},
@@ -721,7 +721,7 @@ func TestProviderProfileRoundTrip(t *testing.T) {
 
 	require.Len(t, back.Endpoints, 1)
 	assert.Equal(t, original.Endpoints[0].Host, back.Endpoints[0].Host)
-	assert.Equal(t, original.Endpoints[0].Port, back.Endpoints[0].Port)
+	assert.Equal(t, original.Endpoints[0].Ports, back.Endpoints[0].Ports)
 
 	require.Len(t, back.Binaries, 1)
 	assert.Equal(t, original.Binaries[0].Path, back.Binaries[0].Path)

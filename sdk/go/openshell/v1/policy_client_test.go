@@ -961,7 +961,7 @@ func TestPolicyEditDraftChunk(t *testing.T) {
 	rule := &NetworkPolicyRule{
 		Name: "allow-https",
 		Endpoints: []PolicyNetworkEndpoint{
-			{Host: "example.com", Port: 443, Protocol: "tcp"},
+			{Host: "example.com", Ports: []uint32{443}, Protocol: "tcp"},
 		},
 	}
 

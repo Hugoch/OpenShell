@@ -83,16 +83,19 @@ func CredentialTokenGrantTypeToProto(t types.CredentialTokenGrantType) pb.Provid
 // --- NetworkEndpoint ---
 
 // NetworkEndpointFromProto converts a proto NetworkEndpoint to an SDK NetworkEndpoint.
-// Only Host, Port, and Protocol are mapped; additional proto fields are ignored.
+// Only Host, Ports, and Protocol are mapped; additional proto fields are ignored.
 func NetworkEndpointFromProto(ep *policyv1.NetworkEndpoint) *types.NetworkEndpoint {
 	if ep == nil {
 		return nil
 	}
-	return &types.NetworkEndpoint{
+	result := &types.NetworkEndpoint{
 		Host:     ep.GetHost(),
-		Port:     ep.GetPort(),
 		Protocol: ep.GetProtocol(),
 	}
+	if ports := ep.GetPorts(); len(ports) > 0 {
+		result.Ports = append([]uint32(nil), ports...)
+	}
+	return result
 }
 
 // NetworkEndpointToProto converts an SDK NetworkEndpoint to a proto NetworkEndpoint.
@@ -102,7 +105,7 @@ func NetworkEndpointToProto(ep *types.NetworkEndpoint) *policyv1.NetworkEndpoint
 	}
 	return &policyv1.NetworkEndpoint{
 		Host:     ep.Host,
-		Port:     ep.Port,
+		Ports:    append([]uint32(nil), ep.Ports...),
 		Protocol: ep.Protocol,
 	}
 }

@@ -18,7 +18,7 @@ network_policies:
   mcp:
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
         rules:
           - allow:

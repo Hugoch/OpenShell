@@ -10,6 +10,7 @@
 package policyv1
 
 import (
+	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	structpb "google.golang.org/protobuf/types/known/structpb"
@@ -30,7 +31,7 @@ const (
 // This package is the public policy contract used by policy files and SDKs.
 // Runtime-derived authority and normalization state live in
 // openshell.sandbox.v1 and cannot be supplied through these messages.
-type SandboxPolicy struct {
+type PolicyDocument struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Authored policy schema version. The only supported value is 1.
 	Version uint32 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
@@ -49,20 +50,20 @@ type SandboxPolicy struct {
 	sizeCache          protoimpl.SizeCache
 }
 
-func (x *SandboxPolicy) Reset() {
-	*x = SandboxPolicy{}
+func (x *PolicyDocument) Reset() {
+	*x = PolicyDocument{}
 	mi := &file_policy_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SandboxPolicy) String() string {
+func (x *PolicyDocument) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SandboxPolicy) ProtoMessage() {}
+func (*PolicyDocument) ProtoMessage() {}
 
-func (x *SandboxPolicy) ProtoReflect() protoreflect.Message {
+func (x *PolicyDocument) ProtoReflect() protoreflect.Message {
 	mi := &file_policy_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -74,47 +75,47 @@ func (x *SandboxPolicy) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SandboxPolicy.ProtoReflect.Descriptor instead.
-func (*SandboxPolicy) Descriptor() ([]byte, []int) {
+// Deprecated: Use PolicyDocument.ProtoReflect.Descriptor instead.
+func (*PolicyDocument) Descriptor() ([]byte, []int) {
 	return file_policy_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *SandboxPolicy) GetVersion() uint32 {
+func (x *PolicyDocument) GetVersion() uint32 {
 	if x != nil {
 		return x.Version
 	}
 	return 0
 }
 
-func (x *SandboxPolicy) GetFilesystemPolicy() *FilesystemPolicy {
+func (x *PolicyDocument) GetFilesystemPolicy() *FilesystemPolicy {
 	if x != nil {
 		return x.FilesystemPolicy
 	}
 	return nil
 }
 
-func (x *SandboxPolicy) GetLandlock() *LandlockPolicy {
+func (x *PolicyDocument) GetLandlock() *LandlockPolicy {
 	if x != nil {
 		return x.Landlock
 	}
 	return nil
 }
 
-func (x *SandboxPolicy) GetProcess() *ProcessPolicy {
+func (x *PolicyDocument) GetProcess() *ProcessPolicy {
 	if x != nil {
 		return x.Process
 	}
 	return nil
 }
 
-func (x *SandboxPolicy) GetNetworkPolicies() map[string]*NetworkPolicyRule {
+func (x *PolicyDocument) GetNetworkPolicies() map[string]*NetworkPolicyRule {
 	if x != nil {
 		return x.NetworkPolicies
 	}
 	return nil
 }
 
-func (x *SandboxPolicy) GetNetworkMiddlewares() map[string]*NetworkMiddleware {
+func (x *PolicyDocument) GetNetworkMiddlewares() map[string]*NetworkMiddleware {
 	if x != nil {
 		return x.NetworkMiddlewares
 	}
@@ -281,9 +282,10 @@ func (x *ProcessPolicy) GetRunAsGroup() string {
 type NetworkPolicyRule struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Display name. An empty value falls back to the surrounding map key.
-	Name          string             `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Endpoints     []*NetworkEndpoint `protobuf:"bytes,2,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
-	Binaries      []*NetworkBinary   `protobuf:"bytes,3,rep,name=binaries,proto3" json:"binaries,omitempty"`
+	Name      string             `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Endpoints []*NetworkEndpoint `protobuf:"bytes,2,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
+	// Omitted and empty both match no process.
+	Binaries      []*NetworkBinary `protobuf:"bytes,3,rep,name=binaries,proto3" json:"binaries,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -340,16 +342,16 @@ func (x *NetworkPolicyRule) GetBinaries() []*NetworkBinary {
 }
 
 type NetworkEndpoint struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Host  string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
-	// Compatibility shorthand for a single port. Mutually exclusive with ports.
-	Port                         uint32                       `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
-	Protocol                     string                       `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
-	Tls                          string                       `protobuf:"bytes,4,opt,name=tls,proto3" json:"tls,omitempty"`
-	Enforcement                  string                       `protobuf:"bytes,5,opt,name=enforcement,proto3" json:"enforcement,omitempty"`
-	Access                       string                       `protobuf:"bytes,6,opt,name=access,proto3" json:"access,omitempty"`
-	Rules                        []*L7Rule                    `protobuf:"bytes,7,rep,name=rules,proto3" json:"rules,omitempty"`
-	AllowedIps                   []string                     `protobuf:"bytes,8,rep,name=allowed_ips,json=allowedIps,proto3" json:"allowed_ips,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Host        string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
+	Protocol    string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Tls         string                 `protobuf:"bytes,4,opt,name=tls,proto3" json:"tls,omitempty"`
+	Enforcement string                 `protobuf:"bytes,5,opt,name=enforcement,proto3" json:"enforcement,omitempty"`
+	Access      string                 `protobuf:"bytes,6,opt,name=access,proto3" json:"access,omitempty"`
+	Rules       []*L7Rule              `protobuf:"bytes,7,rep,name=rules,proto3" json:"rules,omitempty"`
+	AllowedIps  []string               `protobuf:"bytes,8,rep,name=allowed_ips,json=allowedIps,proto3" json:"allowed_ips,omitempty"`
+	// Every endpoint has one nonempty, duplicate-free port list. Tag 9 remains
+	// stable because earlier review builds exposed this repeated field.
 	Ports                        []uint32                     `protobuf:"varint,9,rep,packed,name=ports,proto3" json:"ports,omitempty"`
 	DenyRules                    []*L7DenyRule                `protobuf:"bytes,10,rep,name=deny_rules,json=denyRules,proto3" json:"deny_rules,omitempty"`
 	AllowEncodedSlash            bool                         `protobuf:"varint,11,opt,name=allow_encoded_slash,json=allowEncodedSlash,proto3" json:"allow_encoded_slash,omitempty"`
@@ -405,13 +407,6 @@ func (x *NetworkEndpoint) GetHost() string {
 		return x.Host
 	}
 	return ""
-}
-
-func (x *NetworkEndpoint) GetPort() uint32 {
-	if x != nil {
-		return x.Port
-	}
-	return 0
 }
 
 func (x *NetworkEndpoint) GetProtocol() string {
@@ -1483,14 +1478,14 @@ var File_policy_proto protoreflect.FileDescriptor
 
 const file_policy_proto_rawDesc = "" +
 	"\n" +
-	"\fpolicy.proto\x12\x13openshell.policy.v1\x1a\x1cgoogle/protobuf/struct.proto\"\xa8\x05\n" +
-	"\rSandboxPolicy\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\x12R\n" +
+	"\fpolicy.proto\x12\x13openshell.policy.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1bbuf/validate/validate.proto\"\xdd\x05\n" +
+	"\x0ePolicyDocument\x12!\n" +
+	"\aversion\x18\x01 \x01(\rB\a\xbaH\x04*\x02\b\x01R\aversion\x12R\n" +
 	"\x11filesystem_policy\x18\x02 \x01(\v2%.openshell.policy.v1.FilesystemPolicyR\x10filesystemPolicy\x12?\n" +
 	"\blandlock\x18\x03 \x01(\v2#.openshell.policy.v1.LandlockPolicyR\blandlock\x12<\n" +
-	"\aprocess\x18\x04 \x01(\v2\".openshell.policy.v1.ProcessPolicyR\aprocess\x12b\n" +
-	"\x10network_policies\x18\x05 \x03(\v27.openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntryR\x0fnetworkPolicies\x12k\n" +
-	"\x13network_middlewares\x18\x06 \x03(\v2:.openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntryR\x12networkMiddlewares\x1aj\n" +
+	"\aprocess\x18\x04 \x01(\v2\".openshell.policy.v1.ProcessPolicyR\aprocess\x12w\n" +
+	"\x10network_policies\x18\x05 \x03(\v28.openshell.policy.v1.PolicyDocument.NetworkPoliciesEntryB\x12\xbaH\x0f\x9a\x01\f\x10\x80\b\"\ar\x05\x10\x01\x18\x80\x02R\x0fnetworkPolicies\x12\x80\x01\n" +
+	"\x13network_middlewares\x18\x06 \x03(\v2;.openshell.policy.v1.PolicyDocument.NetworkMiddlewaresEntryB\x12\xbaH\x0f\x9a\x01\f\x10\x80\b\"\ar\x05\x10\x01\x18\x80\x02R\x12networkMiddlewares\x1aj\n" +
 	"\x14NetworkPoliciesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12<\n" +
 	"\x05value\x18\x02 \x01(\v2&.openshell.policy.v1.NetworkPolicyRuleR\x05value:\x028\x01\x1am\n" +
@@ -1507,26 +1502,27 @@ const file_policy_proto_rawDesc = "" +
 	"\rProcessPolicy\x12\x1e\n" +
 	"\vrun_as_user\x18\x01 \x01(\tR\trunAsUser\x12 \n" +
 	"\frun_as_group\x18\x02 \x01(\tR\n" +
-	"runAsGroup\"\xab\x01\n" +
+	"runAsGroup\"\xc1\x01\n" +
 	"\x11NetworkPolicyRule\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12B\n" +
-	"\tendpoints\x18\x02 \x03(\v2$.openshell.policy.v1.NetworkEndpointR\tendpoints\x12>\n" +
-	"\bbinaries\x18\x03 \x03(\v2\".openshell.policy.v1.NetworkBinaryR\bbinaries\"\xb3\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12M\n" +
+	"\tendpoints\x18\x02 \x03(\v2$.openshell.policy.v1.NetworkEndpointB\t\xbaH\x06\x92\x01\x03\x10\x80 R\tendpoints\x12I\n" +
+	"\bbinaries\x18\x03 \x03(\v2\".openshell.policy.v1.NetworkBinaryB\t\xbaH\x06\x92\x01\x03\x10\x80 R\bbinaries\"\xfb\n" +
 	"\n" +
-	"\x0fNetworkEndpoint\x12\x12\n" +
-	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\x12\x1a\n" +
+	"\x0fNetworkEndpoint\x12\x1c\n" +
+	"\x04host\x18\x01 \x01(\tB\b\xbaH\x05r\x03\x18\x80 R\x04host\x12\x1a\n" +
 	"\bprotocol\x18\x03 \x01(\tR\bprotocol\x12\x10\n" +
 	"\x03tls\x18\x04 \x01(\tR\x03tls\x12 \n" +
 	"\venforcement\x18\x05 \x01(\tR\venforcement\x12\x16\n" +
-	"\x06access\x18\x06 \x01(\tR\x06access\x121\n" +
-	"\x05rules\x18\a \x03(\v2\x1b.openshell.policy.v1.L7RuleR\x05rules\x12\x1f\n" +
-	"\vallowed_ips\x18\b \x03(\tR\n" +
-	"allowedIps\x12\x14\n" +
-	"\x05ports\x18\t \x03(\rR\x05ports\x12>\n" +
+	"\x06access\x18\x06 \x01(\tR\x06access\x12=\n" +
+	"\x05rules\x18\a \x03(\v2\x1b.openshell.policy.v1.L7RuleB\n" +
+	"\xbaH\a\x92\x01\x04\x10\x80\x80\x01R\x05rules\x123\n" +
+	"\vallowed_ips\x18\b \x03(\tB\x12\xbaH\x0f\x92\x01\f\x10\x80 \"\ar\x05\x10\x01\x18\x80 R\n" +
+	"allowedIps\x12.\n" +
+	"\x05ports\x18\t \x03(\rB\x18\xbaH\x15\x92\x01\x12\b\x01\x10\xff\xff\x03\x18\x01\"\b*\x06\x18\xff\xff\x03(\x01R\x05ports\x12J\n" +
 	"\n" +
 	"deny_rules\x18\n" +
-	" \x03(\v2\x1f.openshell.policy.v1.L7DenyRuleR\tdenyRules\x12.\n" +
+	" \x03(\v2\x1f.openshell.policy.v1.L7DenyRuleB\n" +
+	"\xbaH\a\x92\x01\x04\x10\x80\x80\x01R\tdenyRules\x12.\n" +
 	"\x13allow_encoded_slash\x18\v \x01(\bR\x11allowEncodedSlash\x12+\n" +
 	"\x11persisted_queries\x18\f \x01(\tR\x10persistedQueries\x12}\n" +
 	"\x19graphql_persisted_queries\x18\r \x03(\v2A.openshell.policy.v1.NetworkEndpoint.GraphqlPersistedQueriesEntryR\x17graphqlPersistedQueries\x123\n" +
@@ -1543,7 +1539,7 @@ const file_policy_proto_rawDesc = "" +
 	"\x1dallow_uninspected_credentials\x18\x19 \x01(\bR\x1ballowUninspectedCredentials\x1aq\n" +
 	"\x1cGraphqlPersistedQueriesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12;\n" +
-	"\x05value\x18\x02 \x01(\v2%.openshell.policy.v1.GraphqlOperationR\x05value:\x028\x01J\x04\b\x12\x10\x13J\x04\b\x1a\x10\x1bR\x10advisor_proposedR\x15provider_credentialed\"6\n" +
+	"\x05value\x18\x02 \x01(\v2%.openshell.policy.v1.GraphqlOperationR\x05value:\x028\x01J\x04\b\x02\x10\x03J\x04\b\x12\x10\x13J\x04\b\x1a\x10\x1bR\x04portR\x10advisor_proposedR\x15provider_credentialed\"6\n" +
 	"\x18NetworkCredentialBinding\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\"5\n" +
 	"\rJsonRpcConfig\x12$\n" +
@@ -1558,9 +1554,9 @@ const file_policy_proto_rawDesc = "" +
 	"\x10GraphqlOperation\x12%\n" +
 	"\x0eoperation_type\x18\x01 \x01(\tR\roperationType\x12%\n" +
 	"\x0eoperation_name\x18\x02 \x01(\tR\roperationName\x12\x16\n" +
-	"\x06fields\x18\x03 \x03(\tR\x06fields\"<\n" +
-	"\x06L7Rule\x122\n" +
-	"\x05allow\x18\x01 \x01(\v2\x1c.openshell.policy.v1.L7AllowR\x05allow\"\xa2\x04\n" +
+	"\x06fields\x18\x03 \x03(\tR\x06fields\"D\n" +
+	"\x06L7Rule\x12:\n" +
+	"\x05allow\x18\x01 \x01(\v2\x1c.openshell.policy.v1.L7AllowB\x06\xbaH\x03\xc8\x01\x01R\x05allow\"\xa2\x04\n" +
 	"\aL7Allow\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x18\n" +
@@ -1595,25 +1591,27 @@ const file_policy_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2\x1c.openshell.policy.v1.MatcherR\x05value:\x028\x01\x1a`\n" +
 	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12;\n" +
-	"\x05value\x18\x02 \x01(\v2%.openshell.policy.v1.ParameterMatcherR\x05value:\x028\x01\"\\\n" +
-	"\aMatcher\x12\x14\n" +
-	"\x04glob\x18\x01 \x01(\tH\x00R\x04glob\x123\n" +
-	"\x03any\x18\x02 \x01(\v2\x1f.openshell.policy.v1.AnyMatcherH\x00R\x03anyB\x06\n" +
-	"\x04kind\"$\n" +
+	"\x05value\x18\x02 \x01(\v2%.openshell.policy.v1.ParameterMatcherR\x05value:\x028\x01\"o\n" +
+	"\aMatcher\x12 \n" +
+	"\x04glob\x18\x01 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80 H\x00R\x04glob\x123\n" +
+	"\x03any\x18\x02 \x01(\v2\x1f.openshell.policy.v1.AnyMatcherH\x00R\x03anyB\r\n" +
+	"\x04kind\x12\x05\xbaH\x02\b\x01\"<\n" +
 	"\n" +
-	"AnyMatcher\x12\x16\n" +
-	"\x06values\x18\x01 \x03(\tR\x06values\"\x94\x01\n" +
+	"AnyMatcher\x12.\n" +
+	"\x06values\x18\x01 \x03(\tB\x16\xbaH\x13\x92\x01\x10\b\x01\x10\x80\b\x18\x01\"\ar\x05\x10\x01\x18\x80 R\x06values\"\x9b\x01\n" +
 	"\x10ParameterMatcher\x128\n" +
 	"\amatcher\x18\x01 \x01(\v2\x1c.openshell.policy.v1.MatcherH\x00R\amatcher\x12>\n" +
-	"\x06object\x18\x02 \x01(\v2$.openshell.policy.v1.ParameterObjectH\x00R\x06objectB\x06\n" +
-	"\x04kind\"\xbd\x01\n" +
-	"\x0fParameterObject\x12H\n" +
-	"\x06fields\x18\x01 \x03(\v20.openshell.policy.v1.ParameterObject.FieldsEntryR\x06fields\x1a`\n" +
+	"\x06object\x18\x02 \x01(\v2$.openshell.policy.v1.ParameterObjectH\x00R\x06objectB\r\n" +
+	"\x04kind\x12\x05\xbaH\x02\b\x01\"\xd3\x01\n" +
+	"\x0fParameterObject\x12^\n" +
+	"\x06fields\x18\x01 \x03(\v20.openshell.policy.v1.ParameterObject.FieldsEntryB\x14\xbaH\x11\x9a\x01\x0e\b\x01\x10\x80\b\"\ar\x05\x10\x01\x18\x80\x02R\x06fields\x1a`\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12;\n" +
-	"\x05value\x18\x02 \x01(\v2%.openshell.policy.v1.ParameterMatcherR\x05value:\x028\x01\"#\n" +
-	"\rNetworkBinary\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"\xf8\x01\n" +
+	"\x05value\x18\x02 \x01(\v2%.openshell.policy.v1.ParameterMatcherR\x05value:\x028\x01\"/\n" +
+	"\rNetworkBinary\x12\x1e\n" +
+	"\x04path\x18\x01 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80 R\x04path\"\xf8\x01\n" +
 	"\x11NetworkMiddleware\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1e\n" +
 	"\n" +
@@ -1641,7 +1639,7 @@ func file_policy_proto_rawDescGZIP() []byte {
 
 var file_policy_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_policy_proto_goTypes = []any{
-	(*SandboxPolicy)(nil),              // 0: openshell.policy.v1.SandboxPolicy
+	(*PolicyDocument)(nil),             // 0: openshell.policy.v1.PolicyDocument
 	(*FilesystemPolicy)(nil),           // 1: openshell.policy.v1.FilesystemPolicy
 	(*LandlockPolicy)(nil),             // 2: openshell.policy.v1.LandlockPolicy
 	(*ProcessPolicy)(nil),              // 3: openshell.policy.v1.ProcessPolicy
@@ -1661,8 +1659,8 @@ var file_policy_proto_goTypes = []any{
 	(*NetworkBinary)(nil),              // 17: openshell.policy.v1.NetworkBinary
 	(*NetworkMiddleware)(nil),          // 18: openshell.policy.v1.NetworkMiddleware
 	(*MiddlewareEndpointSelector)(nil), // 19: openshell.policy.v1.MiddlewareEndpointSelector
-	nil,                                // 20: openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntry
-	nil,                                // 21: openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntry
+	nil,                                // 20: openshell.policy.v1.PolicyDocument.NetworkPoliciesEntry
+	nil,                                // 21: openshell.policy.v1.PolicyDocument.NetworkMiddlewaresEntry
 	nil,                                // 22: openshell.policy.v1.NetworkEndpoint.GraphqlPersistedQueriesEntry
 	nil,                                // 23: openshell.policy.v1.L7Allow.QueryEntry
 	nil,                                // 24: openshell.policy.v1.L7Allow.ParamsEntry
@@ -1672,11 +1670,11 @@ var file_policy_proto_goTypes = []any{
 	(*structpb.Struct)(nil),            // 28: google.protobuf.Struct
 }
 var file_policy_proto_depIdxs = []int32{
-	1,  // 0: openshell.policy.v1.SandboxPolicy.filesystem_policy:type_name -> openshell.policy.v1.FilesystemPolicy
-	2,  // 1: openshell.policy.v1.SandboxPolicy.landlock:type_name -> openshell.policy.v1.LandlockPolicy
-	3,  // 2: openshell.policy.v1.SandboxPolicy.process:type_name -> openshell.policy.v1.ProcessPolicy
-	20, // 3: openshell.policy.v1.SandboxPolicy.network_policies:type_name -> openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntry
-	21, // 4: openshell.policy.v1.SandboxPolicy.network_middlewares:type_name -> openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntry
+	1,  // 0: openshell.policy.v1.PolicyDocument.filesystem_policy:type_name -> openshell.policy.v1.FilesystemPolicy
+	2,  // 1: openshell.policy.v1.PolicyDocument.landlock:type_name -> openshell.policy.v1.LandlockPolicy
+	3,  // 2: openshell.policy.v1.PolicyDocument.process:type_name -> openshell.policy.v1.ProcessPolicy
+	20, // 3: openshell.policy.v1.PolicyDocument.network_policies:type_name -> openshell.policy.v1.PolicyDocument.NetworkPoliciesEntry
+	21, // 4: openshell.policy.v1.PolicyDocument.network_middlewares:type_name -> openshell.policy.v1.PolicyDocument.NetworkMiddlewaresEntry
 	5,  // 5: openshell.policy.v1.NetworkPolicyRule.endpoints:type_name -> openshell.policy.v1.NetworkEndpoint
 	17, // 6: openshell.policy.v1.NetworkPolicyRule.binaries:type_name -> openshell.policy.v1.NetworkBinary
 	10, // 7: openshell.policy.v1.NetworkEndpoint.rules:type_name -> openshell.policy.v1.L7Rule
@@ -1698,8 +1696,8 @@ var file_policy_proto_depIdxs = []int32{
 	27, // 23: openshell.policy.v1.ParameterObject.fields:type_name -> openshell.policy.v1.ParameterObject.FieldsEntry
 	28, // 24: openshell.policy.v1.NetworkMiddleware.config:type_name -> google.protobuf.Struct
 	19, // 25: openshell.policy.v1.NetworkMiddleware.endpoints:type_name -> openshell.policy.v1.MiddlewareEndpointSelector
-	4,  // 26: openshell.policy.v1.SandboxPolicy.NetworkPoliciesEntry.value:type_name -> openshell.policy.v1.NetworkPolicyRule
-	18, // 27: openshell.policy.v1.SandboxPolicy.NetworkMiddlewaresEntry.value:type_name -> openshell.policy.v1.NetworkMiddleware
+	4,  // 26: openshell.policy.v1.PolicyDocument.NetworkPoliciesEntry.value:type_name -> openshell.policy.v1.NetworkPolicyRule
+	18, // 27: openshell.policy.v1.PolicyDocument.NetworkMiddlewaresEntry.value:type_name -> openshell.policy.v1.NetworkMiddleware
 	9,  // 28: openshell.policy.v1.NetworkEndpoint.GraphqlPersistedQueriesEntry.value:type_name -> openshell.policy.v1.GraphqlOperation
 	13, // 29: openshell.policy.v1.L7Allow.QueryEntry.value:type_name -> openshell.policy.v1.Matcher
 	15, // 30: openshell.policy.v1.L7Allow.ParamsEntry.value:type_name -> openshell.policy.v1.ParameterMatcher

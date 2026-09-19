@@ -924,7 +924,7 @@ mod tests {
             .endpoints
             .push(openshell_core::proto::policy::NetworkEndpoint {
                 host: "mcp.example.com".to_string(),
-                port: 443,
+                ports: vec![443],
                 protocol: "mcp".to_string(),
                 mcp: Some(openshell_core::proto::policy::McpConfig {
                     versions: versions
@@ -950,7 +950,7 @@ mod tests {
             .endpoints
             .push(openshell_core::proto::policy::NetworkEndpoint {
                 host: "mcp.example.com".to_string(),
-                port: 443,
+                ports: vec![443],
                 protocol: "mcp".to_string(),
                 mcp: None,
                 rules: vec![openshell_core::proto::policy::L7Rule {

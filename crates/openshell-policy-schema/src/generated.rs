@@ -8,7 +8,9 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use miette::{IntoDiagnostic, Result, WrapErr};
-use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
+use prost::Message;
+use prost_protovalidate::Validator;
+use prost_reflect::{DescriptorPool, DynamicMessage, Kind, MessageDescriptor, SerializeOptions};
 use prost_types::{ListValue, Struct, Value, value};
 use serde::Serialize;
 
@@ -20,9 +22,12 @@ use crate::{
     ParameterMatcher, ParseLimits, PolicyDocument, ProcessPolicy, QueryMatcher,
 };
 
-const POLICY_MESSAGE_NAME: &str = "openshell.policy.v1.SandboxPolicy";
+const POLICY_MESSAGE_NAME: &str = "openshell.policy.v1.PolicyDocument";
+const L7_RULE_MESSAGE_NAME: &str = "openshell.policy.v1.L7Rule";
+const L7_DENY_RULE_MESSAGE_NAME: &str = "openshell.policy.v1.L7DenyRule";
+const NETWORK_BINARY_MESSAGE_NAME: &str = "openshell.policy.v1.NetworkBinary";
 
-fn policy_descriptor() -> prost_reflect::MessageDescriptor {
+fn policy_descriptor_pool() -> &'static DescriptorPool {
     static POOL: OnceLock<DescriptorPool> = OnceLock::new();
     POOL.get_or_init(|| {
         DescriptorPool::decode(
@@ -30,8 +35,41 @@ fn policy_descriptor() -> prost_reflect::MessageDescriptor {
         )
         .expect("compiled policy descriptor set must decode")
     })
-    .get_message_by_name(POLICY_MESSAGE_NAME)
-    .expect("compiled descriptor set must contain SandboxPolicy")
+}
+
+fn message_descriptor(full_name: &str) -> MessageDescriptor {
+    policy_descriptor_pool()
+        .get_message_by_name(full_name)
+        .unwrap_or_else(|| panic!("compiled descriptor set must contain {full_name}"))
+}
+
+fn policy_descriptor() -> MessageDescriptor {
+    message_descriptor(POLICY_MESSAGE_NAME)
+}
+
+fn policy_validator() -> &'static Validator {
+    static VALIDATOR: OnceLock<Validator> = OnceLock::new();
+    VALIDATOR.get_or_init(Validator::new)
+}
+
+fn dynamic_message<T: Message>(message: &T, full_name: &str) -> Result<DynamicMessage> {
+    let mut dynamic = DynamicMessage::new(message_descriptor(full_name));
+    dynamic
+        .transcode_from(message)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("failed to encode generated {full_name}"))?;
+    Ok(dynamic)
+}
+
+fn validate_proto_contract<T: Message>(message: &T, full_name: &str, context: &str) -> Result<()> {
+    let dynamic = dynamic_message(message, full_name)?;
+    if let Err(error) = policy_validator().validate(&dynamic) {
+        let summary = error.to_string();
+        return Err(error).into_diagnostic().wrap_err_with(|| {
+            format!("{context} violates its protobuf validation contract: {summary}")
+        });
+    }
+    Ok(())
 }
 
 fn validate_proto_json_yaml(value: &serde_yml::Value) -> Result<()> {
@@ -62,6 +100,90 @@ fn validate_proto_json_yaml(value: &serde_yml::Value) -> Result<()> {
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn reject_typed_null() -> Result<()> {
+    miette::bail!(
+        "policy YAML null is not allowed for typed protobuf fields; omit the field instead"
+    )
+}
+
+fn validate_untyped_nulls(value: &serde_yml::Value) -> Result<()> {
+    match value {
+        serde_yml::Value::Null => reject_typed_null(),
+        serde_yml::Value::Sequence(values) => {
+            for value in values {
+                validate_untyped_nulls(value)?;
+            }
+            Ok(())
+        }
+        serde_yml::Value::Mapping(entries) => {
+            for value in entries.values() {
+                validate_untyped_nulls(value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_kind_nulls(value: &serde_yml::Value, kind: Kind) -> Result<()> {
+    if matches!(value, serde_yml::Value::Null) {
+        return reject_typed_null();
+    }
+    match kind {
+        // Null is valid JSON data only below a google.protobuf.Struct value.
+        Kind::Message(message) if message.full_name() == "google.protobuf.Struct" => Ok(()),
+        Kind::Message(message) => validate_typed_nulls(value, &message),
+        _ => validate_untyped_nulls(value),
+    }
+}
+
+fn validate_typed_nulls(value: &serde_yml::Value, message: &MessageDescriptor) -> Result<()> {
+    let serde_yml::Value::Mapping(entries) = value else {
+        return validate_untyped_nulls(value);
+    };
+    for (key, value) in entries {
+        // Mapping keys were already checked against the protobuf JSON model.
+        let name = key.as_str();
+        let Some(field) = message
+            .get_field_by_name(name)
+            .or_else(|| message.get_field_by_json_name(name))
+        else {
+            validate_untyped_nulls(value)?;
+            continue;
+        };
+        if matches!(value, serde_yml::Value::Null) {
+            return reject_typed_null();
+        }
+        if field.is_map() {
+            let serde_yml::Value::Mapping(map) = value else {
+                validate_untyped_nulls(value)?;
+                continue;
+            };
+            let Kind::Message(entry) = field.kind() else {
+                unreachable!("protobuf map fields use an entry message")
+            };
+            let value_kind = entry
+                .get_field_by_name("value")
+                .expect("protobuf map entry has a value field")
+                .kind();
+            for map_value in map.values() {
+                validate_kind_nulls(map_value, value_kind.clone())?;
+            }
+        } else if field.is_list() {
+            let serde_yml::Value::Sequence(items) = value else {
+                validate_untyped_nulls(value)?;
+                continue;
+            };
+            for item in items {
+                validate_kind_nulls(item, field.kind())?;
+            }
+        } else {
+            validate_kind_nulls(value, field.kind())?;
+        }
     }
     Ok(())
 }
@@ -209,12 +331,13 @@ fn validate_proto_json_mapping_keys(source: &str) -> Result<()> {
 }
 
 /// Parse strict proto-shaped policy YAML into the generated public message.
-pub fn parse_policy_proto(source: &str) -> Result<proto::SandboxPolicy> {
+pub fn parse_policy_proto(source: &str) -> Result<proto::PolicyDocument> {
     let config = crate::parser_config(ParseLimits::default());
     let value: serde_yml::Value = serde_yml::from_str_with_config(source, &config)
         .into_diagnostic()
         .wrap_err("failed to parse sandbox policy YAML")?;
     validate_proto_json_mapping_keys(source)?;
+    validate_typed_nulls(&value, &policy_descriptor())?;
     validate_proto_json_yaml(&value)?;
     let json_value = serde_json::to_value(value)
         .into_diagnostic()
@@ -223,7 +346,7 @@ pub fn parse_policy_proto(source: &str) -> Result<proto::SandboxPolicy> {
         .into_diagnostic()
         .wrap_err("failed to decode proto-shaped sandbox policy YAML")?;
     let policy = dynamic
-        .transcode_to::<proto::SandboxPolicy>()
+        .transcode_to::<proto::PolicyDocument>()
         .into_diagnostic()
         .wrap_err("failed to decode generated sandbox policy")?;
     validate_authored_policy(&policy)?;
@@ -231,7 +354,7 @@ pub fn parse_policy_proto(source: &str) -> Result<proto::SandboxPolicy> {
 }
 
 /// Parse a strict proto-shaped policy YAML file into the generated message.
-pub fn parse_policy_proto_file(path: &Path, limits: ParseLimits) -> Result<proto::SandboxPolicy> {
+pub fn parse_policy_proto_file(path: &Path, limits: ParseLimits) -> Result<proto::PolicyDocument> {
     let metadata = path
         .metadata()
         .into_diagnostic()
@@ -268,6 +391,7 @@ pub fn parse_policy_proto_file(path: &Path, limits: ParseLimits) -> Result<proto
         .into_diagnostic()
         .wrap_err("failed to parse sandbox policy YAML")?;
     validate_proto_json_mapping_keys(source)?;
+    validate_typed_nulls(&value, &policy_descriptor())?;
     validate_proto_json_yaml(&value)?;
     let json_value = serde_json::to_value(value)
         .into_diagnostic()
@@ -276,7 +400,7 @@ pub fn parse_policy_proto_file(path: &Path, limits: ParseLimits) -> Result<proto
         .into_diagnostic()
         .wrap_err("failed to decode proto-shaped sandbox policy YAML")?;
     let policy = dynamic
-        .transcode_to::<proto::SandboxPolicy>()
+        .transcode_to::<proto::PolicyDocument>()
         .into_diagnostic()
         .wrap_err("failed to decode generated sandbox policy")?;
     validate_authored_policy(&policy)?;
@@ -284,9 +408,25 @@ pub fn parse_policy_proto_file(path: &Path, limits: ParseLimits) -> Result<proto
 }
 
 /// Validate a generated public policy with the schema-owned intrinsic checks.
-pub fn validate_authored_policy(policy: &proto::SandboxPolicy) -> Result<()> {
+pub fn validate_authored_policy(policy: &proto::PolicyDocument) -> Result<()> {
+    validate_proto_contract(policy, POLICY_MESSAGE_NAME, "public policy")?;
     let document = PolicyDocument::try_from(policy.clone())?;
     crate::validate_policy(&document)
+}
+
+/// Validate a standalone public allow rule used by incremental policy APIs.
+pub fn validate_authored_l7_rule(rule: &proto::L7Rule) -> Result<()> {
+    validate_proto_contract(rule, L7_RULE_MESSAGE_NAME, "public L7 allow rule")
+}
+
+/// Validate a standalone public deny rule used by incremental policy APIs.
+pub fn validate_authored_l7_deny_rule(rule: &proto::L7DenyRule) -> Result<()> {
+    validate_proto_contract(rule, L7_DENY_RULE_MESSAGE_NAME, "public L7 deny rule")
+}
+
+/// Validate a standalone public binary selector used by incremental policy APIs.
+pub fn validate_authored_network_binary(binary: &proto::NetworkBinary) -> Result<()> {
+    validate_proto_contract(binary, NETWORK_BINARY_MESSAGE_NAME, "public network binary")
 }
 
 struct ProtoYaml<'a> {
@@ -305,17 +445,12 @@ impl Serialize for ProtoYaml<'_> {
     }
 }
 
-fn dynamic_policy(policy: &proto::SandboxPolicy) -> Result<DynamicMessage> {
-    let mut dynamic = DynamicMessage::new(policy_descriptor());
-    dynamic
-        .transcode_from(policy)
-        .into_diagnostic()
-        .wrap_err("failed to encode generated sandbox policy")?;
-    Ok(dynamic)
+fn dynamic_policy(policy: &proto::PolicyDocument) -> Result<DynamicMessage> {
+    dynamic_message(policy, POLICY_MESSAGE_NAME)
 }
 
 /// Serialize a generated public policy using canonical proto-shaped YAML.
-pub fn serialize_policy_proto(policy: &proto::SandboxPolicy) -> Result<String> {
+pub fn serialize_policy_proto(policy: &proto::PolicyDocument) -> Result<String> {
     validate_authored_policy(policy)?;
     let dynamic = dynamic_policy(policy)?;
     serde_yml::to_string(&ProtoYaml { message: &dynamic })
@@ -324,7 +459,7 @@ pub fn serialize_policy_proto(policy: &proto::SandboxPolicy) -> Result<String> {
 }
 
 /// Convert a generated public policy to canonical proto-shaped JSON.
-pub fn policy_proto_to_json_value(policy: &proto::SandboxPolicy) -> Result<serde_json::Value> {
+pub fn policy_proto_to_json_value(policy: &proto::PolicyDocument) -> Result<serde_json::Value> {
     validate_authored_policy(policy)?;
     let dynamic = dynamic_policy(policy)?;
     serde_json::to_value(ProtoYaml { message: &dynamic })
@@ -332,7 +467,7 @@ pub fn policy_proto_to_json_value(policy: &proto::SandboxPolicy) -> Result<serde
         .wrap_err("failed to serialize proto-shaped sandbox policy JSON")
 }
 
-impl TryFrom<PolicyDocument> for proto::SandboxPolicy {
+impl TryFrom<PolicyDocument> for proto::PolicyDocument {
     type Error = miette::Report;
 
     fn try_from(document: PolicyDocument) -> Result<Self> {
@@ -356,10 +491,10 @@ impl TryFrom<PolicyDocument> for proto::SandboxPolicy {
     }
 }
 
-impl TryFrom<proto::SandboxPolicy> for PolicyDocument {
+impl TryFrom<proto::PolicyDocument> for PolicyDocument {
     type Error = miette::Report;
 
-    fn try_from(policy: proto::SandboxPolicy) -> Result<Self> {
+    fn try_from(policy: proto::PolicyDocument) -> Result<Self> {
         let document = Self {
             version: policy.version,
             filesystem_policy: policy.filesystem_policy.map(Into::into),
@@ -485,7 +620,6 @@ impl TryFrom<NetworkEndpoint> for proto::NetworkEndpoint {
         Ok(Self {
             host: endpoint.host,
             path: endpoint.path,
-            port: u32::from(endpoint.port),
             ports: endpoint.ports.into_iter().map(u32::from).collect(),
             protocol: endpoint.protocol,
             tls: endpoint.tls,
@@ -530,9 +664,6 @@ impl TryFrom<proto::NetworkEndpoint> for NetworkEndpoint {
         Ok(Self {
             host: endpoint.host,
             path: endpoint.path,
-            port: u16::try_from(endpoint.port)
-                .into_diagnostic()
-                .wrap_err("endpoint.port must be in 0..=65535")?,
             ports: endpoint
                 .ports
                 .into_iter()
@@ -1008,7 +1139,7 @@ network_policies:
   mcp:
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
         mcp:
           versions: ["2025-11-25"]
@@ -1052,7 +1183,7 @@ network_middlewares:
     #[test]
     fn generated_policy_uses_protobuf_empty_list_semantics_for_mcp_versions() {
         let absent = parse_policy_proto(
-            "version: 1\nnetwork_policies:\n  mcp:\n    endpoints:\n      - { host: x, port: 443, protocol: mcp, mcp: {} }\n",
+            "version: 1\nnetwork_policies:\n  mcp:\n    endpoints:\n      - { host: x, ports: [443], protocol: mcp, mcp: {} }\n",
         )
         .unwrap();
         assert!(
@@ -1096,7 +1227,7 @@ network_policies:
   mcp:
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
         rules:
           - allow:
@@ -1117,7 +1248,7 @@ network_policies:
   api:
     endpoints:
       - host: api.example.com
-        port: 443
+        ports: [443]
         rules:
           - allow:
               query:
@@ -1132,7 +1263,7 @@ network_policies:
   api:
     endpoints:
       - host: api.example.com
-        port: 443
+        ports: [443]
         rules:
           - allow:
               query:
@@ -1148,7 +1279,7 @@ network_policies:
   mcp:
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
         rules:
           - allow:
@@ -1165,7 +1296,7 @@ network_policies:
   mcp:
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
         rules:
           - allow:
@@ -1208,7 +1339,7 @@ network_policies:
   api:
     endpoints:
       - host: api.example.com
-        port: 443
+        ports: [443]
         rules:
           - allow:
               query:
@@ -1223,7 +1354,7 @@ network_policies:
   api:
     endpoints:
       - host: api.example.com
-        port: 443
+        ports: [443]
         rules:
           - allow:
               tool:
@@ -1240,7 +1371,7 @@ network_policies:
   mcp:
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
         rules:
           - allow:
@@ -1260,8 +1391,89 @@ network_policies:
     }
 
     #[test]
-    fn generated_policy_follows_protobuf_null_semantics() {
-        let policy = parse_policy_proto(
+    fn generated_policy_reports_stable_protovalidate_rule_ids() {
+        let cases = [
+            ("version", "version: 0\n", "uint32.const"),
+            (
+                "missing ports",
+                "version: 1\nnetwork_policies:\n  api:\n    endpoints:\n      - { host: api.example.com }\n",
+                "repeated.min_items",
+            ),
+            (
+                "duplicate ports",
+                "version: 1\nnetwork_policies:\n  api:\n    endpoints:\n      - { host: api.example.com, ports: [443, 443] }\n",
+                "repeated.unique",
+            ),
+            (
+                "port range",
+                "version: 1\nnetwork_policies:\n  api:\n    endpoints:\n      - { host: api.example.com, ports: [65536] }\n",
+                "uint32.gte_lte",
+            ),
+            (
+                "binary path",
+                "version: 1\nnetwork_policies:\n  api:\n    binaries:\n      - { path: \"\" }\n",
+                "string.min_len",
+            ),
+            (
+                "matcher choice",
+                "version: 1\nnetwork_policies:\n  api:\n    endpoints:\n      - host: api.example.com\n        ports: [443]\n        rules:\n          - allow:\n              query:\n                owner: {}\n",
+                "required",
+            ),
+        ];
+
+        for (name, source, rule_id) in cases {
+            let value: serde_yml::Value = serde_yml::from_str(source).expect(name);
+            let dynamic = DynamicMessage::deserialize(
+                policy_descriptor(),
+                serde_json::to_value(value).expect(name),
+            )
+            .expect(name);
+            let error = policy_validator().validate(&dynamic).expect_err(name);
+            let prost_protovalidate::Error::Validation(error) = error else {
+                panic!("{name} returned a validator runtime error: {error}");
+            };
+            assert!(
+                error
+                    .violations()
+                    .iter()
+                    .any(|violation| violation.rule_id() == rule_id),
+                "{name} did not report {rule_id}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn standalone_incremental_fragments_run_the_same_portable_rules() {
+        let missing_allow = proto::L7Rule::default();
+        let error = validate_authored_l7_rule(&missing_allow).expect_err("allow is required");
+        assert!(
+            error.to_string().contains("required"),
+            "unexpected validation error: {error:?}"
+        );
+
+        let missing_matcher = proto::L7DenyRule {
+            query: HashMap::from([("owner".to_string(), proto::Matcher::default())]),
+            ..Default::default()
+        };
+        let error = validate_authored_l7_deny_rule(&missing_matcher)
+            .expect_err("matcher choice is required");
+        assert!(
+            error.to_string().contains("required"),
+            "unexpected validation error: {error:?}"
+        );
+
+        let empty_binary = proto::NetworkBinary::default();
+        let error =
+            validate_authored_network_binary(&empty_binary).expect_err("binary path is required");
+        assert!(
+            error.to_string().contains("at least 1 characters"),
+            "unexpected validation error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn generated_policy_rejects_typed_nulls_but_preserves_struct_null_data() {
+        let typed_null = parse_policy_proto(
             r"
 version: 1
 filesystem_policy: null
@@ -1269,7 +1481,7 @@ network_policies:
   mcp:
     endpoints:
       - host: mcp.example.com
-        port: 443
+        ports: [443]
         protocol: mcp
         mcp:
           versions: null
@@ -1279,16 +1491,36 @@ network_policies:
               tool: null
 ",
         )
-        .expect("protobuf JSON null must leave fields unset");
+        .expect_err("typed nulls must not silently become absent fields");
+        assert!(typed_null.to_string().contains("null is not allowed"));
 
-        assert!(policy.filesystem_policy.is_none());
-        let endpoint = &policy.network_policies["mcp"].endpoints[0];
-        assert!(endpoint.mcp.as_ref().unwrap().versions.is_empty());
-        assert!(endpoint.rules[0].allow.as_ref().unwrap().tool.is_none());
+        let missing_version =
+            parse_policy_proto("version:\n").expect_err("a null scalar field must be rejected");
+        assert!(missing_version.to_string().contains("null is not allowed"));
 
-        let missing_version = parse_policy_proto("version:\n")
-            .expect_err("null version must become the unsupported scalar default");
-        assert!(missing_version.to_string().contains("expected version 1"));
+        let deceptive_map_key = parse_policy_proto(
+            "version: 1\nnetwork_middlewares:\n  config:\n    endpoints: null\n",
+        )
+        .expect_err("a map key named config must not turn its typed value into Struct data");
+        assert!(
+            deceptive_map_key
+                .to_string()
+                .contains("null is not allowed")
+        );
+
+        let struct_null = parse_policy_proto(
+            "version: 1\nnetwork_middlewares:\n  audit:\n    config:\n      optional: null\n",
+        )
+        .expect("null remains valid data inside google.protobuf.Struct");
+        assert!(
+            struct_null.network_middlewares["audit"]
+                .config
+                .as_ref()
+                .unwrap()
+                .fields["optional"]
+                .kind
+                .is_some()
+        );
     }
 
     #[test]
@@ -1300,12 +1532,12 @@ network_policies:
   api:
     endpoints:
       - host: api.example.com
-        port: "443"
+        ports: ["443"]
 "#,
         )
         .expect("protobuf JSON permits quoted integer scalars");
         assert_eq!(policy.version, 1);
-        assert_eq!(policy.network_policies["api"].endpoints[0].port, 443);
+        assert_eq!(policy.network_policies["api"].endpoints[0].ports, [443]);
         assert_eq!(
             parse_policy_proto("version: 1.0\n")
                 .expect("an exact integral JSON number must parse")
@@ -1361,7 +1593,7 @@ network_policies:
   api:
     endpoints:
       - host: api.example.com
-        port: 443
+        ports: [443]
         advisor_proposed: true
 ",
         )

@@ -588,7 +588,7 @@ func TestSandboxRoundTrip(t *testing.T) {
 			},
 			Providers: []string{"p1", "p2"},
 			GPUCount:  &gpuCount,
-			Policy: &v1.SandboxPolicy{
+			Policy: &v1.PolicyDocument{
 				Version: 3,
 				Filesystem: &v1.FilesystemPolicy{
 					IncludeWorkdir: true,
@@ -608,7 +608,7 @@ func TestSandboxRoundTrip(t *testing.T) {
 						Endpoints: []v1.PolicyNetworkEndpoint{
 							{
 								Host:     "api.example.com",
-								Port:     443,
+								Ports:    []uint32{443},
 								Protocol: "rest",
 								CredentialBinding: &v1.NetworkCredentialBinding{
 									Provider: "api-credentials",
@@ -710,7 +710,7 @@ func TestSandboxSpecToProto(t *testing.T) {
 		},
 		Providers: []string{"prov"},
 		GPUCount:  &gpuCount,
-		Policy: &v1.SandboxPolicy{
+		Policy: &v1.PolicyDocument{
 			Version: 2,
 			Filesystem: &v1.FilesystemPolicy{
 				ReadOnly: []string{"/etc"},

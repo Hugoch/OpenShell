@@ -3363,7 +3363,7 @@ mod tests {
 
     fn authored_policy(
         mut policy: openshell_core::proto::SandboxPolicy,
-    ) -> openshell_core::proto::policy::SandboxPolicy {
+    ) -> openshell_core::proto::policy::PolicyDocument {
         if policy.version == 0 {
             policy.version = 1;
         }
@@ -3372,7 +3372,7 @@ mod tests {
 
     fn authored_mcp_policy_with_versions(
         versions: &[&str],
-    ) -> openshell_core::proto::policy::SandboxPolicy {
+    ) -> openshell_core::proto::policy::PolicyDocument {
         let mut policy = authored_policy(mcp_policy_with_versions(&["2025-11-25"]));
         policy.network_policies.get_mut("mcp").unwrap().endpoints[0]
             .mcp
@@ -3431,7 +3431,7 @@ mod tests {
             request_id: String::new(),
             spec: Some(SandboxSpec {
                 providers: vec!["github".to_string()],
-                policy: Some(openshell_core::proto::policy::SandboxPolicy {
+                policy: Some(openshell_core::proto::policy::PolicyDocument {
                     version: 1,
                     ..Default::default()
                 }),
@@ -3446,7 +3446,7 @@ mod tests {
         let created = Sandbox {
             spec: Some(SandboxSpec {
                 providers: vec!["github".to_string()],
-                policy: Some(openshell_core::proto::policy::SandboxPolicy {
+                policy: Some(openshell_core::proto::policy::PolicyDocument {
                     version: 1,
                     ..Default::default()
                 }),
@@ -3841,7 +3841,7 @@ mod tests {
             }),
             spec: Some(SandboxSpec {
                 log_level: "debug".to_string(),
-                policy: Some(openshell_core::proto::policy::SandboxPolicy {
+                policy: Some(openshell_core::proto::policy::PolicyDocument {
                     version: 1,
                     ..Default::default()
                 }),
