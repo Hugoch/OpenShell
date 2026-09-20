@@ -17,11 +17,14 @@ use std::time::Duration;
 
 use openshell_core::proto::open_shell_client::OpenShellClient;
 use openshell_core::proto::{
-    FinalizeMainProcessExitRequest, GatewayMessage, RelayFrame, RelayInit, RelayOpen,
-    RelayOpenResult, ReportMainProcessExitRequest, SupervisorHeartbeat, SupervisorHello,
-    SupervisorMessage, TcpRelayTarget, gateway_message, relay_open, supervisor_message,
+    ExecRelayExit, ExecRelayFrame, ExecRelayTarget, FinalizeMainProcessExitRequest, GatewayMessage,
+    RelayFrame, RelayInit, RelayOpen, RelayOpenResult, ReportMainProcessExitRequest,
+    SupervisorHeartbeat, SupervisorHello, SupervisorMessage, TcpRelayTarget, exec_relay_frame,
+    gateway_message, relay_open, supervisor_message,
 };
-use openshell_isolation_interface::contract::{BoundaryLoopbackConnector, LoopbackTarget};
+use openshell_isolation_interface::contract::{
+    BoundaryExec, BoundaryExitStatus, BoundaryLoopbackConnector, ExecSpec, LoopbackTarget,
+};
 use openshell_ocsf::{
     ActivityId, ConnectionInfo, Endpoint, EventContext, NetworkActivityBuilder, OcsfEvent,
     SeverityId, StatusId, ocsf_emit,
@@ -119,6 +122,7 @@ fn relay_target_endpoint(open: &RelayOpen) -> Option<Endpoint> {
 fn relay_target_kind(open: &RelayOpen) -> &'static str {
     match open.target.as_ref() {
         Some(relay_open::Target::Tcp(_)) => "tcp relay",
+        Some(relay_open::Target::Exec(_)) => "exec relay",
         Some(relay_open::Target::Ssh(_)) | None => "ssh relay",
     }
 }
@@ -132,6 +136,7 @@ fn relay_target_message(
         Some(relay_open::Target::Tcp(target)) => {
             format!("{}:{}", target.host.trim(), target.port)
         }
+        Some(relay_open::Target::Exec(_)) => "sandbox boundary".to_string(),
         Some(relay_open::Target::Ssh(_)) | None => {
             format!("unix:{}", ssh_socket_path.display())
         }
@@ -276,11 +281,13 @@ fn map_session_stream_message<T>(
 ///
 /// The task runs for the lifetime of the sandbox process, reconnecting with
 /// exponential backoff on failures.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     endpoint: String,
     sandbox_id: String,
     ssh_socket_path: std::path::PathBuf,
     port_forward: Arc<dyn BoundaryLoopbackConnector>,
+    boundary_exec: Arc<dyn BoundaryExec>,
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
     runtime: SessionRuntimeContext,
@@ -290,6 +297,7 @@ pub fn spawn(
         sandbox_id,
         ssh_socket_path,
         port_forward,
+        boundary_exec,
         expected_ssh_peer_pid,
         terminating,
         runtime,
@@ -298,11 +306,13 @@ pub fn spawn(
 }
 
 /// Spawn the supervisor session and expose when the gateway has accepted it.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_with_readiness(
     endpoint: String,
     sandbox_id: String,
     ssh_socket_path: std::path::PathBuf,
     port_forward: Arc<dyn BoundaryLoopbackConnector>,
+    boundary_exec: Arc<dyn BoundaryExec>,
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
     runtime: SessionRuntimeContext,
@@ -313,6 +323,7 @@ pub fn spawn_with_readiness(
         sandbox_id,
         ssh_socket_path,
         port_forward,
+        boundary_exec,
         expected_ssh_peer_pid,
         terminating,
         instance_id: runtime.instance_id,
@@ -327,6 +338,7 @@ struct SessionConfig {
     sandbox_id: String,
     ssh_socket_path: std::path::PathBuf,
     port_forward: Arc<dyn BoundaryLoopbackConnector>,
+    boundary_exec: Arc<dyn BoundaryExec>,
     expected_ssh_peer_pid: Option<u32>,
     terminating: Arc<AtomicBool>,
     instance_id: String,
@@ -456,6 +468,7 @@ async fn run_single_session(
                     sandbox_id: &config.sandbox_id,
                     ssh_socket_path: &config.ssh_socket_path,
                     port_forward: &config.port_forward,
+                    boundary_exec: &config.boundary_exec,
                     expected_ssh_peer_pid: config.expected_ssh_peer_pid,
                     channel: &channel,
                     tx: &tx,
@@ -524,6 +537,7 @@ struct GatewayMessageContext<'a> {
     sandbox_id: &'a str,
     ssh_socket_path: &'a std::path::Path,
     port_forward: &'a Arc<dyn BoundaryLoopbackConnector>,
+    boundary_exec: &'a Arc<dyn BoundaryExec>,
     expected_ssh_peer_pid: Option<u32>,
     channel: &'a grpc_client::AuthedChannel,
     tx: &'a mpsc::Sender<SupervisorMessage>,
@@ -543,6 +557,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
             let ssh_socket_path = context.ssh_socket_path.to_path_buf();
             let tx = context.tx.clone();
             let port_forward = context.port_forward.clone();
+            let boundary_exec = context.boundary_exec.clone();
             let expected_ssh_peer_pid = context.expected_ssh_peer_pid;
             let terminating = Arc::clone(context.terminating);
 
@@ -555,6 +570,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
                     relay_open,
                     &ssh_socket_path,
                     port_forward,
+                    boundary_exec,
                     expected_ssh_peer_pid,
                     channel,
                     tx,
@@ -608,16 +624,22 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
 /// This opens a new HTTP/2 stream on the existing `Channel` — no new TCP or
 /// TLS handshake. The first `RelayFrame` we send is a `RelayInit`; subsequent
 /// frames carry raw SSH bytes in `data`.
+#[allow(clippy::too_many_arguments)]
 async fn handle_relay_open(
     relay_open: RelayOpen,
     ssh_socket_path: &std::path::Path,
     port_forward: Arc<dyn BoundaryLoopbackConnector>,
+    boundary_exec: Arc<dyn BoundaryExec>,
     expected_ssh_peer_pid: Option<u32>,
     channel: grpc_client::AuthedChannel,
     tx: mpsc::Sender<SupervisorMessage>,
     terminating: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let channel_id = relay_open.channel_id.clone();
+    if let Some(relay_open::Target::Exec(target)) = relay_open.target.as_ref() {
+        return handle_exec_relay(&channel_id, target, boundary_exec, channel, tx, terminating)
+            .await;
+    }
     let target = match open_target(
         &relay_open,
         ssh_socket_path,
@@ -744,6 +766,205 @@ async fn handle_relay_open(
     Ok(())
 }
 
+async fn handle_exec_relay(
+    channel_id: &str,
+    target: &ExecRelayTarget,
+    boundary_exec: Arc<dyn BoundaryExec>,
+    channel: grpc_client::AuthedChannel,
+    tx: mpsc::Sender<SupervisorMessage>,
+    terminating: Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some((program, args)) = target.command.split_first() else {
+        let error = "exec command must not be empty".to_string();
+        send_relay_open_result(&tx, channel_id, false, error.clone()).await;
+        return Err(error.into());
+    };
+    let mut environment = target
+        .environment
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<Vec<_>>();
+    environment.sort_by(|left, right| left.0.cmp(&right.0));
+    let spec = ExecSpec {
+        program: program.clone(),
+        args: args.to_vec(),
+        env: environment,
+        workdir: (!target.workdir.is_empty()).then(|| target.workdir.clone()),
+        pty: target.tty,
+    };
+    let mut session = match boundary_exec.exec(spec).await {
+        Ok(session) => session,
+        Err(error) => {
+            send_relay_open_result(&tx, channel_id, false, error.to_string()).await;
+            return Err(error.into());
+        }
+    };
+
+    if let Some(terminal) = session.terminal.as_ref() {
+        let cols = u16::try_from(target.cols).map_err(|_| "PTY columns exceed u16")?;
+        let rows = u16::try_from(target.rows).map_err(|_| "PTY rows exceed u16")?;
+        terminal.resize(cols, rows).await?;
+    }
+
+    send_relay_open_result(&tx, channel_id, true, String::new()).await;
+    let mut client = OpenShellClient::new(channel);
+    let (out_tx, out_rx) = mpsc::channel::<RelayFrame>(16);
+    let outbound = tokio_stream::wrappers::ReceiverStream::new(out_rx);
+    out_tx
+        .send(RelayFrame {
+            payload: Some(openshell_core::proto::relay_frame::Payload::Init(
+                RelayInit {
+                    channel_id: channel_id.to_string(),
+                },
+            )),
+        })
+        .await
+        .map_err(|_| "outbound channel closed before exec init")?;
+    let response = match client.relay_stream(outbound).await {
+        Ok(response) => response,
+        Err(error) if expected_transport_close_during_shutdown(&error, &terminating) => {
+            let _ = session.process.terminate().await;
+            return Ok(());
+        }
+        Err(error) => {
+            let _ = session.process.terminate().await;
+            return Err(format!("exec relay_stream RPC failed: {error}").into());
+        }
+    };
+    let mut inbound = response.into_inner();
+
+    let stdout_task = tokio::spawn(pump_exec_output(
+        session.stdout,
+        out_tx.clone(),
+        ExecOutputKind::Stdout,
+    ));
+    let stderr_task = session.stderr.take().map(|stderr| {
+        tokio::spawn(pump_exec_output(
+            stderr,
+            out_tx.clone(),
+            ExecOutputKind::Stderr,
+        ))
+    });
+    let process = session.process.clone();
+    let wait = process.wait();
+    tokio::pin!(wait);
+    let mut stdin = session.stdin.take();
+    let mut decoder = openshell_core::exec_relay::FrameDecoder::default();
+
+    loop {
+        tokio::select! {
+            status = &mut wait => {
+                let status = status?;
+                let _ = stdout_task.await;
+                if let Some(task) = stderr_task {
+                    let _ = task.await;
+                }
+                let exit_code = match status {
+                    BoundaryExitStatus::Exited(code) => code,
+                    BoundaryExitStatus::Signaled(signal) => 128_i32.saturating_add(signal),
+                };
+                send_exec_frame(&out_tx, ExecRelayFrame {
+                    payload: Some(exec_relay_frame::Payload::Exit(ExecRelayExit { exit_code })),
+                }).await?;
+                drop(out_tx);
+                return Ok(());
+            }
+            next = inbound.next() => {
+                let Some(next) = next else {
+                    process.terminate().await?;
+                    return Ok(());
+                };
+                let frame = match next {
+                    Ok(frame) => frame,
+                    Err(error) if expected_transport_close_during_shutdown(&error, &terminating) => {
+                        process.terminate().await?;
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        process.terminate().await?;
+                        return Err(format!("exec relay inbound errored: {error}").into());
+                    }
+                };
+                let Some(openshell_core::proto::relay_frame::Payload::Data(data)) = frame.payload else {
+                    process.terminate().await?;
+                    return Err("exec relay inbound received non-data frame".into());
+                };
+                decoder.push(&data);
+                while let Some(frame) = decoder.next_frame()? {
+                    match frame.payload {
+                        Some(exec_relay_frame::Payload::Stdin(data)) => {
+                            let Some(input) = stdin.as_mut() else {
+                                return Err("exec relay received stdin after EOF".into());
+                            };
+                            input.write_all(&data).await?;
+                        }
+                        Some(exec_relay_frame::Payload::Resize(resize)) => {
+                            let Some(terminal) = session.terminal.as_ref() else {
+                                return Err("exec relay received resize without a PTY".into());
+                            };
+                            terminal
+                                .resize(u16::try_from(resize.cols)?, u16::try_from(resize.rows)?)
+                                .await?;
+                        }
+                        Some(exec_relay_frame::Payload::StdinEof(_)) => {
+                            if let Some(mut input) = stdin.take() {
+                                input.shutdown().await?;
+                            }
+                        }
+                        _ => return Err("exec relay received an invalid input frame".into()),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ExecOutputKind {
+    Stdout,
+    Stderr,
+}
+
+async fn pump_exec_output(
+    mut reader: Box<dyn AsyncRead + Send + Unpin>,
+    out_tx: mpsc::Sender<RelayFrame>,
+    kind: ExecOutputKind,
+) {
+    let mut buffer = vec![0_u8; RELAY_CHUNK_SIZE];
+    while let Ok(length) = reader.read(&mut buffer).await {
+        if length == 0 {
+            break;
+        }
+        let payload = match kind {
+            ExecOutputKind::Stdout => exec_relay_frame::Payload::Stdout(buffer[..length].to_vec()),
+            ExecOutputKind::Stderr => exec_relay_frame::Payload::Stderr(buffer[..length].to_vec()),
+        };
+        if send_exec_frame(
+            &out_tx,
+            ExecRelayFrame {
+                payload: Some(payload),
+            },
+        )
+        .await
+        .is_err()
+        {
+            break;
+        }
+    }
+}
+
+async fn send_exec_frame(
+    tx: &mpsc::Sender<RelayFrame>,
+    frame: ExecRelayFrame,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let data = openshell_core::exec_relay::encode_frame(&frame)?;
+    tx.send(RelayFrame {
+        payload: Some(openshell_core::proto::relay_frame::Payload::Data(data)),
+    })
+    .await
+    .map_err(|_| "exec relay outbound channel closed".into())
+}
+
 async fn send_relay_open_result(
     tx: &mpsc::Sender<SupervisorMessage>,
     channel_id: &str,
@@ -771,6 +992,9 @@ async fn open_target(
 ) -> Result<Box<dyn TargetStream>, Box<dyn std::error::Error + Send + Sync>> {
     match relay_open.target.as_ref() {
         Some(relay_open::Target::Tcp(target)) => open_tcp_target(target, port_forward).await,
+        Some(relay_open::Target::Exec(_)) => {
+            Err("exec target requires the native exec relay".into())
+        }
         Some(relay_open::Target::Ssh(_)) | None => {
             let runtime_path = crate::unix_socket::runtime_path(ssh_socket_path);
             let stream = tokio::net::UnixStream::connect(runtime_path.as_ref()).await?;

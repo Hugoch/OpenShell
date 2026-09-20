@@ -74,7 +74,6 @@ impl LocalBoundaryExec {
             .env(openshell_core::sandbox_env::SANDBOX, "1")
             .env("HOME", session_home)
             .env("USER", session_user)
-            .env("SHELL", "/bin/bash")
             .env("PATH", path)
             .env("TERM", if spec.pty { "xterm-256color" } else { "dumb" });
         for (key, value) in &self.user_environment {

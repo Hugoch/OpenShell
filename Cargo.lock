@@ -4652,7 +4652,6 @@ dependencies = [
  "rcgen",
  "reqwest 0.12.28",
  "rsa 0.9.10",
- "russh",
  "rustix 1.1.4",
  "rustls",
  "rustls-pemfile",

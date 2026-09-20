@@ -111,6 +111,7 @@ pub async fn start_boundary_access(
     let listen_path = ssh_socket_path.clone();
     let ssh_port_forward = port_forward.clone();
     let ssh_main_session = main_session.clone();
+    let ssh_boundary_exec = boundary_exec.clone();
     let ssh_task = tokio::spawn(async move {
         if let Err(error) = crate::ssh::run_ssh_server(
             listen_path,
@@ -118,7 +119,7 @@ pub async fn start_boundary_access(
             ca_file_paths,
             shared_ssh_socket,
             ssh_port_forward,
-            boundary_exec,
+            ssh_boundary_exec,
             Some(ssh_main_session),
         )
         .await
@@ -161,6 +162,7 @@ pub async fn start_boundary_access(
                 id.to_string(),
                 ssh_socket_path,
                 port_forward,
+                boundary_exec,
                 None,
                 terminating.clone(),
                 crate::supervisor_session::SessionRuntimeContext {

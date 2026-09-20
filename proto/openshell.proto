@@ -1607,11 +1607,8 @@ message ExecSandboxRequest {
   // Initial terminal rows (used when tty=true, 0 = use default).
   uint32 rows = 9;
 
-  // Skip sourcing shell login/profile startup files before running the command.
-  // When false (the default), the command runs through a login shell
-  // (`bash -lc`) so user startup files (.bash_profile/.profile, and .bashrc if
-  // sourced by them) are applied. When true, the command runs without those
-  // files (`bash -c`), for automation that needs predictable startup behavior.
+  // Deprecated compatibility field. ExecSandbox executes command as a literal
+  // argv vector and does not start a login shell.
   bool no_login_shell = 10;
 
   // Optional nonzero UUID for durable launch admission. Also applies to the
@@ -2692,6 +2689,7 @@ message RelayOpen {
   oneof target {
     SshRelayTarget ssh = 2;
     TcpRelayTarget tcp = 3;
+    ExecRelayTarget exec = 4;
   }
   // Optional service identifier for audit/correlation.
   string service_id = 5;
@@ -2706,6 +2704,42 @@ message TcpRelayTarget {
   string host = 1;
   // Target port. Must fit in u16 and be non-zero.
   uint32 port = 2;
+}
+
+// A process started directly by the sandbox boundary, without a workload
+// shell or SSH transport.
+message ExecRelayTarget {
+  repeated string command = 1;
+  map<string, string> environment = 2;
+  string workdir = 3;
+  bool tty = 4;
+  uint32 cols = 5;
+  uint32 rows = 6;
+}
+
+message ExecRelayResize {
+  uint32 cols = 1;
+  uint32 rows = 2;
+}
+
+message ExecRelayExit {
+  int32 exit_code = 1;
+}
+
+message ExecRelayStdinEof {}
+
+// Length-delimited control and I/O frame carried in RelayFrame.data for an
+// ExecRelayTarget channel.
+message ExecRelayFrame {
+  oneof payload {
+    bytes stdin = 1;
+    ExecRelayResize resize = 2;
+    ExecRelayStdinEof stdin_eof = 3;
+    bytes stdout = 4;
+    bytes stderr = 5;
+    ExecRelayExit exit = 6;
+    string error = 7;
+  }
 }
 
 // Initial RelayStream frame sent by the supervisor to claim a pending relay.
