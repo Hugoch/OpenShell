@@ -648,11 +648,23 @@ Gateway and Sandbox Protocol token responses follow the same convention: a
 present expiration timestamp carries the absolute deadline, while absence means
 the issued token does not expire.
 
+On-disk SQLite databases run in WAL journal mode with `synchronous=NORMAL`.
+The adapter switches the file to WAL on a single connection before the pool
+opens, then applies both settings to every pooled connection. WAL lets readers
+proceed while a writer commits, and `NORMAL` removes the per-commit `fsync`,
+which matters because gateway hot paths such as SSH session issuance and
+revocation are many small autocommit writes. The trade-off is that a power
+loss or kernel crash can roll back the most recent transactions; the database
+remains consistent. Deployments that need stronger durability or multiple
+replicas use Postgres. WAL requires a local filesystem with working shared
+memory, so the SQLite file must not live on a network mount, and backups must
+use `sqlite3 .backup` or `VACUUM INTO` rather than copying the main file alone.
+
 The SQLite adapter tightens the on-disk database file to mode `0o600` on every
 connect so that provider API keys, SSH session tokens, and sandbox metadata are
 not readable by other local users on shared hosts. The same restriction is
-reapplied to the `<db>-wal` and `<db>-shm` sidecars (created by SQLite's
-default WAL journal mode), which mirror the same sensitive contents.
+reapplied to the `<db>-wal` and `<db>-shm` sidecars that WAL mode creates,
+which mirror the same sensitive contents.
 
 Persisted state includes sandboxes, providers, provider profiles, provider
 credential refresh state, SSH sessions, policy revisions, settings, deployment
