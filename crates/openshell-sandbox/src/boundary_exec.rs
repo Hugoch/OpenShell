@@ -4,7 +4,9 @@
 //! Workload-side implementation of RFC 0012 sandbox exec.
 
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
@@ -113,6 +115,72 @@ impl LocalBoundaryExec {
             crate::process::ca_runtime_read_only_paths(self.ca_file_paths.as_deref());
         crate::process::prepare_child_sandbox(&self.policy, workdir, &runtime_read_only)
             .map_err(|error| BackendError::Process(error.to_string()))
+    }
+
+    fn runtime_helper(&self, spec: ExecSpec) -> Result<ExecSession, BackendError> {
+        self.runtime.ensure_active()?;
+        if spec.pty {
+            return Err(BackendError::Process(
+                "runtime helpers do not support PTYs".to_string(),
+            ));
+        }
+        let Some(helper) = spec.args.first().map(String::as_str) else {
+            return Err(BackendError::Process(
+                "runtime helper is required".to_string(),
+            ));
+        };
+        if !matches!(helper, "file-transfer" | "sftp") {
+            return Err(BackendError::Process(format!(
+                "unsupported runtime helper '{helper}'"
+            )));
+        }
+        let root = match spec.workdir.as_deref().or(self.base_workdir.as_deref()) {
+            Some(root) => std::path::PathBuf::from(root),
+            None => std::env::current_dir().map_err(|error| {
+                BackendError::Process(format!("resolve workload directory: {error}"))
+            })?,
+        };
+
+        let (stdin_client, stdin_helper) = helper_socket_pair()?;
+        let (stdout_client, stdout_helper) = helper_socket_pair()?;
+        let (stderr_client, mut stderr_helper) = helper_socket_pair()?;
+        let stdin = async_socket(stdin_client)?.into_split().1;
+        let stdout = async_socket(stdout_client)?.into_split().0;
+        let stderr = async_socket(stderr_client)?.into_split().0;
+
+        let worker = if helper == "file-transfer" {
+            let args = spec.args[1..].to_vec();
+            tokio::task::spawn_blocking(move || {
+                crate::file_transfer::run_at(&args, &root, stdin_helper, stdout_helper).map_err(
+                    |error| {
+                        let message = format!("{error:?}");
+                        let _ = writeln!(stderr_helper, "{message}");
+                        message
+                    },
+                )
+            })
+        } else {
+            let input = async_socket(stdin_helper)?;
+            let output = async_socket(stdout_helper)?;
+            let error_output = async_socket(stderr_helper)?;
+            tokio::spawn(async move {
+                crate::sftp::serve(tokio::io::join(input, output), root)
+                    .await
+                    .map_err(|error| {
+                        let message = format!("{error:?}");
+                        let _ = error_output.try_write(format!("{message}\n").as_bytes());
+                        message
+                    })
+            })
+        };
+        let process = RuntimeHelperProcess::new(worker);
+        Ok(ExecSession {
+            process,
+            stdin: Some(Box::new(stdin)),
+            stdout: Box::new(stdout),
+            stderr: Some(Box::new(stderr)),
+            terminal: None,
+        })
     }
 
     fn spawn_piped(&self, spec: &ExecSpec) -> Result<SpawnedExec, BackendError> {
@@ -303,6 +371,76 @@ impl LocalBoundaryExec {
     }
 }
 
+fn helper_socket_pair() -> Result<(StdUnixStream, StdUnixStream), BackendError> {
+    StdUnixStream::pair()
+        .map_err(|error| BackendError::Process(format!("create runtime helper pipe: {error}")))
+}
+
+fn async_socket(socket: StdUnixStream) -> Result<tokio::net::UnixStream, BackendError> {
+    socket.set_nonblocking(true).map_err(|error| {
+        BackendError::Process(format!("configure runtime helper pipe: {error}"))
+    })?;
+    tokio::net::UnixStream::from_std(socket)
+        .map_err(|error| BackendError::Process(format!("adopt runtime helper pipe: {error}")))
+}
+
+struct RuntimeHelperProcess {
+    result: Arc<std::sync::Mutex<Option<BoundaryExitStatus>>>,
+    exited: Arc<tokio::sync::Notify>,
+    abort: tokio::task::AbortHandle,
+}
+
+impl RuntimeHelperProcess {
+    fn new(worker: tokio::task::JoinHandle<Result<(), String>>) -> Arc<Self> {
+        let result = Arc::new(std::sync::Mutex::new(None));
+        let exited = Arc::new(tokio::sync::Notify::new());
+        let process = Arc::new(Self {
+            result: result.clone(),
+            exited: exited.clone(),
+            abort: worker.abort_handle(),
+        });
+        tokio::spawn(async move {
+            let status = match worker.await {
+                Ok(Ok(())) => BoundaryExitStatus::Exited(0),
+                Err(error) if error.is_cancelled() => BoundaryExitStatus::Signaled(9),
+                Ok(Err(_)) | Err(_) => BoundaryExitStatus::Exited(1),
+            };
+            if let Ok(mut slot) = result.lock() {
+                *slot = Some(status);
+            }
+            exited.notify_waiters();
+        });
+        process
+    }
+}
+
+#[async_trait]
+impl BoundaryProcess for RuntimeHelperProcess {
+    async fn wait(&self) -> Result<BoundaryExitStatus, BackendError> {
+        loop {
+            let notified = self.exited.notified();
+            let status = *self
+                .result
+                .lock()
+                .map_err(|_| BackendError::Process("runtime helper result lock poisoned".into()))?;
+            if let Some(status) = status {
+                return Ok(status);
+            }
+            notified.await;
+        }
+    }
+
+    async fn signal(&self, _signal: BoundarySignal) -> Result<(), BackendError> {
+        self.abort.abort();
+        Ok(())
+    }
+
+    async fn terminate(&self) -> Result<(), BackendError> {
+        self.abort.abort();
+        Ok(())
+    }
+}
+
 struct SpawnedExec {
     session: Option<ExecSession>,
     process: Arc<LocalExecProcess>,
@@ -327,6 +465,9 @@ impl Drop for SpawnedExec {
 #[async_trait]
 impl BoundaryExec for LocalBoundaryExec {
     async fn exec(&self, spec: ExecSpec) -> Result<ExecSession, BackendError> {
+        if spec.program == openshell_isolation_interface::contract::RUNTIME_HELPER_PROGRAM {
+            return self.runtime_helper(spec);
+        }
         let executor = self.clone();
         let (send, receive) = tokio::sync::oneshot::channel();
         tokio::task::spawn_blocking(move || {

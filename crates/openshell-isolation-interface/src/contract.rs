@@ -739,6 +739,12 @@ pub struct ExecSession {
 }
 
 /// What to run inside the boundary via [`BoundaryExec`].
+///
+/// The boundary resolves this reserved program name to its trusted in-process
+/// helpers. It gives supervisor features a driver-independent entrypoint
+/// without relying on executables supplied by the workload image.
+pub const RUNTIME_HELPER_PROGRAM: &str = "openshell:runtime-helper";
+
 #[derive(Debug, Clone)]
 pub struct ExecSpec {
     /// Program to run.

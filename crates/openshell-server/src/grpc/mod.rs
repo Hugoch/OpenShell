@@ -55,11 +55,12 @@ use openshell_core::proto::{
     ReportPolicyStatusRequest, ReportPolicyStatusResponse, ResourceCapabilities,
     RevokeSshSessionRequest, RevokeSshSessionResponse, RotateProviderCredentialRequest,
     RotateProviderCredentialResponse, SandboxResponse, SandboxTemplateResponse,
-    ServiceEndpointResponse, ServiceStatus, StartSandboxRequest, StopSandboxRequest,
-    SubmitPolicyAnalysisRequest, SubmitPolicyAnalysisResponse, SupervisorMessage, TcpForwardFrame,
-    UndoDraftChunkRequest, UndoDraftChunkResponse, UpdateConfigRequest, UpdateConfigResponse,
-    UpdateProviderProfilesRequest, UpdateProviderProfilesResponse, UpdateProviderRequest,
-    WatchSandboxRequest, open_shell_server::OpenShell,
+    SandboxTransferFrame, ServiceEndpointResponse, ServiceStatus, StartSandboxRequest,
+    StopSandboxRequest, SubmitPolicyAnalysisRequest, SubmitPolicyAnalysisResponse,
+    SupervisorMessage, TcpForwardFrame, UndoDraftChunkRequest, UndoDraftChunkResponse,
+    UpdateConfigRequest, UpdateConfigResponse, UpdateProviderProfilesRequest,
+    UpdateProviderProfilesResponse, UpdateProviderRequest, WatchSandboxRequest,
+    open_shell_server::OpenShell,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -398,6 +399,15 @@ impl OpenShell for OpenShellService {
         request: Request<tonic::Streaming<ExecSandboxInput>>,
     ) -> Result<Response<Self::ExecSandboxInteractiveStream>, Status> {
         sandbox::handle_exec_sandbox_interactive(&self.state, request).await
+    }
+
+    type TransferSandboxStream = ReceiverStream<Result<SandboxTransferFrame, Status>>;
+
+    async fn transfer_sandbox(
+        &self,
+        request: Request<tonic::Streaming<SandboxTransferFrame>>,
+    ) -> Result<Response<Self::TransferSandboxStream>, Status> {
+        sandbox::handle_transfer_sandbox(&self.state, request).await
     }
 
     // --- SSH sessions ---

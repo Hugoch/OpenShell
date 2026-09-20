@@ -55,6 +55,7 @@ pub mod shell;
 pub mod spiffe;
 pub mod telemetry;
 pub mod time;
+pub mod transfer_relay;
 pub mod transport_errors;
 
 pub use config::{

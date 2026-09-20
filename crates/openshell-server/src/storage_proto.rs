@@ -118,7 +118,7 @@ mod tests {
     const STORAGE_V1_SCHEMA_SHA256: &str =
         "574bf5fcff731bd6e3fd84ed3f124161035bd236ef0fb7e32b4d8a8c55ceba5e";
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "9df91739f47f743a271536847486b7be457f66bb37370e5537ad4e7e69b91fdc";
+        "3839f3e547bea67b08ac9eca97392110d4822f2fff8b216013be6f36721832f2";
     const DURABLE_SCHEMA_SHA256: &str =
         "65066c0b0eef57a4c708f20fcbbb8e8f47376da9f4bf73dfc3bca0b3df174ba8";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
@@ -495,14 +495,14 @@ mod tests {
             }
         }
         methods.sort();
-        assert_eq!(compiled_method_count, 101, "classify every compiled RPC");
-        assert_eq!(methods.len(), 75, "inventory every public gateway RPC");
+        assert_eq!(compiled_method_count, 102, "classify every compiled RPC");
+        assert_eq!(methods.len(), 76, "inventory every public gateway RPC");
         assert_eq!(
             methods
                 .iter()
                 .filter(|method| method.starts_with("openshell.v1.OpenShell/"))
                 .count(),
-            75
+            76
         );
         assert!(methods.iter().all(|method| !method.contains(".storage.")));
 
@@ -535,7 +535,7 @@ mod tests {
 
         assert_eq!(
             (public_closure.messages.len(), public_closure.enums.len()),
-            (283, 14)
+            (290, 15)
         );
         assert_eq!(
             (durable_closure.messages.len(), durable_closure.enums.len()),

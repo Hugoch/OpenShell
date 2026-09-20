@@ -17,10 +17,12 @@ use std::time::Duration;
 
 use openshell_core::proto::open_shell_client::OpenShellClient;
 use openshell_core::proto::{
-    ExecRelayExit, ExecRelayFrame, ExecRelayTarget, FinalizeMainProcessExitRequest, GatewayMessage,
-    RelayFrame, RelayInit, RelayOpen, RelayOpenResult, ReportMainProcessExitRequest,
-    SupervisorHeartbeat, SupervisorHello, SupervisorMessage, TcpRelayTarget, exec_relay_frame,
-    gateway_message, relay_open, supervisor_message,
+    ExecRelayExit, ExecRelayFrame, ExecRelayTarget, FileTransferRelayTarget,
+    FinalizeMainProcessExitRequest, GatewayMessage, RelayFrame, RelayInit, RelayOpen,
+    RelayOpenResult, ReportMainProcessExitRequest, SandboxTransferComplete,
+    SandboxTransferDirection, SandboxTransferError, SandboxTransferFrame, SupervisorHeartbeat,
+    SupervisorHello, SupervisorMessage, TcpRelayTarget, exec_relay_frame, gateway_message,
+    relay_open, sandbox_transfer_frame, supervisor_message,
 };
 use openshell_isolation_interface::contract::{
     BoundaryExec, BoundaryExitStatus, BoundaryLoopbackConnector, ExecSpec, LoopbackTarget,
@@ -123,6 +125,7 @@ fn relay_target_kind(open: &RelayOpen) -> &'static str {
     match open.target.as_ref() {
         Some(relay_open::Target::Tcp(_)) => "tcp relay",
         Some(relay_open::Target::Exec(_)) => "exec relay",
+        Some(relay_open::Target::FileTransfer(_)) => "file transfer relay",
         Some(relay_open::Target::Ssh(_)) | None => "ssh relay",
     }
 }
@@ -137,6 +140,7 @@ fn relay_target_message(
             format!("{}:{}", target.host.trim(), target.port)
         }
         Some(relay_open::Target::Exec(_)) => "sandbox boundary".to_string(),
+        Some(relay_open::Target::FileTransfer(_)) => "sandbox workspace".to_string(),
         Some(relay_open::Target::Ssh(_)) | None => {
             format!("unix:{}", ssh_socket_path.display())
         }
@@ -640,6 +644,17 @@ async fn handle_relay_open(
         return handle_exec_relay(&channel_id, target, boundary_exec, channel, tx, terminating)
             .await;
     }
+    if let Some(relay_open::Target::FileTransfer(target)) = relay_open.target.as_ref() {
+        return handle_file_transfer_relay(
+            &channel_id,
+            target,
+            boundary_exec,
+            channel,
+            tx,
+            terminating,
+        )
+        .await;
+    }
     let target = match open_target(
         &relay_open,
         ssh_socket_path,
@@ -766,6 +781,197 @@ async fn handle_relay_open(
     Ok(())
 }
 
+async fn handle_file_transfer_relay(
+    channel_id: &str,
+    target: &FileTransferRelayTarget,
+    boundary_exec: Arc<dyn BoundaryExec>,
+    channel: grpc_client::AuthedChannel,
+    tx: mpsc::Sender<SupervisorMessage>,
+    terminating: Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let direction = SandboxTransferDirection::try_from(target.direction)
+        .map_err(|_| "invalid file-transfer direction")?;
+    let operation = match direction {
+        SandboxTransferDirection::Upload => "upload",
+        SandboxTransferDirection::Download => "download",
+        SandboxTransferDirection::Unspecified => {
+            return Err("file-transfer direction is required".into());
+        }
+    };
+    let spec = ExecSpec {
+        program: openshell_isolation_interface::contract::RUNTIME_HELPER_PROGRAM.to_string(),
+        args: vec![
+            "file-transfer".to_string(),
+            operation.to_string(),
+            target.path.clone(),
+        ],
+        env: Vec::new(),
+        workdir: None,
+        pty: false,
+    };
+    let mut session = match boundary_exec.exec(spec).await {
+        Ok(session) => session,
+        Err(error) => {
+            send_relay_open_result(&tx, channel_id, false, error.to_string()).await;
+            return Err(error.into());
+        }
+    };
+
+    send_relay_open_result(&tx, channel_id, true, String::new()).await;
+    let mut client = OpenShellClient::new(channel);
+    let (out_tx, out_rx) = mpsc::channel::<RelayFrame>(16);
+    let outbound = tokio_stream::wrappers::ReceiverStream::new(out_rx);
+    out_tx
+        .send(RelayFrame {
+            payload: Some(openshell_core::proto::relay_frame::Payload::Init(
+                RelayInit {
+                    channel_id: channel_id.to_string(),
+                },
+            )),
+        })
+        .await
+        .map_err(|_| "outbound channel closed before file-transfer init")?;
+    let response = match client.relay_stream(outbound).await {
+        Ok(response) => response,
+        Err(error) if expected_transport_close_during_shutdown(&error, &terminating) => {
+            let _ = session.process.terminate().await;
+            return Ok(());
+        }
+        Err(error) => {
+            let _ = session.process.terminate().await;
+            return Err(format!("file-transfer relay_stream RPC failed: {error}").into());
+        }
+    };
+    let mut inbound = response.into_inner();
+    let mut stderr = session.stderr.take();
+    let stderr_task = tokio::spawn(async move {
+        let mut output = Vec::new();
+        if let Some(reader) = stderr.as_mut() {
+            let mut limited = reader.take(64 * 1024);
+            let _ = limited.read_to_end(&mut output).await;
+        }
+        String::from_utf8_lossy(&output).trim().to_string()
+    });
+
+    let stdout_task = if direction == SandboxTransferDirection::Download {
+        Some(tokio::spawn(pump_transfer_output(
+            session.stdout,
+            out_tx.clone(),
+        )))
+    } else {
+        None
+    };
+    let process = session.process.clone();
+    let status = if direction == SandboxTransferDirection::Upload {
+        let mut stdin = session
+            .stdin
+            .take()
+            .ok_or("file-transfer upload stdin is unavailable")?;
+        let mut decoder = openshell_core::transfer_relay::FrameDecoder::default();
+        let mut completed = false;
+        while let Some(next) = inbound.next().await {
+            let frame = next?;
+            let Some(openshell_core::proto::relay_frame::Payload::Data(data)) = frame.payload
+            else {
+                process.terminate().await?;
+                return Err("file-transfer relay received non-data frame".into());
+            };
+            decoder.push(&data);
+            while let Some(frame) = decoder.next_frame()? {
+                match frame.payload {
+                    Some(sandbox_transfer_frame::Payload::Data(data)) if !completed => {
+                        stdin.write_all(&data).await?;
+                    }
+                    Some(sandbox_transfer_frame::Payload::Complete(_)) if !completed => {
+                        completed = true;
+                        stdin.shutdown().await?;
+                    }
+                    _ => {
+                        process.terminate().await?;
+                        return Err("invalid upload file-transfer frame".into());
+                    }
+                }
+            }
+            if completed {
+                break;
+            }
+        }
+        if !completed {
+            process.terminate().await?;
+            return Ok(());
+        }
+        process.wait().await?
+    } else {
+        process.wait().await?
+    };
+
+    if let Some(task) = stdout_task {
+        task.await??;
+    }
+    let stderr = stderr_task.await.unwrap_or_default();
+    let success = matches!(status, BoundaryExitStatus::Exited(0));
+    let payload = if success {
+        sandbox_transfer_frame::Payload::Complete(SandboxTransferComplete {})
+    } else {
+        let status = match status {
+            BoundaryExitStatus::Exited(code) => format!("file transfer exited with status {code}"),
+            BoundaryExitStatus::Signaled(signal) => {
+                format!("file transfer terminated by signal {signal}")
+            }
+        };
+        sandbox_transfer_frame::Payload::Error(SandboxTransferError {
+            message: if stderr.is_empty() {
+                status
+            } else {
+                format!("{status}: {stderr}")
+            },
+        })
+    };
+    send_transfer_frame(
+        &out_tx,
+        SandboxTransferFrame {
+            payload: Some(payload),
+        },
+    )
+    .await?;
+    drop(out_tx);
+    await_relay_terminal_flush(&mut inbound, &terminating, "file-transfer").await
+}
+
+async fn pump_transfer_output(
+    mut reader: Box<dyn AsyncRead + Send + Unpin>,
+    out_tx: mpsc::Sender<RelayFrame>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut buffer = vec![0_u8; openshell_core::transfer_relay::MAX_TRANSFER_DATA_SIZE];
+    loop {
+        let length = reader.read(&mut buffer).await?;
+        if length == 0 {
+            return Ok(());
+        }
+        send_transfer_frame(
+            &out_tx,
+            SandboxTransferFrame {
+                payload: Some(sandbox_transfer_frame::Payload::Data(
+                    buffer[..length].to_vec(),
+                )),
+            },
+        )
+        .await?;
+    }
+}
+
+async fn send_transfer_frame(
+    tx: &mpsc::Sender<RelayFrame>,
+    frame: SandboxTransferFrame,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let data = openshell_core::transfer_relay::encode_frame(&frame)?;
+    tx.send(RelayFrame {
+        payload: Some(openshell_core::proto::relay_frame::Payload::Data(data)),
+    })
+    .await
+    .map_err(|_| "file-transfer relay outbound channel closed".into())
+}
+
 async fn handle_exec_relay(
     channel_id: &str,
     target: &ExecRelayTarget,
@@ -867,7 +1073,7 @@ async fn handle_exec_relay(
                     payload: Some(exec_relay_frame::Payload::Exit(ExecRelayExit { exit_code })),
                 }).await?;
                 drop(out_tx);
-                return Ok(());
+                return await_relay_terminal_flush(&mut inbound, &terminating, "exec").await;
             }
             next = inbound.next() => {
                 let Some(next) = next else {
@@ -965,6 +1171,35 @@ async fn send_exec_frame(
     .map_err(|_| "exec relay outbound channel closed".into())
 }
 
+/// Keep the response stream alive until the gateway observes the terminal
+/// frame and closes its side of the relay. Dropping the response immediately
+/// after queueing the frame can cancel the HTTP/2 request before tonic has
+/// written the final request-body chunk.
+async fn await_relay_terminal_flush(
+    inbound: &mut tonic::Streaming<RelayFrame>,
+    terminating: &AtomicBool,
+    operation: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let drain = async {
+        while let Some(next) = inbound.next().await {
+            match next {
+                Ok(_) => {}
+                Err(error) if expected_transport_close_during_shutdown(&error, terminating) => {
+                    return Ok(());
+                }
+                Err(error) => {
+                    return Err(format!("{operation} relay response errored: {error}").into());
+                }
+            }
+        }
+        Ok(())
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), drain)
+        .await
+        .map_err(|_| format!("timed out flushing {operation} relay terminal frame"))?
+}
+
 async fn send_relay_open_result(
     tx: &mpsc::Sender<SupervisorMessage>,
     channel_id: &str,
@@ -994,6 +1229,9 @@ async fn open_target(
         Some(relay_open::Target::Tcp(target)) => open_tcp_target(target, port_forward).await,
         Some(relay_open::Target::Exec(_)) => {
             Err("exec target requires the native exec relay".into())
+        }
+        Some(relay_open::Target::FileTransfer(_)) => {
+            Err("file-transfer target requires the native transfer relay".into())
         }
         Some(relay_open::Target::Ssh(_)) | None => {
             let runtime_path = crate::unix_socket::runtime_path(ssh_socket_path);

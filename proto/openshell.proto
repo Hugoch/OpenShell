@@ -268,6 +268,17 @@ service OpenShell {
     };
   }
 
+  // Stream a tar archive to or from a ready sandbox. The first client frame
+  // initializes the transfer. Uploads then send data and an explicit complete
+  // frame; downloads return data followed by an explicit complete frame.
+  rpc TransferSandbox(stream SandboxTransferFrame) returns (stream SandboxTransferFrame) {
+    option (openshell.options.v1.authorization) = {
+      auth_mode: "bearer"
+      scope: "sandbox:write"
+      workspace_role: "user"
+    };
+  }
+
   // Create a provider.
   rpc CreateProvider(CreateProviderRequest) returns (ProviderResponse) {
     option (openshell.options.v1.authorization) = {
@@ -1684,6 +1695,36 @@ message ExecSandboxWindowResize {
   uint32 rows = 2;
 }
 
+enum SandboxTransferDirection {
+  SANDBOX_TRANSFER_DIRECTION_UNSPECIFIED = 0;
+  SANDBOX_TRANSFER_DIRECTION_UPLOAD = 1;
+  SANDBOX_TRANSFER_DIRECTION_DOWNLOAD = 2;
+}
+
+message SandboxTransferInit {
+  string sandbox_id = 1;
+  SandboxTransferDirection direction = 2;
+  // Upload destination directory or download source path. Relative paths are
+  // resolved from the workload's configured working directory.
+  string path = 3;
+}
+
+message SandboxTransferComplete {}
+
+message SandboxTransferError {
+  string message = 1;
+}
+
+// One bounded file-transfer frame. Data contains raw tar archive bytes.
+message SandboxTransferFrame {
+  oneof payload {
+    SandboxTransferInit init = 1;
+    bytes data = 2;
+    SandboxTransferComplete complete = 3;
+    SandboxTransferError error = 4;
+  }
+}
+
 
 // SSH session record stored in persistence.
 message SshSession {
@@ -2690,9 +2731,15 @@ message RelayOpen {
     SshRelayTarget ssh = 2;
     TcpRelayTarget tcp = 3;
     ExecRelayTarget exec = 4;
+    FileTransferRelayTarget file_transfer = 6;
   }
   // Optional service identifier for audit/correlation.
   string service_id = 5;
+}
+
+message FileTransferRelayTarget {
+  SandboxTransferDirection direction = 1;
+  string path = 2;
 }
 
 // Built-in SSH relay target.

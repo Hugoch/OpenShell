@@ -26,14 +26,16 @@ use openshell_core::proto::{
     DeleteSandboxRequest, DeleteSandboxResponse, DeleteSandboxTemplateRequest,
     DeleteSandboxTemplateResponse, DetachSandboxProviderRequest, DetachSandboxProviderResponse,
     ExecRelayFrame, ExecRelayTarget, ExecSandboxEvent, ExecSandboxExit, ExecSandboxInput,
-    ExecSandboxRequest, ExecSandboxStderr, ExecSandboxStdout, GetSandboxRequest,
-    GetSandboxTemplateRequest, ListSandboxProvidersRequest, ListSandboxProvidersResponse,
-    ListSandboxTemplatesRequest, ListSandboxTemplatesResponse, ListSandboxesRequest,
-    ListSandboxesResponse, Provider, ResourceRequirements, RevokeSshSessionRequest,
-    RevokeSshSessionResponse, SandboxResources, SandboxResponse, SandboxSpec, SandboxStreamEvent,
-    SandboxTemplateResponse, SandboxWorkloadTemplate, SandboxWorkloadTemplateProvenance,
+    ExecSandboxRequest, ExecSandboxStderr, ExecSandboxStdout, FileTransferRelayTarget,
+    GetSandboxRequest, GetSandboxTemplateRequest, ListSandboxProvidersRequest,
+    ListSandboxProvidersResponse, ListSandboxTemplatesRequest, ListSandboxTemplatesResponse,
+    ListSandboxesRequest, ListSandboxesResponse, Provider, ResourceRequirements,
+    RevokeSshSessionRequest, RevokeSshSessionResponse, SandboxResources, SandboxResponse,
+    SandboxSpec, SandboxStreamEvent, SandboxTemplateResponse, SandboxTransferDirection,
+    SandboxTransferFrame, SandboxWorkloadTemplate, SandboxWorkloadTemplateProvenance,
     SshRelayTarget, StartSandboxRequest, StopSandboxRequest, TcpForwardFrame, TcpForwardInit,
-    TcpRelayTarget, WatchSandboxRequest, exec_relay_frame, relay_open, tcp_forward_init,
+    TcpRelayTarget, WatchSandboxRequest, exec_relay_frame, relay_open, sandbox_transfer_frame,
+    tcp_forward_init,
 };
 use openshell_core::proto::{
     BeginRootfsTarStagingRequest, BeginRootfsTarStagingResponse, Sandbox, SandboxPhase,
@@ -51,6 +53,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -1848,6 +1851,129 @@ fn is_watch_terminal(phase: SandboxPhase) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Native file transfer handler
+// ---------------------------------------------------------------------------
+
+pub(super) async fn handle_transfer_sandbox(
+    state: &Arc<ServerState>,
+    request: Request<tonic::Streaming<SandboxTransferFrame>>,
+) -> Result<Response<ReceiverStream<Result<SandboxTransferFrame, Status>>>, Status> {
+    let principal = super::extract_principal(&request)?;
+    let mut input = request.into_inner();
+    let first = input
+        .message()
+        .await?
+        .ok_or_else(|| Status::invalid_argument("transfer stream is empty"))?;
+    let Some(sandbox_transfer_frame::Payload::Init(init)) = first.payload else {
+        return Err(Status::invalid_argument(
+            "first transfer frame must be init",
+        ));
+    };
+    if init.path.is_empty() {
+        return Err(Status::invalid_argument("transfer path must not be empty"));
+    }
+    let direction = SandboxTransferDirection::try_from(init.direction)
+        .map_err(|_| Status::invalid_argument("invalid transfer direction"))?;
+    if direction == SandboxTransferDirection::Unspecified {
+        return Err(Status::invalid_argument("transfer direction is required"));
+    }
+    let sandbox = fetch_and_authorize_sandbox(state, &principal, &init.sandbox_id).await?;
+    if SandboxPhase::try_from(sandbox.phase()).ok() != Some(SandboxPhase::Ready) {
+        return Err(Status::failed_precondition("sandbox is not ready"));
+    }
+    let (channel_id, relay_rx) = state
+        .supervisor_sessions
+        .open_relay_with_target(
+            sandbox.object_id(),
+            relay_open::Target::FileTransfer(FileTransferRelayTarget {
+                direction: init.direction,
+                path: init.path,
+            }),
+            String::new(),
+            std::time::Duration::from_secs(15),
+        )
+        .await
+        .map_err(|error| Status::unavailable(format!("supervisor relay failed: {error}")))?;
+
+    let sandbox_id = sandbox.object_id().to_string();
+    let (tx, rx) = mpsc::channel(16);
+    tokio::spawn(async move {
+        let Some(relay) =
+            await_relay_stream(relay_rx, &tx, &sandbox_id, &channel_id, "TransferSandbox").await
+        else {
+            return;
+        };
+        if let Err(status) = bridge_native_transfer(relay, direction, input, &tx).await {
+            let _ = tx.send(Err(status)).await;
+        }
+    });
+    Ok(Response::new(ReceiverStream::new(rx)))
+}
+
+async fn bridge_native_transfer(
+    relay: tokio::io::DuplexStream,
+    direction: SandboxTransferDirection,
+    mut input: tonic::Streaming<SandboxTransferFrame>,
+    tx: &mpsc::Sender<Result<SandboxTransferFrame, Status>>,
+) -> Result<(), Status> {
+    let (mut relay_reader, mut relay_writer) = tokio::io::split(relay);
+    let upload = async {
+        if direction == SandboxTransferDirection::Upload {
+            let mut completed = false;
+            while let Some(frame) = input.message().await? {
+                match frame.payload {
+                    Some(sandbox_transfer_frame::Payload::Data(_)) if !completed => {}
+                    Some(sandbox_transfer_frame::Payload::Complete(_)) if !completed => {
+                        completed = true;
+                    }
+                    _ => return Err(Status::invalid_argument("invalid upload transfer frame")),
+                }
+                openshell_core::transfer_relay::write_frame(&mut relay_writer, &frame)
+                    .await
+                    .map_err(|error| Status::unavailable(format!("send transfer data: {error}")))?;
+                if completed {
+                    break;
+                }
+            }
+            if !completed {
+                return Err(Status::cancelled("upload ended before completion"));
+            }
+        }
+        relay_writer
+            .shutdown()
+            .await
+            .map_err(|error| Status::unavailable(format!("close transfer input: {error}")))?;
+        Ok::<_, Status>(())
+    };
+
+    let download = async {
+        loop {
+            let frame = openshell_core::transfer_relay::read_frame(&mut relay_reader)
+                .await
+                .map_err(|error| Status::unavailable(format!("read transfer data: {error}")))?
+                .ok_or_else(|| Status::unavailable("transfer closed before completion"))?;
+            let terminal = matches!(
+                frame.payload,
+                Some(
+                    sandbox_transfer_frame::Payload::Complete(_)
+                        | sandbox_transfer_frame::Payload::Error(_)
+                )
+            );
+            tx.send(Ok(frame))
+                .await
+                .map_err(|_| Status::cancelled("transfer client disconnected"))?;
+            if terminal {
+                return Ok::<_, Status>(());
+            }
+        }
+    };
+
+    let (upload_result, download_result) = tokio::join!(upload, download);
+    upload_result?;
+    download_result
+}
+
+// ---------------------------------------------------------------------------
 // Exec handler
 // ---------------------------------------------------------------------------
 
@@ -2224,9 +2350,7 @@ async fn bridge_forward_tcp_stream(
                     if data.is_empty() {
                         continue;
                     }
-                    if let Err(err) =
-                        tokio::io::AsyncWriteExt::write_all(&mut relay_write, &data).await
-                    {
+                    if let Err(err) = AsyncWriteExt::write_all(&mut relay_write, &data).await {
                         warn!(sandbox_id = %sandbox_id_in, channel_id = %channel_id_in, error = %err, "ForwardTcp: write to relay failed");
                         break;
                     }
@@ -2238,7 +2362,7 @@ async fn bridge_forward_tcp_stream(
                 }
             }
         }
-        let _ = tokio::io::AsyncWriteExt::shutdown(&mut relay_write).await;
+        let _ = AsyncWriteExt::shutdown(&mut relay_write).await;
     });
 
     let mut buf = vec![0u8; TCP_FORWARD_CHUNK_SIZE];

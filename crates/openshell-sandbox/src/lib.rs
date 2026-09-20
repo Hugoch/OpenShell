@@ -11,6 +11,7 @@ mod boundary_server;
 pub mod child_env;
 #[cfg(target_os = "linux")]
 pub(crate) mod delegated;
+pub mod file_transfer;
 #[cfg(unix)]
 pub mod identity;
 #[cfg(target_os = "linux")]
@@ -24,6 +25,7 @@ pub mod perf;
 pub mod process;
 mod pty;
 pub mod sandbox;
+pub mod sftp;
 
 /// Results of actively qualifying the admitted workload runtime before the
 /// sandbox consumes protected bootstrap material.

@@ -4,22 +4,25 @@
 //! SSH connection and proxy utilities.
 
 use crate::color::Colorize;
-use crate::tls::{TlsOptions, grpc_client};
+use crate::tls::{GrpcClient, TlsOptions, grpc_client};
 use miette::{IntoDiagnostic, Result, WrapErr};
 #[cfg(unix)]
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
+use openshell_core::ObjectId;
+#[cfg(test)]
+use openshell_core::driver_mounts;
 use openshell_core::forward::{
     ForwardSpec, build_proxy_command, format_gateway_url, resolve_ssh_gateway, shell_escape,
     validate_ssh_session_response, write_forward_pid,
 };
 use openshell_core::proto::{
-    CreateSshSessionRequest, GetSandboxRequest, SshRelayTarget, TcpForwardFrame, TcpForwardInit,
-    tcp_forward_init,
+    CreateSshSessionRequest, GetSandboxRequest, SandboxTransferComplete, SandboxTransferDirection,
+    SandboxTransferFrame, SandboxTransferInit, SshRelayTarget, TcpForwardFrame, TcpForwardInit,
+    sandbox_transfer_frame, tcp_forward_init,
 };
-use openshell_core::{ObjectId, driver_mounts};
 use std::fs;
 use std::future::Future;
-use std::io::{IsTerminal, Write};
+use std::io::{IsTerminal, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -812,46 +815,94 @@ async fn ssh_tar_upload(
     tls: &TlsOptions,
     workspace: &str,
 ) -> Result<()> {
-    let session = ssh_session_config(server, name, tls, workspace, None).await?;
-
-    let dest_dir = dest_dir.unwrap_or(".");
-    let escaped_dest = shell_escape(dest_dir);
-
-    let mut ssh = ssh_base_command(&session.proxy_command);
-    ssh.arg("-T")
-        .arg("-o")
-        .arg("RequestTTY=no")
-        .arg("sandbox")
-        .arg(format!(
-            "mkdir -p {escaped_dest} && cat | tar xf - -C {escaped_dest}",
-        ))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit());
-
-    let mut child = ssh.spawn().into_diagnostic()?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| miette::miette!("failed to open stdin for ssh process"))?;
-
-    // Build the tar archive in a blocking task since the tar crate is synchronous.
-    tokio::task::spawn_blocking(move || -> Result<()> { write_upload_archive(stdin, source) })
-        .await
-        .into_diagnostic()??;
-
-    let status = tokio::task::spawn_blocking(move || child.wait())
+    let (mut client, sandbox_id) = transfer_client(server, name, tls, workspace).await?;
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    tx.send(SandboxTransferFrame {
+        payload: Some(sandbox_transfer_frame::Payload::Init(SandboxTransferInit {
+            sandbox_id,
+            direction: SandboxTransferDirection::Upload.into(),
+            path: dest_dir.unwrap_or(".").to_string(),
+        })),
+    })
+    .await
+    .map_err(|_| miette::miette!("failed to initialize upload"))?;
+    let mut response = client
+        .transfer_sandbox(ReceiverStream::new(rx))
         .await
         .into_diagnostic()?
-        .into_diagnostic()?;
+        .into_inner();
+    let producer = tokio::task::spawn_blocking(move || -> Result<()> {
+        write_upload_archive(TransferWriter::new(tx.clone()), source)?;
+        tx.blocking_send(SandboxTransferFrame {
+            payload: Some(sandbox_transfer_frame::Payload::Complete(
+                SandboxTransferComplete {},
+            )),
+        })
+        .map_err(|_| miette::miette!("upload cancelled before completion"))?;
+        Ok(())
+    });
+    producer.await.into_diagnostic()??;
+    let frame = response
+        .message()
+        .await
+        .into_diagnostic()?
+        .ok_or_else(|| miette::miette!("upload stream closed before completion"))?;
+    match frame.payload {
+        Some(sandbox_transfer_frame::Payload::Complete(_)) => Ok(()),
+        Some(sandbox_transfer_frame::Payload::Error(error)) => {
+            Err(miette::miette!("sandbox upload failed: {}", error.message))
+        }
+        _ => Err(miette::miette!("gateway returned an invalid upload frame")),
+    }
+}
 
-    if !status.success() {
-        return Err(miette::miette!(
-            "ssh tar extract exited with status {status}"
-        ));
+async fn transfer_client(
+    server: &str,
+    name: &str,
+    tls: &TlsOptions,
+    workspace: &str,
+) -> Result<(GrpcClient, String)> {
+    let mut client = grpc_client(server, tls).await?;
+    let sandbox = client
+        .get_sandbox(GetSandboxRequest {
+            name: name.to_string(),
+            workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
+        })
+        .await
+        .into_diagnostic()?
+        .into_inner()
+        .sandbox
+        .ok_or_else(|| miette::miette!("sandbox not found"))?;
+    Ok((client, sandbox.object_id().to_string()))
+}
+
+struct TransferWriter {
+    tx: tokio::sync::mpsc::Sender<SandboxTransferFrame>,
+}
+
+impl TransferWriter {
+    fn new(tx: tokio::sync::mpsc::Sender<SandboxTransferFrame>) -> Self {
+        Self { tx }
+    }
+}
+
+impl Write for TransferWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        for chunk in buffer.chunks(openshell_core::transfer_relay::MAX_TRANSFER_DATA_SIZE) {
+            self.tx
+                .blocking_send(SandboxTransferFrame {
+                    payload: Some(sandbox_transfer_frame::Payload::Data(chunk.to_vec())),
+                })
+                .map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "upload cancelled")
+                })?;
+        }
+        Ok(buffer.len())
     }
 
-    Ok(())
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Split a sandbox path into (`parent_directory`, basename).
@@ -910,10 +961,9 @@ fn lexical_clean_absolute_path(path: &str) -> Option<String> {
 /// path that lexically escapes the discovered workspace root with a user-facing
 /// error. Relative paths are interpreted from the workspace root.
 ///
-/// This is a lexical guard only — it does not follow symlinks. Call
-/// `resolve_sandbox_source_path` after this on any path that will be passed
-/// to a subsequent SSH I/O operation, so a workspace symlink to `/etc` cannot
-/// leak files outside the workspace.
+/// This helper remains covered for callers that validate workspace-relative
+/// paths without accessing the remote filesystem.
+#[cfg(test)]
 fn validate_sandbox_source_path(workspace_root: &str, path: &str) -> Result<String> {
     if path.is_empty() {
         return Err(miette::miette!("sandbox source path is empty"));
@@ -931,51 +981,6 @@ fn validate_sandbox_source_path(workspace_root: &str, path: &str) -> Result<Stri
         ));
     }
     Ok(cleaned)
-}
-
-/// Discover the workspace root and resolve every symlink in `sandbox_path` in
-/// one SSH probe, then refuse the result if it lands outside the workspace.
-///
-/// The lexical guard in `validate_sandbox_source_path` cannot see symlinks; a
-/// workspace path through `etc-link -> /etc` clears the lexical check but
-/// would still leak `/etc/passwd` once `tar -C` follows the link. Resolving
-/// symlinks on the remote side and re-validating closes that gap. The returned
-/// fully-resolved path is what the caller should hand to probe and tar
-/// invocations. Combining discovery and resolution also keeps downloads within
-/// the gateway's three-connection limit: this probe, the type probe, and tar.
-async fn resolve_sandbox_source_path(
-    session: &SshSessionConfig,
-    sandbox_path: &str,
-) -> Result<String> {
-    let resolve_cmd = format!(
-        "pwd -P && realpath -e -- {path}",
-        path = shell_escape(sandbox_path)
-    );
-    let output = ssh_run_capture_stdout(session, &resolve_cmd)
-        .await
-        .wrap_err_with(|| format!("failed to resolve sandbox source path '{sandbox_path}'"))?;
-    let (workspace_root, resolved) = output.split_once('\n').ok_or_else(|| {
-        miette::miette!("unexpected response while resolving sandbox source path '{sandbox_path}'")
-    })?;
-    if resolved.contains('\n') {
-        return Err(miette::miette!(
-            "unexpected response while resolving sandbox source path '{sandbox_path}'"
-        ));
-    }
-
-    let workspace_root = validate_discovered_workspace_root(workspace_root)?;
-    validate_sandbox_source_path(&workspace_root, sandbox_path)?;
-    if resolved.is_empty() {
-        return Err(miette::miette!(
-            "sandbox source path '{sandbox_path}' does not exist"
-        ));
-    }
-    if !driver_mounts::path_is_or_under(Path::new(resolved), Path::new(&workspace_root)) {
-        return Err(miette::miette!(
-            "sandbox source path '{sandbox_path}' resolves to '{resolved}', outside the sandbox workspace ({workspace_root})"
-        ));
-    }
-    Ok(resolved.to_string())
 }
 
 /// Resolve the host-side target path for a downloaded *file*, following
@@ -1193,35 +1198,6 @@ async fn discover_workspace_root(session: &SshSessionConfig) -> Result<String> {
     validate_discovered_workspace_root(&root)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SandboxSourceKind {
-    File,
-    Directory,
-}
-
-/// Probe the sandbox-side source path. The path is assumed to have already
-/// been validated by `validate_sandbox_source_path`.
-async fn probe_sandbox_source_kind(
-    session: &SshSessionConfig,
-    sandbox_path: &str,
-) -> Result<SandboxSourceKind> {
-    let probe_cmd = format!(
-        "if [ -d {path} ]; then printf dir; elif [ -e {path} ]; then printf file; else printf missing; fi",
-        path = shell_escape(sandbox_path),
-    );
-    let kind = ssh_run_capture_stdout(session, &probe_cmd).await?;
-    match kind.as_str() {
-        "dir" => Ok(SandboxSourceKind::Directory),
-        "file" => Ok(SandboxSourceKind::File),
-        "missing" => Err(miette::miette!(
-            "sandbox source path '{sandbox_path}' does not exist"
-        )),
-        other => Err(miette::miette!(
-            "unexpected probe output for sandbox source path '{sandbox_path}': '{other}'"
-        )),
-    }
-}
-
 /// Pull a path from a sandbox to a local destination using tar-over-SSH.
 ///
 /// Follows `cp`-style semantics for the destination:
@@ -1245,63 +1221,165 @@ pub async fn sandbox_sync_down(
     tls: &TlsOptions,
     workspace: &str,
 ) -> Result<()> {
-    let session = ssh_session_config(server, name, tls, workspace, None).await?;
-    let sandbox_path = resolve_sandbox_source_path(&session, sandbox_path).await?;
-    let kind = probe_sandbox_source_kind(&session, &sandbox_path).await?;
+    native_tar_download(server, name, sandbox_path, dest, tls, workspace).await
+}
 
-    match kind {
-        SandboxSourceKind::File => sandbox_sync_down_file(&session, &sandbox_path, dest).await,
-        SandboxSourceKind::Directory => {
-            sandbox_sync_down_directory(&session, &sandbox_path, dest).await
+async fn native_tar_download(
+    server: &str,
+    name: &str,
+    sandbox_path: &str,
+    dest: &str,
+    tls: &TlsOptions,
+    workspace: &str,
+) -> Result<()> {
+    let (mut client, sandbox_id) = transfer_client(server, name, tls, workspace).await?;
+    let (request_tx, request_rx) = tokio::sync::mpsc::channel(1);
+    request_tx
+        .send(SandboxTransferFrame {
+            payload: Some(sandbox_transfer_frame::Payload::Init(SandboxTransferInit {
+                sandbox_id,
+                direction: SandboxTransferDirection::Download.into(),
+                path: sandbox_path.to_string(),
+            })),
+        })
+        .await
+        .map_err(|_| miette::miette!("failed to initialize download"))?;
+    let mut response = client
+        .transfer_sandbox(ReceiverStream::new(request_rx))
+        .await
+        .into_diagnostic()?
+        .into_inner();
+
+    let staging = tempfile::tempdir()
+        .into_diagnostic()
+        .wrap_err("failed to create download staging directory")?;
+    let staging_path = staging.path().to_path_buf();
+    let (archive_tx, archive_rx) = tokio::sync::mpsc::channel(16);
+    let extraction = tokio::task::spawn_blocking(move || -> Result<()> {
+        tar::Archive::new(TransferReader::new(archive_rx))
+            .unpack(&staging_path)
+            .into_diagnostic()
+            .wrap_err("failed to extract sandbox download")
+    });
+    let transfer_result = loop {
+        let frame = match response.message().await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break Err(miette::miette!("download stream closed before completion")),
+            Err(error) => break Err(miette::miette!(error)),
+        };
+        match frame.payload {
+            Some(sandbox_transfer_frame::Payload::Data(data)) => {
+                if archive_tx.send(data).await.is_err() {
+                    break Err(miette::miette!("download extraction stopped"));
+                }
+            }
+            Some(sandbox_transfer_frame::Payload::Complete(_)) => {
+                break Ok(());
+            }
+            Some(sandbox_transfer_frame::Payload::Error(error)) => {
+                break Err(miette::miette!(
+                    "sandbox download failed: {}",
+                    error.message
+                ));
+            }
+            _ => {
+                break Err(miette::miette!(
+                    "gateway returned an invalid download frame"
+                ));
+            }
+        }
+    };
+    drop(archive_tx);
+    let extraction_result = extraction.await.into_diagnostic()?;
+    transfer_result?;
+    extraction_result?;
+
+    let source_name = Path::new(sandbox_path)
+        .file_name()
+        .filter(|name| *name != ".")
+        .map(PathBuf::from);
+    if let Some(source_name) = source_name {
+        let staged = staging.path().join(&source_name);
+        let metadata = fs::symlink_metadata(&staged)
+            .into_diagnostic()
+            .wrap_err("download archive did not contain the requested path")?;
+        if metadata.is_dir() {
+            merge_directory(&staged, Path::new(dest))?;
+        } else {
+            let basename = source_name.to_string_lossy();
+            let dest_is_dir = fs::symlink_metadata(dest).is_ok_and(|entry| entry.is_dir());
+            let final_path = resolve_file_download_target(dest, &basename, dest_is_dir);
+            if let Some(parent) = final_path.parent() {
+                fs::create_dir_all(parent).into_diagnostic()?;
+            }
+            if let Ok(existing) = fs::symlink_metadata(&final_path) {
+                if existing.is_dir() {
+                    return Err(miette::miette!(
+                        "cannot overwrite directory '{}' with downloaded file",
+                        final_path.display()
+                    ));
+                }
+                fs::remove_file(&final_path).into_diagnostic()?;
+            }
+            fs::rename(staged, &final_path).into_diagnostic()?;
+        }
+    } else {
+        merge_directory(staging.path(), Path::new(dest))?;
+    }
+    Ok(())
+}
+
+struct TransferReader {
+    rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    current: std::io::Cursor<Vec<u8>>,
+}
+
+impl TransferReader {
+    fn new(rx: tokio::sync::mpsc::Receiver<Vec<u8>>) -> Self {
+        Self {
+            rx,
+            current: std::io::Cursor::new(Vec::new()),
         }
     }
 }
 
-/// Stream a tar archive from the sandbox and extract it into a fresh
-/// destination directory. The source is always wrapped on the sandbox side so
-/// the host can pick a basename when needed.
-async fn stream_sandbox_tar(
-    session: &SshSessionConfig,
-    tar_cmd: String,
-    extract_into: &Path,
-) -> Result<()> {
-    let mut ssh = ssh_base_command(&session.proxy_command);
-    ssh.arg("-T")
-        .arg("-o")
-        .arg("RequestTTY=no")
-        .arg("sandbox")
-        .arg(tar_cmd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
+impl Read for TransferReader {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let read = Read::read(&mut self.current, output)?;
+            if read != 0 {
+                return Ok(read);
+            }
+            let Some(next) = self.rx.blocking_recv() else {
+                return Ok(0);
+            };
+            self.current = std::io::Cursor::new(next);
+        }
+    }
+}
 
-    let mut child = ssh.spawn().into_diagnostic()?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| miette::miette!("failed to open stdout for ssh process"))?;
-
-    let extract_into = extract_into.to_path_buf();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let mut archive = tar::Archive::new(stdout);
-        archive
-            .unpack(&extract_into)
-            .into_diagnostic()
-            .wrap_err("failed to extract tar archive from sandbox")?;
-        Ok(())
-    })
-    .await
-    .into_diagnostic()??;
-
-    let status = tokio::task::spawn_blocking(move || child.wait())
-        .await
-        .into_diagnostic()?
-        .into_diagnostic()?;
-
-    if !status.success() {
-        return Err(miette::miette!(
-            "ssh tar create exited with status {status}"
-        ));
+fn merge_directory(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("create destination {}", destination.display()))?;
+    for entry in fs::read_dir(source).into_diagnostic()? {
+        let entry = entry.into_diagnostic()?;
+        let from = entry.path();
+        let to = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&from).into_diagnostic()?;
+        if metadata.is_dir() && fs::symlink_metadata(&to).is_ok_and(|item| item.is_dir()) {
+            merge_directory(&from, &to)?;
+            fs::remove_dir(&from).into_diagnostic()?;
+        } else {
+            if let Ok(existing) = fs::symlink_metadata(&to) {
+                if existing.is_dir() {
+                    fs::remove_dir_all(&to).into_diagnostic()?;
+                } else {
+                    fs::remove_file(&to).into_diagnostic()?;
+                }
+            }
+            fs::rename(&from, &to).into_diagnostic()?;
+        }
     }
     Ok(())
 }
@@ -1312,6 +1390,7 @@ async fn stream_sandbox_tar(
 /// The trailing `--` is required: a sandbox-side file whose basename starts
 /// with `-` (e.g. `--checkpoint-action=...`) would otherwise be parsed by GNU
 /// tar as an option rather than a member to archive.
+#[cfg(test)]
 fn build_single_file_tar_cmd(parent: &str, basename: &str) -> String {
     format!(
         "tar cf - -C {parent} -- {name}",
@@ -1320,51 +1399,14 @@ fn build_single_file_tar_cmd(parent: &str, basename: &str) -> String {
     )
 }
 
-async fn sandbox_sync_down_file(
-    session: &SshSessionConfig,
-    sandbox_path: &str,
-    dest: &str,
-) -> Result<()> {
-    let (parent, basename) = split_sandbox_path(sandbox_path);
-    let dest_exists_as_dir = fs::symlink_metadata(Path::new(dest)).is_ok_and(|m| m.is_dir());
-    let final_path = resolve_file_download_target(dest, basename, dest_exists_as_dir);
-
-    let staging_parent = final_path
-        .parent()
-        .ok_or_else(|| miette::miette!("destination '{}' has no parent directory", dest))?;
-    fs::create_dir_all(staging_parent)
-        .into_diagnostic()
-        .wrap_err_with(|| {
-            format!(
-                "failed to create local destination directory '{}'",
-                staging_parent.display()
-            )
-        })?;
-
-    let staging = tempfile::TempDir::new_in(staging_parent)
-        .into_diagnostic()
-        .wrap_err("failed to create download staging directory")?;
-
-    let tar_cmd = build_single_file_tar_cmd(parent, basename);
-    stream_sandbox_tar(session, tar_cmd, staging.path()).await?;
-
-    place_downloaded_file(staging.path(), basename, &final_path).wrap_err_with(|| {
-        format!(
-            "failed to place downloaded file at '{}'",
-            final_path.display()
-        )
-    })?;
-    Ok(())
-}
-
-/// Move a single file extracted by `stream_sandbox_tar` into its final
-/// position on the host.
+/// Move a staged single file into its final position on the host.
 ///
 /// `staging_dir` must contain a single regular-file entry named
 /// `source_basename` (the wrapper produced by `tar cf - -C <parent> <name>`).
 /// The entry is renamed onto `final_path`, atomically when `staging_dir` is
 /// on the same filesystem. Refuses to overwrite an existing directory at
 /// `final_path` to match `cp` behaviour.
+#[cfg(test)]
 fn place_downloaded_file(
     staging_dir: &Path,
     source_basename: &str,
@@ -1393,33 +1435,6 @@ fn place_downloaded_file(
         .into_diagnostic()
         .wrap_err_with(|| format!("failed to rename into '{}'", final_path.display()))?;
     Ok(())
-}
-
-async fn sandbox_sync_down_directory(
-    session: &SshSessionConfig,
-    sandbox_path: &str,
-    dest: &str,
-) -> Result<()> {
-    let dest_path = Path::new(dest);
-    if let Ok(existing) = fs::symlink_metadata(dest_path)
-        && !existing.is_dir()
-    {
-        return Err(miette::miette!(
-            "cannot extract directory '{sandbox_path}' over non-directory destination '{}'",
-            dest_path.display()
-        ));
-    }
-    fs::create_dir_all(dest_path)
-        .into_diagnostic()
-        .wrap_err_with(|| {
-            format!(
-                "failed to create local destination directory '{}'",
-                dest_path.display()
-            )
-        })?;
-
-    let tar_cmd = format!("tar cf - -C {path} .", path = shell_escape(sandbox_path));
-    stream_sandbox_tar(session, tar_cmd, dest_path).await
 }
 
 /// Run the SSH proxy, connecting stdin/stdout to the gateway.

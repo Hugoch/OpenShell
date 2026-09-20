@@ -11,6 +11,7 @@ use clap::Parser;
 use miette::{IntoDiagnostic, Result};
 #[cfg(target_os = "linux")]
 use openshell_ocsf::OcsfShorthandLayer;
+use openshell_sandbox::{file_transfer, sftp};
 #[cfg(target_os = "linux")]
 use tracing_subscriber::EnvFilter;
 #[cfg(target_os = "linux")]
@@ -22,6 +23,8 @@ use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 /// to copy the binary out. Invoking the binary itself with this argument
 /// performs the copy in pure Rust.
 const COPY_SELF_SUBCOMMAND: &str = "copy-self";
+const FILE_TRANSFER_SUBCOMMAND: &str = "file-transfer";
+const SFTP_SUBCOMMAND: &str = "sftp";
 const BOOTSTRAP_SUBCOMMAND: &str = "bootstrap";
 const SEED_WORKSPACE_SUBCOMMAND: &str = "seed-workspace";
 #[cfg(any(target_os = "linux", test))]
@@ -1863,6 +1866,12 @@ fn main() -> Result<()> {
             miette::miette!("usage: openshell-sandbox {COPY_SELF_SUBCOMMAND} <DEST>")
         })?;
         return copy_self(dest);
+    }
+    if raw_args.get(1).map(String::as_str) == Some(FILE_TRANSFER_SUBCOMMAND) {
+        return file_transfer::run(&raw_args[2..]);
+    }
+    if raw_args.get(1).map(String::as_str) == Some(SFTP_SUBCOMMAND) {
+        return sftp::run();
     }
     if raw_args.get(1).map(String::as_str) == Some(BOOTSTRAP_SUBCOMMAND) {
         if raw_args.len() != 2 {

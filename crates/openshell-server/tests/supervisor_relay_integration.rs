@@ -161,6 +161,21 @@ impl OpenShell for RelayGateway {
         Err(Status::unimplemented("unused"))
     }
 
+    #[allow(unused_qualifications)]
+    type TransferSandboxStream = tokio_stream::wrappers::ReceiverStream<
+        Result<openshell_core::proto::SandboxTransferFrame, tonic::Status>,
+    >;
+
+    #[allow(unused_qualifications)]
+    async fn transfer_sandbox(
+        &self,
+        _request: tonic::Request<tonic::Streaming<openshell_core::proto::SandboxTransferFrame>>,
+    ) -> Result<tonic::Response<Self::TransferSandboxStream>, tonic::Status> {
+        Err(tonic::Status::unimplemented(
+            "transfer not used by this test",
+        ))
+    }
+
     type ExecSandboxInteractiveStream =
         ReceiverStream<Result<openshell_core::proto::ExecSandboxEvent, Status>>;
     async fn exec_sandbox_interactive(
