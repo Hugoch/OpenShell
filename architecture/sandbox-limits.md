@@ -115,10 +115,11 @@ buffer only when it owns an explicit bound.
 
 Every parsed WebSocket text message acquires network-owned assembly capacity before payload allocation or reading, including relays used only for native policy, credential rewriting, compression, or a disabled fail-open middleware session. The process-lifetime budget survives policy reloads, and the assembly retains its permit through decompression, policy and middleware evaluation, credential rewriting, and upstream forwarding. Active middleware sessions additionally acquire shared middleware work before buffering. Input progress resets only the idle deadline. Forwarding uses one total deadline across the complete frame header, payload, and flush. Every timeout and terminal parser error releases both permits through ordinary ownership. Queue exhaustion emits a payload-free network denial event.
 
-The operator middleware `max_payload_bytes` ceiling applies to complete
-buffered payloads, stream units, and WebSocket text messages. The HTTP request
-runtime further caps units at 64 KiB and advertises bounded queue limits during
-preflight. Neither limit replaces the raw binary frame
+The operator middleware `max_payload_bytes` ceiling applies to payload-bearing
+bindings: complete buffered payloads, stream units, and WebSocket text messages.
+Preflight-only HTTP bindings advertise no body modes and may use a zero limit.
+The HTTP request runtime further caps units at 64 KiB and advertises bounded
+queue limits during preflight. Neither limit replaces the raw binary frame
 safety bound because binary messages are never delivered to V1 middleware. A
 passed binary logical message still advances the active middleware session
 sequence and emits coverage telemetry, so a later text RPC can contain a valid

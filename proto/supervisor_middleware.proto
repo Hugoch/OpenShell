@@ -75,7 +75,9 @@ message MiddlewareBinding {
   // Supported phase.
   SupervisorMiddlewarePhase phase = 2;
   // Maximum request body, WebSocket message, or response body unit/replacement.
-  // Required for payload-bearing operations.
+  // Required for payload-bearing operations. An HTTP binding with no supported
+  // body modes may leave this zero because it can only Continue or Reject at
+  // preflight.
   uint64 max_payload_bytes = 3;
   // Optional binding-specific RPC timeout. Empty uses the operator-configured
   // service timeout, or the 500ms platform default when that is also omitted.
@@ -88,6 +90,8 @@ message MiddlewareBinding {
   uint32 http_protocol_version = 5;
   // HTTP body modes this implementation can select. OpenShell intersects this
   // set with runtime, policy, and message eligibility before every preflight.
+  // Empty declares a preflight-only HTTP binding that can Continue, optionally
+  // with header mutations, or Reject without receiving body events.
   repeated HttpBodyMode supported_http_body_modes = 6;
 }
 

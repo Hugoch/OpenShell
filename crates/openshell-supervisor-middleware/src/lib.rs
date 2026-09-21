@@ -680,8 +680,12 @@ fn middleware_denial_reason(config_name: &str, reason_code: Option<&str>) -> Str
     )
 }
 
-fn validate_payload_limit(source: &str, binding: &MiddlewareBinding) -> Result<usize> {
-    if binding.max_payload_bytes == 0 {
+fn validate_payload_limit(
+    source: &str,
+    binding: &MiddlewareBinding,
+    required: bool,
+) -> Result<usize> {
+    if required && binding.max_payload_bytes == 0 {
         return Err(miette!("{source} must advertise a non-zero payload limit"));
     }
     if binding.max_payload_bytes > MAX_MIDDLEWARE_PAYLOAD_BYTES as u64 {
@@ -691,6 +695,16 @@ fn validate_payload_limit(source: &str, binding: &MiddlewareBinding) -> Result<u
     }
     usize::try_from(binding.max_payload_bytes)
         .map_err(|_| miette!("{source} reports a payload limit too large for this platform"))
+}
+
+fn binding_requires_payload_limit(binding: &MiddlewareBinding) -> bool {
+    !matches!(
+        SupervisorMiddlewareOperation::try_from(binding.operation).ok(),
+        Some(
+            SupervisorMiddlewareOperation::HttpRequest
+                | SupervisorMiddlewareOperation::HttpResponse
+        )
+    ) || !binding.supported_http_body_modes.is_empty()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -746,18 +760,21 @@ fn validate_manifest_bindings(
                 "{source} describes a duplicate middleware operation/phase pair"
             ));
         }
-        let advertised = validate_payload_limit(source, binding)?;
+        let payload_limit_required = binding_requires_payload_limit(binding);
+        let advertised = validate_payload_limit(source, binding, payload_limit_required)?;
         if binding.request_timeout.is_some() {
             middleware_proto_timeout_or_default(binding.request_timeout.as_ref())
                 .map_err(|reason| miette!("{source} has invalid timeout for binding: {reason}"))?;
         }
-        if operator_max_payload_bytes.is_some_and(|limit| limit > advertised) {
+        if payload_limit_required
+            && operator_max_payload_bytes.is_some_and(|limit| limit > advertised)
+        {
             return Err(miette!(
                 "{source} max_payload_bytes ({}) exceeds the binding capability ({advertised})",
                 operator_max_payload_bytes.expect("operator limit checked above")
             ));
         }
-        if operator_max_payload_bytes == Some(0) {
+        if payload_limit_required && operator_max_payload_bytes == Some(0) {
             return Err(miette!(
                 "{source} must configure max_payload_bytes for every payload-bearing binding"
             ));
@@ -767,11 +784,6 @@ fn validate_manifest_bindings(
                 if binding.http_protocol_version != 1 {
                     return Err(miette!(
                         "{source} must advertise HTTP middleware protocol version 1"
-                    ));
-                }
-                if binding.supported_http_body_modes.is_empty() {
-                    return Err(miette!(
-                        "{source} must advertise at least one supported HTTP body mode"
                     ));
                 }
                 let mut modes = HashSet::new();
@@ -1320,8 +1332,14 @@ impl ChainRunner {
                 continue;
             };
             let timeout = state.timeout_for_binding(&binding)?;
-            let advertised = validate_payload_limit("middleware manifest", &binding)?;
-            let max_payload_bytes = state.operator_max_payload_bytes.unwrap_or(advertised);
+            let payload_limit_required = binding_requires_payload_limit(&binding);
+            let advertised =
+                validate_payload_limit("middleware manifest", &binding, payload_limit_required)?;
+            let max_payload_bytes = if payload_limit_required {
+                state.operator_max_payload_bytes.unwrap_or(advertised)
+            } else {
+                0
+            };
             described_entries.push(DescribedChainEntry {
                 entry,
                 service: Some(Arc::clone(state)),
@@ -1732,7 +1750,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_version_or_body_modes() {
+    fn rejects_missing_http_protocol_version() {
         let mut candidate = binding(
             SupervisorMiddlewareOperation::HttpRequest,
             SupervisorMiddlewarePhase::PreCredentials,
@@ -1745,18 +1763,54 @@ mod tests {
                 .to_string()
                 .contains("protocol version 1")
         );
+    }
 
-        let candidate = binding(
+    #[test]
+    fn accepts_preflight_only_http_capability_without_payload_limit() {
+        for operation in [
             SupervisorMiddlewareOperation::HttpRequest,
-            SupervisorMiddlewarePhase::PreCredentials,
-            Vec::new(),
-        );
-        assert!(
-            validate_manifest_bindings("test service", &manifest(candidate), None)
-                .unwrap_err()
-                .to_string()
-                .contains("at least one")
-        );
+            SupervisorMiddlewareOperation::HttpResponse,
+        ] {
+            let phase = if operation == SupervisorMiddlewareOperation::HttpRequest {
+                SupervisorMiddlewarePhase::PreCredentials
+            } else {
+                SupervisorMiddlewarePhase::PreReturn
+            };
+            let mut candidate = binding(operation, phase, Vec::new());
+            candidate.max_payload_bytes = 0;
+            for operator_limit in [None, Some(0), Some(4096)] {
+                validate_manifest_bindings(
+                    "test service",
+                    &manifest(candidate.clone()),
+                    operator_limit,
+                )
+                .expect("valid preflight-only HTTP capability");
+            }
+        }
+    }
+
+    #[test]
+    fn payload_bearing_binding_requires_non_zero_payload_limit() {
+        for mut candidate in [
+            binding(
+                SupervisorMiddlewareOperation::HttpRequest,
+                SupervisorMiddlewarePhase::PreCredentials,
+                vec![HttpBodyMode::Buffered],
+            ),
+            binding(
+                SupervisorMiddlewareOperation::WebsocketMessage,
+                SupervisorMiddlewarePhase::PreCredentials,
+                Vec::new(),
+            ),
+        ] {
+            candidate.max_payload_bytes = 0;
+            assert!(
+                validate_manifest_bindings("test service", &manifest(candidate), None)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("non-zero payload limit")
+            );
+        }
     }
 
     #[test]

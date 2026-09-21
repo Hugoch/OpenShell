@@ -6668,6 +6668,7 @@ network_policies:
     impl openshell_core::middleware::InProcessMiddleware for RequestRelayService {
         async fn describe(&self) -> openshell_core::proto::MiddlewareManifest {
             use openshell_core::proto::{HttpBodyMode, MiddlewareBinding, MiddlewareManifest};
+            let preflight_only = matches!(self.mode, RequestRelayMode::HeadersOnly);
             MiddlewareManifest {
                 name: "test/request-relay".into(),
                 service_version: "test".into(),
@@ -6675,15 +6676,19 @@ network_policies:
                     operation: openshell_core::proto::SupervisorMiddlewareOperation::HttpRequest
                         as i32,
                     phase: openshell_core::proto::SupervisorMiddlewarePhase::PreCredentials as i32,
-                    max_payload_bytes:
+                    max_payload_bytes: if preflight_only {
+                        0
+                    } else {
                         (openshell_supervisor_middleware::MAX_HTTP_REQUEST_STREAM_UNIT_BYTES + 1)
-                            as u64,
+                            as u64
+                    },
                     request_timeout: None,
                     http_protocol_version: 1,
-                    supported_http_body_modes: vec![
-                        HttpBodyMode::Buffered as i32,
-                        HttpBodyMode::Stream as i32,
-                    ],
+                    supported_http_body_modes: if preflight_only {
+                        Vec::new()
+                    } else {
+                        vec![HttpBodyMode::Buffered as i32, HttpBodyMode::Stream as i32]
+                    },
                 }],
                 expected_audience: String::new(),
             }
@@ -6744,6 +6749,19 @@ network_policies:
                                             })
                                         },
                                     ),
+                                    header_mutations: matches!(mode, RequestRelayMode::HeadersOnly)
+                                        .then(|| HeaderMutation {
+                                            operation: Some(header_mutation::Operation::Write(
+                                                WriteHeader {
+                                                    name: "x-middleware-mode".into(),
+                                                    value: "headers-only".into(),
+                                                    on_existing: ExistingHeaderAction::Overwrite
+                                                        as i32,
+                                                },
+                                            )),
+                                        })
+                                        .into_iter()
+                                        .collect(),
                                     ..Default::default()
                                 },
                             )),
@@ -6957,6 +6975,7 @@ network_policies:
         .expect("header-only request should forward before its body arrives");
         let upstream_headers = String::from_utf8(upstream_headers).unwrap();
         assert!(upstream_headers.contains(&format!("Content-Length: {body_len}\r\n")));
+        assert!(upstream_headers.contains("x-middleware-mode: headers-only\r\n"));
 
         let upstream_task = tokio::spawn(async move {
             let mut body = vec![0; body_len];

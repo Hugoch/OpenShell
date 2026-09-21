@@ -1671,6 +1671,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preflight_only_binding_cannot_select_a_body_mode() {
+        let buffered = openshell_core::proto::HttpInspect {
+            mode: Some(http_inspect::Mode::Buffered(
+                openshell_core::proto::HttpBufferedMode {
+                    max_body_bytes: 1024,
+                },
+            )),
+        };
+        let stream = openshell_core::proto::HttpInspect {
+            mode: Some(http_inspect::Mode::Stream(
+                openshell_core::proto::HttpStreamMode {},
+            )),
+        };
+
+        assert_eq!(
+            validate_inspect(&buffered, &[], 0),
+            Err("request_body_mode_not_permitted")
+        );
+        assert_eq!(
+            validate_inspect(&stream, &[], 0),
+            Err("request_body_mode_not_permitted")
+        );
+    }
+
+    #[test]
     fn diagnostics_reject_unknown_reason_codes() {
         let diagnostics = MiddlewareDiagnostics {
             reason_code: "Not-Stable".into(),

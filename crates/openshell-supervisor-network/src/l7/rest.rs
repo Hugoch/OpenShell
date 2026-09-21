@@ -4440,6 +4440,11 @@ mod tests {
     #[tonic::async_trait]
     impl openshell_supervisor_middleware::InProcessMiddleware for ResponseRelayService {
         async fn describe(&self) -> MiddlewareManifest {
+            let preflight_only = self.request_only
+                || matches!(
+                    self.script,
+                    ResponseRelayScript::HeadersOnly | ResponseRelayScript::BlockPreflight
+                );
             MiddlewareManifest {
                 name: "test/response-relay".into(),
                 service_version: "test".into(),
@@ -4454,10 +4459,14 @@ mod tests {
                     } else {
                         SupervisorMiddlewarePhase::PreReturn
                     } as i32,
-                    max_payload_bytes: 4096,
+                    max_payload_bytes: if preflight_only { 0 } else { 4096 },
                     request_timeout: None,
                     http_protocol_version: 1,
-                    supported_http_body_modes: vec![HttpBodyMode::Buffered as i32],
+                    supported_http_body_modes: if preflight_only {
+                        Vec::new()
+                    } else {
+                        vec![HttpBodyMode::Buffered as i32]
+                    },
                 }],
                 expected_audience: String::new(),
             }
