@@ -1402,6 +1402,8 @@ pub struct IsolationSpecInput<'a> {
     pub supervisor_bin: Option<&'a Path>,
     pub tls_secrets: Option<&'a [String; 3]>,
     pub identity: &'a openshell_isolation_interface::contract::ResolvedWorkloadIdentity,
+    /// Whether this workload is created by a rootless Podman service.
+    pub rootless: bool,
 }
 
 pub struct IsolationSpecs {
@@ -1439,19 +1441,44 @@ pub fn build_isolation_specs(
         .iter()
         .filter_map(|entry| entry.split_once('=').map(|(key, _)| key.to_string()))
         .collect();
-    workload.command = vec![
-        "--bootstrap".into(),
-        crate::isolation::BOOTSTRAP_PATH.into(),
-    ];
-    workload.user.clone_from(&user);
-    workload.groups = input
-        .identity
-        .supplementary_gids
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    workload.cap_drop = vec!["ALL".into()];
-    workload.cap_add.clear();
+    if input.rootless {
+        // Podman's archive endpoint writes named-volume contents with the
+        // rootless gateway user's host ownership. In a remapped user namespace,
+        // that is container root rather than the resolved workload UID. Start
+        // the trusted runtime as namespace root only long enough to chown the
+        // empty workspace and irreversibly drop to the resolved identity before
+        // it reads bootstrap material or accepts a control connection.
+        workload.command = vec![
+            "launch-capability-free".into(),
+            input.identity.uid.to_string(),
+            input.identity.gid.to_string(),
+            crate::isolation::BOOTSTRAP_PATH.into(),
+            driver_mounts::DEFAULT_WORKSPACE_ROOT.into(),
+        ];
+        workload.user = "0:0".into();
+        workload.groups.clear();
+        workload.cap_drop = vec!["ALL".into()];
+        workload.cap_add = vec![
+            "CHOWN".into(),
+            "SETGID".into(),
+            "SETUID".into(),
+            "SETPCAP".into(),
+        ];
+    } else {
+        workload.command = vec![
+            "--bootstrap".into(),
+            crate::isolation::BOOTSTRAP_PATH.into(),
+        ];
+        workload.user.clone_from(&user);
+        workload.groups = input
+            .identity
+            .supplementary_gids
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        workload.cap_drop = vec!["ALL".into()];
+        workload.cap_add.clear();
+    }
     workload.apparmor_profile = input
         .config
         .app_armor_profile
@@ -1740,16 +1767,33 @@ mod tests {
             supervisor_bin: None,
             tls_secrets: None,
             identity: &identity,
+            rootless: true,
         })
         .unwrap();
         for spec in [&specs.workload, &specs.supervisor] {
-            assert_eq!(spec.user, "1000:1001");
-            assert_eq!(spec.groups, vec!["2000"]);
             assert_eq!(spec.cap_drop, vec!["ALL"]);
-            assert!(spec.cap_add.is_empty());
             assert!(spec.seccomp_profile_path.is_empty());
             assert!(spec.no_new_privileges);
         }
+        assert_eq!(specs.workload.user, "0:0");
+        assert!(specs.workload.groups.is_empty());
+        assert_eq!(
+            specs.workload.cap_add,
+            vec!["CHOWN", "SETGID", "SETUID", "SETPCAP"]
+        );
+        assert_eq!(
+            specs.workload.command,
+            vec![
+                "launch-capability-free",
+                "1000",
+                "1001",
+                crate::isolation::BOOTSTRAP_PATH,
+                driver_mounts::DEFAULT_WORKSPACE_ROOT,
+            ]
+        );
+        assert_eq!(specs.supervisor.user, "1000:1001");
+        assert_eq!(specs.supervisor.groups, vec!["2000"]);
+        assert!(specs.supervisor.cap_add.is_empty());
         assert_eq!(specs.workload.netns.nsmode, "none");
         assert_eq!(
             specs

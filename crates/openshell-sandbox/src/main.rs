@@ -1518,13 +1518,37 @@ fn launch_capability_probe(_args: &[String]) -> Result<()> {
 fn launch_capability_free(args: &[String]) -> Result<()> {
     use miette::{Context as _, IntoDiagnostic as _};
 
-    let [uid, gid, bootstrap] = args else {
+    let [uid, gid, bootstrap, workspace @ ..] = args else {
         return Err(miette::miette!(
-            "usage: openshell-sandbox {CAPABILITY_FREE_LAUNCH_SUBCOMMAND} <UID> <GID> <BOOTSTRAP>"
+            "usage: openshell-sandbox {CAPABILITY_FREE_LAUNCH_SUBCOMMAND} <UID> <GID> <BOOTSTRAP> [WORKSPACE]"
         ));
     };
+    if workspace.len() > 1 {
+        return Err(miette::miette!(
+            "usage: openshell-sandbox {CAPABILITY_FREE_LAUNCH_SUBCOMMAND} <UID> <GID> <BOOTSTRAP> [WORKSPACE]"
+        ));
+    }
     let uid = uid.parse::<u32>().into_diagnostic().wrap_err("parse UID")?;
     let gid = gid.parse::<u32>().into_diagnostic().wrap_err("parse GID")?;
+    if let Some(workspace) = workspace.first() {
+        let workspace = Path::new(workspace);
+        let metadata = std::fs::symlink_metadata(workspace)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("read workspace metadata {}", workspace.display()))?;
+        if !metadata.file_type().is_dir() {
+            return Err(miette::miette!(
+                "workspace {} must be a real directory",
+                workspace.display()
+            ));
+        }
+        nix::unistd::chown(
+            workspace,
+            Some(nix::unistd::Uid::from_raw(uid)),
+            Some(nix::unistd::Gid::from_raw(gid)),
+        )
+        .into_diagnostic()
+        .wrap_err_with(|| format!("set workspace ownership {}:{gid}", workspace.display()))?;
+    }
     enter_capability_free_identity(uid, gid)?;
     let log_level = std::env::var(openshell_core::sandbox_env::LOG_LEVEL)
         .unwrap_or_else(|_| "warn".to_string());

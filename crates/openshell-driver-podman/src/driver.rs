@@ -938,6 +938,7 @@ impl PodmanComputeDriver {
                     supervisor_bin: supervisor_bin_path.as_deref(),
                     tls_secrets: tls_secret_names.as_ref(),
                     identity: &identity,
+                    rootless: self.rootless,
                 });
                 let specs = match specs {
                     Ok(spec) => spec,
