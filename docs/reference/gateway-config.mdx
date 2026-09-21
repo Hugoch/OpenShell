@@ -246,7 +246,7 @@ phases = ["validate"]
 namespace              = "openshell"
 # Required in raw TOML; Helm derives this from the gateway Service.
 grpc_endpoint          = "https://openshell-gateway.openshell.svc:8080"
-default_image          = "ghcr.io/nvidia/openshell/sandbox:latest"
+default_image          = "docker.io/library/alpine:3.22"
 # Defaults to the gateway version; override to pin a specific build.
 # supervisor_image     = "ghcr.io/nvidia/openshell/supervisor:<version>"
 client_tls_secret_name = "openshell-client-tls"
@@ -549,7 +549,7 @@ workspace_mode                 = "shared"
 # gateway_id                   = "openshell"
 namespace                      = "agents"
 service_account_name           = "openshell-sandbox"
-default_image                  = "ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
+default_image                  = "docker.io/library/alpine:3.22"
 image_pull_policy              = "if_not_present"
 image_pull_secrets             = ["regcred"]
 # Defaults to the gateway version; override to pin a specific build.
@@ -699,7 +699,7 @@ guest_tls_key  = "/etc/openshell/certs/client-key.pem"
 
 [openshell.drivers.docker]
 socket_path        = "/var/run/docker.sock"
-default_image      = "ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
+default_image      = "docker.io/library/alpine:3.22"
 # Canonical values: always | if_not_present | never. `newer` is Podman-only.
 image_pull_policy  = "if_not_present"
 # Value assigned to the openshell.sandbox_namespace label on sandbox containers.
@@ -759,7 +759,7 @@ network_name            = "openshell"
 # asks the podman CLI where its socket is, and fails to start if neither finds
 # one. Set this to pin a specific Podman machine instead.
 socket_path             = "/run/user/1000/podman/podman.sock"
-default_image           = "ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
+default_image           = "docker.io/library/alpine:3.22"
 image_pull_policy       = "if_not_present" # always | if_not_present | never | newer
 # Optional override. When omitted, Linux uses gateway loopback and Podman
 # Machine uses host.containers.internal.
