@@ -1397,6 +1397,17 @@ impl ComputeDriverConfigContext<'_> {
     {
         compute::driver_config::driver_config_from_context(self.driver_startup, self.driver_name)
     }
+
+    /// Return whether the selected driver's TOML table explicitly contains
+    /// `field`.
+    #[must_use]
+    pub fn driver_config_field_is_explicit(&self, field: &str) -> bool {
+        compute::driver_config::driver_config_field_is_explicit(
+            self.driver_startup,
+            self.driver_name,
+            field,
+        )
+    }
 }
 
 pub struct ComputeDriverBuildContext<'a> {
