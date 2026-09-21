@@ -60,24 +60,51 @@ impl LocalBoundaryExec {
     }
 
     fn command(&self, spec: &ExecSpec) -> Result<Command, BackendError> {
-        if spec.program.is_empty() {
+        let (program, args) = if let Some(shell_spec) = &spec.shell {
+            let shell = openshell_core::shell::find_login_shell().ok_or_else(|| {
+                BackendError::Process(
+                    "sandbox image does not provide an executable shell at /bin/bash, /usr/bin/bash, or /bin/sh"
+                        .to_string(),
+                )
+            })?;
+            let args = shell_spec.command.as_ref().map_or_else(
+                || {
+                    if spec.pty {
+                        vec!["-i".to_string()]
+                    } else {
+                        Vec::new()
+                    }
+                },
+                |command| {
+                    vec![
+                        if shell_spec.login { "-lc" } else { "-c" }.to_string(),
+                        command.clone(),
+                    ]
+                },
+            );
+            (shell, args)
+        } else {
+            (spec.program.clone(), spec.args.clone())
+        };
+        if program.is_empty() {
             return Err(BackendError::Process("exec program is empty".to_string()));
         }
-        let mut command = Command::new(&spec.program);
-        command.args(&spec.args);
+        let mut command = Command::new(&program);
+        command.args(&args);
         let effective_workdir = spec.workdir.as_deref().or(self.base_workdir.as_deref());
         let (session_user, session_home) =
             crate::process::session_user_and_home(&self.policy, effective_workdir);
         let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
-        let shell = openshell_core::shell::detect_login_shell();
         command
             .env_clear()
             .env(openshell_core::sandbox_env::SANDBOX, "1")
             .env("HOME", session_home)
             .env("USER", session_user)
-            .env("SHELL", shell)
             .env("PATH", path)
             .env("TERM", if spec.pty { "xterm-256color" } else { "dumb" });
+        if let Some(shell) = openshell_core::shell::find_login_shell() {
+            command.env("SHELL", shell);
+        }
         for (key, value) in &self.user_environment {
             if !key.starts_with("OPENSHELL_") {
                 command.env(key, value);
@@ -536,6 +563,55 @@ mod tests {
         )
     }
 
+    #[test]
+    fn shell_requests_are_resolved_by_the_workload_executor() {
+        let executor = executor();
+        let command = executor
+            .command(&ExecSpec {
+                program: "/supervisor/does/not/share/this/root".to_string(),
+                args: vec!["ignored".to_string()],
+                shell: Some(openshell_isolation_interface::contract::ShellSpec {
+                    command: Some("printf ready".to_string()),
+                    login: true,
+                }),
+                env: vec![],
+                workdir: None,
+                pty: false,
+            })
+            .expect("resolve workload shell");
+
+        assert_eq!(
+            command.get_program(),
+            std::ffi::OsStr::new(&openshell_core::shell::detect_login_shell())
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                std::ffi::OsStr::new("-lc"),
+                std::ffi::OsStr::new("printf ready")
+            ]
+        );
+    }
+
+    #[test]
+    fn interactive_shell_request_adds_interactive_flag() {
+        let command = executor()
+            .command(&ExecSpec {
+                program: String::new(),
+                args: Vec::new(),
+                shell: Some(openshell_isolation_interface::contract::ShellSpec {
+                    command: None,
+                    login: true,
+                }),
+                env: vec![],
+                workdir: None,
+                pty: true,
+            })
+            .expect("resolve interactive workload shell");
+
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["-i"]);
+    }
+
     #[tokio::test]
     async fn non_pty_exec_preserves_stdin_stdout_and_stderr() {
         let mut session = executor()
@@ -546,6 +622,7 @@ mod tests {
                     "read line; printf 'out:%s' \"$line\"; printf 'err:%s' \"$line\" >&2"
                         .to_string(),
                 ],
+                shell: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -585,6 +662,7 @@ mod tests {
             .exec(ExecSpec {
                 program: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), "exit 0".to_string()],
+                shell: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -601,6 +679,7 @@ mod tests {
             .exec(ExecSpec {
                 program: "/definitely/missing/openshell-exec".to_string(),
                 args: vec![],
+                shell: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -620,6 +699,7 @@ mod tests {
                 .exec(ExecSpec {
                     program: "/bin/sleep".to_string(),
                     args: vec!["30".to_string()],
+                    shell: None,
                     env: vec![],
                     workdir: None,
                     pty: false,
@@ -651,6 +731,7 @@ mod tests {
             executor.spawn_piped(&ExecSpec {
                 program: "/bin/sleep".to_string(),
                 args: vec!["30".to_string()],
+                shell: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -682,6 +763,7 @@ mod tests {
             .exec(ExecSpec {
                 program: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), "exit 0".to_string()],
+                shell: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -701,6 +783,7 @@ mod tests {
             .exec(ExecSpec {
                 program: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), "exit 7".to_string()],
+                shell: None,
                 env: vec![],
                 workdir: None,
                 pty: true,

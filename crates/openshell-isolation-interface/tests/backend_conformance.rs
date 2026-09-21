@@ -709,6 +709,7 @@ async fn exec_session_owns_its_process_and_streams() {
         .exec(ExecSpec {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), "true".to_string()],
+            shell: None,
             env: vec![],
             workdir: None,
             pty: false,
@@ -730,6 +731,7 @@ async fn pty_exec_merges_output_and_supports_resize() {
         .exec(ExecSpec {
             program: "/bin/sh".to_string(),
             args: vec![],
+            shell: None,
             env: vec![],
             workdir: None,
             pty: true,

@@ -2749,6 +2749,7 @@ mod tests {
             ExecSpec {
                 program: "/bin/true".to_string(),
                 args: Vec::new(),
+                shell: None,
                 env: Vec::new(),
                 workdir: None,
                 pty: false,

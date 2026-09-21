@@ -15,9 +15,9 @@ pub const DEFAULT_COMMUNITY_REGISTRY: &str = "ghcr.io/nvidia/openshell-community
 
 /// Default sandbox base image reference.
 ///
-/// A generic, version-qualified official Alpine image so a fresh install does
-/// not depend on the community image catalog.
-pub const DEFAULT_SANDBOX_BASE_IMAGE: &str = "docker.io/library/alpine:3.22";
+/// A version-qualified NVIDIA Ubuntu Noble image so a fresh install does not
+/// depend on the community image catalog or Docker Hub availability.
+pub const DEFAULT_SANDBOX_BASE_IMAGE: &str = "nvcr.io/nvidia/base/ubuntu:24.04";
 
 /// Return the default sandbox image reference.
 ///

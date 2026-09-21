@@ -4871,6 +4871,7 @@ mod linux {
             let exec_spec = ExecSpecWire {
                 program: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), "printf '%s' \"$REPLAY_TEST\"".to_string()],
+                shell: None,
                 env: Vec::new(),
                 workdir: None,
                 pty: false,
@@ -5151,6 +5152,7 @@ mod linux {
             let sleep_spec = ExecSpecWire {
                 program: "/bin/sleep".to_string(),
                 args: vec!["30".to_string()],
+                shell: None,
                 env: Vec::new(),
                 workdir: None,
                 pty: false,
@@ -5218,6 +5220,7 @@ mod linux {
                 let spec = ExecSpecWire {
                     program: "/bin/sh".to_string(),
                     args: vec!["-c".to_string(), format!("exit {exit_code}")],
+                    shell: None,
                     env: Vec::new(),
                     workdir: None,
                     pty: false,
@@ -5255,6 +5258,7 @@ mod linux {
                                 "if [ -z \"${ROTATED_TOKEN+x}\" ]; then printf revoked; else printf 'unexpected:%s' \"$ROTATED_TOKEN\"; fi"
                                     .to_string(),
                             ],
+                            shell: None,
                             env: Vec::new(),
                             workdir: None,
                             pty: false,

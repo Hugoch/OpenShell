@@ -745,12 +745,25 @@ pub struct ExecSpec {
     pub program: String,
     /// Program arguments.
     pub args: Vec<String>,
+    /// Workload-local shell request. When present, the boundary resolves the
+    /// concrete shell and ignores `program` and `args`.
+    pub shell: Option<ShellSpec>,
     /// Extra environment over the boundary's base.
     pub env: Vec<(String, String)>,
     /// Working directory, if any.
     pub workdir: Option<String>,
     /// Whether to allocate a PTY.
     pub pty: bool,
+}
+
+/// A shell invocation whose executable must be resolved inside the workload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellSpec {
+    /// Command passed to the shell. `None` starts an interactive shell when a
+    /// PTY is requested and a plain shell otherwise.
+    pub command: Option<String>,
+    /// Whether command execution should load the shell's login environment.
+    pub login: bool,
 }
 
 /// In-boundary process entry, consumed by the SSH server and supervisor session.
