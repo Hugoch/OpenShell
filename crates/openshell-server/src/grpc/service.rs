@@ -21,6 +21,7 @@ use crate::auth::workspace_authz::{
 use crate::pagination::Pagination;
 use crate::persistence::{ObjectListQuery, ObjectType, WriteCondition};
 use crate::service_routing;
+use crate::storage_proto::StoredSandbox as Sandbox;
 
 const MAX_SERVICE_NAME_LEN: usize = super::MAX_ROUTABLE_NAME_LEN;
 
@@ -49,19 +50,37 @@ pub(super) async fn handle_expose_service(
         super::workspace::resolve_workspace(state.store.as_ref(), sandbox.object_workspace())
             .await?
             .ensure_active()?;
-    let sandbox_name = sandbox.object_name();
-    validate_optional_endpoint_name("service", &req.name, MAX_SERVICE_NAME_LEN)?;
-    if req.target_port == 0 || req.target_port > u32::from(u16::MAX) {
+    validate_service_exposure_request(&req.name, req.target_port)?;
+    expose_service_endpoint(state, &workspace, &sandbox, &req.name, req.target_port).await
+}
+
+pub(super) fn validate_service_exposure_request(
+    service: &str,
+    target_port: u32,
+) -> Result<(), Status> {
+    validate_optional_endpoint_name("service", service, MAX_SERVICE_NAME_LEN)?;
+    if target_port == 0 || target_port > u32::from(u16::MAX) {
         return Err(Status::invalid_argument("target_port must be in 1..=65535"));
     }
+    Ok(())
+}
+
+pub(super) async fn expose_service_endpoint(
+    state: &Arc<ServerState>,
+    workspace: &str,
+    sandbox: &Sandbox,
+    service: &str,
+    target_port: u32,
+) -> Result<Response<ServiceEndpointResponse>, Status> {
+    let sandbox_name = sandbox.object_name();
 
     let now = crate::persistence::current_time_ms();
-    let key = service_routing::endpoint_key(sandbox_name, &req.name);
+    let key = service_routing::endpoint_key(sandbox_name, service);
 
     // Fetch existing endpoint to determine create vs. update path
     let existing = state
         .store
-        .get_message_by_name::<ServiceEndpoint>(&workspace, &key)
+        .get_message_by_name::<ServiceEndpoint>(workspace, &key)
         .await
         .map_err(|e| Status::internal(format!("fetch endpoint failed: {e}")))?;
 
@@ -106,13 +125,13 @@ pub(super) async fn handle_expose_service(
             labels: HashMap::from([("sandbox".to_string(), sandbox_name.to_string())]),
             resource_version: 0,
             annotations: HashMap::new(),
-            workspace: workspace.clone(),
+            workspace: workspace.to_string(),
             deletion_time: None,
         }),
         sandbox_id: sandbox.object_id().to_string(),
         sandbox: sandbox_name.to_string(),
-        name: req.name.clone(),
-        target_port: req.target_port,
+        name: service.to_string(),
+        target_port,
         domain: true,
     };
 
@@ -123,7 +142,7 @@ pub(super) async fn handle_expose_service(
             ServiceEndpoint::object_type(),
             &id,
             &key,
-            &workspace,
+            workspace,
             &endpoint.encode_to_vec(),
             Some(&labels_json),
             condition,
@@ -136,7 +155,7 @@ pub(super) async fn handle_expose_service(
         meta.resource_version = result.resource_version;
     }
 
-    let url = service_routing::endpoint_url(&state.config, &workspace, sandbox_name, &req.name)
+    let url = service_routing::endpoint_url(&state.config, workspace, sandbox_name, service)
         .unwrap_or_default();
     service_routing::emit_service_endpoint_config_event(&endpoint, &url, created);
 

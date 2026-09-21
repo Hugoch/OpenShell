@@ -144,6 +144,7 @@ impl OpenShell for TestOpenShell {
                 }),
                 ..Default::default()
             }),
+            service_urls: std::collections::HashMap::new(),
         }))
     }
 

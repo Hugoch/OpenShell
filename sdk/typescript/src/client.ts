@@ -171,6 +171,8 @@ export interface SandboxSpec {
   command?: string[];
   /** Allocate a retained pseudo-terminal for the canonical command. */
   tty?: boolean;
+  /** Loopback HTTP services to expose when the sandbox is created. */
+  serviceExposures?: ServiceExposure[];
   /**
    * Create-time sandbox policy (the safety boundary). Sandbox-scoped
    * `setPolicy` cannot introduce static fields later, so express filesystem,
@@ -187,6 +189,13 @@ export interface SandboxSpec {
   rawSpec?: MessageInitShape<typeof SandboxSpecSchema>;
 }
 
+export interface ServiceExposure {
+  /** Service name. Empty or omitted selects the unnamed endpoint. */
+  service?: string;
+  /** Loopback TCP port inside the sandbox. */
+  targetPort: number;
+}
+
 export interface SandboxFromTemplateSpec {
   name?: string;
   /** Workspace name. Omit for `default`; empty strings are invalid. */
@@ -198,6 +207,8 @@ export interface SandboxFromTemplateSpec {
   command?: string[];
   /** Allocate a retained pseudo-terminal for the canonical command. */
   tty?: boolean;
+  /** Loopback HTTP services to expose when the sandbox is created. */
+  serviceExposures?: ServiceExposure[];
   /**
    * Create-time sandbox policy (the safety boundary). The named workload
    * template supplies runtime workload fields.
@@ -216,6 +227,8 @@ export interface SandboxRef {
   mainProcessInstanceId?: string;
   exitCode?: number;
   createdFromWorkloadTemplate?: SandboxWorkloadTemplateProvenance;
+  /** Service URLs returned by creation, keyed by service name. */
+  serviceUrls: Record<string, string>;
 }
 
 export interface SandboxWorkloadTemplateProvenance {
@@ -481,7 +494,7 @@ function policySourceName(s: PolicySource): PolicySourceName {
   return POLICY_SOURCE_NAMES[s] ?? 'unspecified';
 }
 
-function sandboxRef(sandbox: Sandbox | undefined): SandboxRef {
+function sandboxRef(sandbox: Sandbox | undefined, serviceUrls: Record<string, string> = {}): SandboxRef {
   if (!sandbox) throw new SdkError('invalid_config', 'sandbox missing from gateway response');
   const meta = sandbox.metadata;
   if (!meta?.id || !meta.name) {
@@ -502,6 +515,7 @@ function sandboxRef(sandbox: Sandbox | undefined): SandboxRef {
           resourceVersion: sandbox.createdFromWorkloadTemplate.resourceVersion,
         }
       : undefined,
+    serviceUrls,
   };
 }
 
@@ -1175,8 +1189,13 @@ export class SandboxClient {
         name: spec.name ?? '',
         labels: spec.labels ?? {},
         spec: specInit,
+        serviceExposures:
+          spec.serviceExposures?.map((exposure) => ({
+            service: exposure.service ?? '',
+            targetPort: exposure.targetPort,
+          })) ?? [],
       });
-      return sandboxRef(resp.sandbox);
+      return sandboxRef(resp.sandbox, resp.serviceUrls);
     } catch (e) {
       throw fromConnect(e);
     }
@@ -1196,8 +1215,13 @@ export class SandboxClient {
           policy: spec.policy ? validatePolicyDocument(spec.policy) : undefined,
         },
         workloadTemplate: spec.workloadTemplate,
+        serviceExposures:
+          spec.serviceExposures?.map((exposure) => ({
+            service: exposure.service ?? '',
+            targetPort: exposure.targetPort,
+          })) ?? [],
       });
-      return sandboxRef(resp.sandbox);
+      return sandboxRef(resp.sandbox, resp.serviceUrls);
     } catch (e) {
       throw fromConnect(e);
     }
