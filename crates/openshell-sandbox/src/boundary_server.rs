@@ -20,7 +20,7 @@ mod linux {
     use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
     use std::path::Path;
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
     use std::task::{Context, Poll};
     use std::time::Duration;
@@ -178,8 +178,10 @@ mod linux {
             .map(|_| ControlConnectionSlot(active.clone()))
     }
     static BOUNDARY_TERMINATION_REQUESTED: AtomicBool = AtomicBool::new(false);
+    static BOUNDARY_TERMINATION_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
-    extern "C" fn request_boundary_termination(_signal: libc::c_int) {
+    extern "C" fn request_boundary_termination(signal: libc::c_int) {
+        BOUNDARY_TERMINATION_SIGNAL.store(signal, Ordering::Release);
         BOUNDARY_TERMINATION_REQUESTED.store(true, Ordering::Release);
     }
 
@@ -271,6 +273,7 @@ mod linux {
 
     fn install_boundary_signal_handlers() -> Result<(), String> {
         BOUNDARY_TERMINATION_REQUESTED.store(false, Ordering::Release);
+        BOUNDARY_TERMINATION_SIGNAL.store(0, Ordering::Release);
         let action = nix::sys::signal::SigAction::new(
             nix::sys::signal::SigHandler::Handler(request_boundary_termination),
             nix::sys::signal::SaFlags::empty(),
@@ -484,7 +487,22 @@ mod linux {
         tracing::info!(?config, "Boundary control listener ready");
         loop {
             if BOUNDARY_TERMINATION_REQUESTED.load(Ordering::Acquire) {
+                let signal = BOUNDARY_TERMINATION_SIGNAL.load(Ordering::Acquire);
+                let before_supervisor_confirmation = !matches!(
+                    *lock(&runtime.supervisor_connection),
+                    SupervisorConnectionState::Connected(_)
+                );
                 runtime.shutdown();
+                if before_supervisor_confirmation {
+                    return Err(format!(
+                        "sandbox boundary received {} before supervisor confirmation",
+                        boundary_termination_signal_name(signal)
+                    ));
+                }
+                tracing::info!(
+                    signal = boundary_termination_signal_name(signal),
+                    "Sandbox boundary received termination signal"
+                );
                 return Ok(());
             }
             match listener.accept() {
@@ -519,6 +537,14 @@ mod linux {
                 }
                 Err(error) => return Err(format!("accept boundary control connection: {error}")),
             }
+        }
+    }
+
+    fn boundary_termination_signal_name(signal: i32) -> &'static str {
+        match signal {
+            libc::SIGTERM => "SIGTERM",
+            libc::SIGINT => "SIGINT",
+            _ => "unknown signal",
         }
     }
 
@@ -3778,6 +3804,13 @@ mod linux {
                 normalized_supplementary_groups(vec![1002, 1001, 1000, 1001], 1000),
                 vec![1001, 1002]
             );
+        }
+
+        #[test]
+        fn boundary_termination_signal_name_is_explicit() {
+            assert_eq!(boundary_termination_signal_name(libc::SIGTERM), "SIGTERM");
+            assert_eq!(boundary_termination_signal_name(libc::SIGINT), "SIGINT");
+            assert_eq!(boundary_termination_signal_name(0), "unknown signal");
         }
 
         #[test]
