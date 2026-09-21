@@ -17,8 +17,8 @@ use openshell_core::proto::middleware::v1::supervisor_middleware_server::{
     SupervisorMiddleware, SupervisorMiddlewareServer,
 };
 use openshell_core::proto::{
-    Decision, Finding, HttpBodyMode, HttpBufferedMode, HttpBufferedResult, HttpEvent, HttpInspect,
-    HttpPreflightResult, HttpReject, HttpResult, HttpUnchanged, MiddlewareBinding,
+    Decision, Finding, HttpBodyMode, HttpBufferedMode, HttpBufferedResult, HttpContinue, HttpEvent,
+    HttpInspect, HttpPreflightResult, HttpReject, HttpResult, HttpUnchanged, MiddlewareBinding,
     MiddlewareDiagnostics, MiddlewareManifest, SupervisorMiddlewareOperation,
     SupervisorMiddlewarePhase, ValidateConfigRequest, ValidateConfigResponse, WebSocketMessage,
     WebSocketMessageResult, WebSocketPreflightAction, WebSocketPreflightDecision,
@@ -307,21 +307,35 @@ impl HttpSessionState {
                     Some(http_preflight::Head::Response(head)) => head.config,
                     None => return Err(Status::invalid_argument("HTTP head is required")),
                 };
+                let config =
+                    GuardConfig::parse(config.as_ref()).map_err(Status::invalid_argument)?;
                 if !preflight
                     .permitted_body_modes
                     .contains(&(HttpBodyMode::Buffered as i32))
                 {
-                    return Err(Status::failed_precondition(
-                        "content guard requires BUFFERED mode",
-                    ));
+                    self.config = Some(config);
+                    self.completed = true;
+                    return Ok(Some(HttpResult {
+                        result: Some(http_result::Result::PreflightResult(HttpPreflightResult {
+                            decision: Some(http_preflight_result::Decision::ContinueWithoutBody(
+                                HttpContinue {},
+                            )),
+                            ..Default::default()
+                        })),
+                    }));
                 }
-                self.config =
-                    Some(GuardConfig::parse(config.as_ref()).map_err(Status::invalid_argument)?);
+                let max_body_bytes = preflight
+                    .limits
+                    .as_ref()
+                    .map_or(MAX_PAYLOAD_BYTES, |limits| {
+                        limits.max_buffered_body_bytes.min(MAX_PAYLOAD_BYTES)
+                    });
+                self.config = Some(config);
                 Ok(Some(HttpResult {
                     result: Some(http_result::Result::PreflightResult(HttpPreflightResult {
                         decision: Some(http_preflight_result::Decision::Inspect(HttpInspect {
                             mode: Some(http_inspect::Mode::Buffered(HttpBufferedMode {
-                                max_body_bytes: MAX_PAYLOAD_BYTES,
+                                max_body_bytes,
                             })),
                         })),
                         ..Default::default()
@@ -760,14 +774,24 @@ mod tests {
     }
 
     #[test]
-    fn http_guard_rejects_when_buffered_mode_is_unavailable() {
+    fn http_guard_continues_when_buffered_mode_is_unavailable() {
         let mut event = preflight("redact", false);
         let Some(http_event::Event::Preflight(preflight)) = event.event.as_mut() else {
             unreachable!()
         };
         preflight.permitted_body_modes.clear();
 
-        assert!(HttpSessionState::default().handle(event).is_err());
+        let result = HttpSessionState::default()
+            .handle(event)
+            .expect("preflight")
+            .expect("result");
+        assert!(matches!(
+            result.result,
+            Some(http_result::Result::PreflightResult(HttpPreflightResult {
+                decision: Some(http_preflight_result::Decision::ContinueWithoutBody(_)),
+                ..
+            }))
+        ));
     }
 
     #[test]

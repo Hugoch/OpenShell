@@ -153,7 +153,7 @@ WebSocket sits on this boundary. The upgrade request is a normal HTTP/1.1 reques
 **In scope for v1:**
 
 - Inspectable HTTP/1.x requests that OpenShell terminates and parses, after L4 and SSRF admit them (and L7 policy too, where the endpoint declares a `protocol`).
-- Final HTTP/1.x responses before delivery, using header-only, whole-body, or streaming inspection.
+- Final HTTP/1.x responses before delivery, using header-only or whole-body inspection. Response streaming is reserved for a later rollout.
 - WebSocket upgrade (handshake) requests - the HTTP request that initiates the upgrade.
 - Complete client-to-upstream WebSocket text messages for implementations that advertise `WEBSOCKET_MESSAGE/PRE_CREDENTIALS`.
 - Fixed-length and chunked request bodies normalized into bounded units, including bodies larger than one gRPC message.
@@ -248,6 +248,7 @@ message HttpPreflight {
   repeated HttpBodyMode permitted_body_modes = 3;
   repeated HttpBodyMode late_header_modes = 4;
   HttpBodyLimits limits = 5;
+  // Original admitted representation length; later body events may differ.
   optional uint64 declared_input_bytes = 6;
 }
 
@@ -366,7 +367,7 @@ message RemoveHeader {
 
 The event and result streams compose as a chain over one request representation. A stage's accepted body and safe header or trailer mutations feed the next stage; an explicit rejection short-circuits the rest. STREAM transfers output responsibility at preflight and does not imply input/output correspondence. See [Middleware ordering](#middleware-ordering) for how chains are assembled and ordered.
 
-Headers use a repeated representation so duplicate lines and wire order survive evaluation and chaining. Before an external call, OpenShell omits credential-bearing, routing, framing, hop-by-hop, and `Connection`-nominated headers. A result may return ordered writes and removals for middleware-visible end-to-end headers. Writes support append, overwrite, and skip modes. Credential-bearing, routing, framing, hop-by-hop, `Connection`-nominated, and OpenShell credential headers remain protected. Header values containing control characters or credential placeholders are invalid. OpenShell validates and applies a stage's mutations atomically. If any mutation is invalid, none are applied and the stage follows its configured `on_error` behavior.
+Headers use a repeated representation so duplicate lines and wire order survive evaluation and chaining. Before an external call, OpenShell omits credential-bearing, routing, framing, hop-by-hop, and `Connection`-nominated headers. A result may return ordered writes and removals for middleware-visible end-to-end headers. Writes support append, overwrite, and skip modes. Credential-bearing, routing, framing, hop-by-hop, `Connection`-nominated, and OpenShell credential headers remain protected. Header values containing control characters or credential placeholders are invalid. OpenShell validates and applies a stage's mutations atomically. If any mutation is invalid, none are applied. HTTP fails closed; WebSocket-only stages follow their configured `on_error` behavior.
 
 > **Update in PR #2477 - WebSocket middleware:** The following contract text adds the bidirectional `EvaluateWebSocketSession` RPC, WebSocket preflight, message limits, and the WebSocket binding for the built-in regex middleware.
 
@@ -430,7 +431,7 @@ The stable transport requirement is confidentiality plus authentication of the i
 
 For each payload-bearing binding, the operator's `max_payload_bytes` must be positive and must not exceed the binding capability returned by `Describe` or the 4 MiB platform maximum. The gateway rejects an invalid registration rather than silently clamping it. A service with only preflight-only HTTP bindings may configure zero; those bindings ignore the shared operator limit. BUFFERED uses the effective limit for the complete input and replacement separately; STREAM uses it per unit, with request units further capped at 64 KiB.
 
-RPC timeouts use an integer with an `ms` or `s` suffix, range from 10 ms through 30 s, and default to 500 ms. A binding may advertise its own timeout through `Describe`; that value overrides the service registration timeout. The service timeout applies to `Describe`, while the effective binding timeout applies to `ValidateConfig`, stream open, and individual request exchanges.
+RPC timeouts use an integer with an `ms` or `s` suffix, range from 10 ms through 30 s, and default to 500 ms. A binding may advertise its own timeout through `Describe`; OpenShell uses the smaller of that timeout and the operator setting. The operator timeout applies to `Describe` and `ValidateConfig`; the effective binding timeout applies to stream open and individual request exchanges.
 
 The external-service endpoint is trusted operator infrastructure in v1. The auth design must make both directions explicit: the supervisor proves to the middleware that the call is authorized for the specific middleware identity, and the supervisor verifies it is calling the intended middleware service.
 
@@ -442,11 +443,11 @@ At gateway startup, OpenShell connects to every registered service and calls `De
 
 Supervisors receive policy plus the external service registrations required by the effective policy through the existing `GetSandboxConfig` response. Built-in registrations are not delivered because they are already installed in-process. The gateway stays off the request hot path; supervisors connect to the required services and invoke them directly.
 
-Runtime changes are prepared off to the side. Policy and middleware registry swap as one generation only after the complete candidate is ready. A policy-only update reuses an already connected registry. If preparation fails, the supervisor preserves the complete last-known-good runtime and continues retrying. If an external service is unavailable when a supervisor starts or reloads, built-ins remain active, requests use each selected config's `on_error`, and a polling loop retries the service independently of policy revision changes.
+Runtime changes are prepared off to the side. Policy and middleware registry swap as one generation only after the complete candidate is ready. A policy-only update reuses an already connected registry. If preparation fails, the supervisor preserves the complete last-known-good runtime and continues retrying. If an external service is unavailable when a supervisor starts or reloads, built-ins remain active, HTTP requests fail closed, WebSocket-only stages use each selected config's `on_error`, and a polling loop retries the service independently of policy revision changes.
 
 Middleware registration lives in gateway configuration, which is not hot-reloaded ([RFC 0003](../0003-gateway-configuration/README.md) lists this as a non-goal): changing the registered set requires restarting the gateway. Middleware selection is separate from registration. Registration declares what implementations are available to supervisors; per-sandbox policy and API updates decide which middleware configs apply to a given sandbox at runtime. On restart, supervisors re-sync the effective configuration over their existing connection, so running sandboxes pick up a newly added middleware rather than only newly created sandboxes seeing it - there is no per-sandbox snapshot of the registered set.
 
-Removing a registered middleware that an active policy config still binds to causes those sandboxes to follow the affected config's `on_error`; `fail_closed` is the default. For now, the operator is responsible for removing policy configs before removing the registration. Runtime process or network failures follow the same rule while the supervisor retries the connection.
+Removing a registered middleware that an active policy config still binds to makes HTTP traffic fail closed. WebSocket-only stages follow the affected config's `on_error`; `fail_closed` is the default. For now, the operator is responsible for removing policy configs before removing the registration. Runtime process or network failures follow the same rule while the supervisor retries the connection.
 
 V1 does not define a separate health-check RPC. Connection establishment, `Describe`, per-request invocation, timeout, `on_error`, and the registry retry loop provide the required availability behavior. A dedicated health API may improve alerting later but is not required for correctness.
 
@@ -610,7 +611,7 @@ This section closes the current review themes.
 - **Actor data.** Actor process data is optional and per-connection. Middleware must treat it as context, not a reliable per-request identity or authorization input.
 - **Metadata namespacing.** Metadata is stored under the policy-local middleware config map key rather than the optional human-readable name. This prevents collisions without a central key registry and lets two configs using the same implementation emit independent metadata.
 - **Selector-only placement.** V1 uses only config-level `endpoints.include` and `endpoints.exclude` selectors. Policy-level and endpoint-level attachment lists are not part of the schema. Selection is independent of the network rule that admitted the request and therefore remains stable after effective-policy composition.
-- **Failure behavior.** Middleware errors, timeouts, malformed responses, and over-cap inspectable payloads use `on_error` after an operation binding is selected; `fail_closed` is the default. An absent operation binding and binary WebSocket messages are capability coverage states, not failures, and pass with informational telemetry under both error modes.
+- **Failure behavior.** HTTP middleware errors, timeouts, malformed responses, and over-cap inspectable payloads fail closed. WebSocket-only stages use `on_error`; `fail_closed` is the default. An absent operation binding and binary WebSocket messages are capability coverage states, not failures, and pass with informational telemetry under both WebSocket error modes.
 - **Limits.** V1 caps policies at 10 middleware configs, selectors at 32 combined patterns per config, complete buffered bodies and advertised units at 4 MiB, request stream units at 64 KiB, findings at 32 per stage, and all non-body fields at the public envelope limits in the contract section. STREAM queues are bounded independently.
 - **Delivery and reload.** `GetSandboxConfig` delivers only external registrations required by the effective policy. Built-ins are installed locally. Supervisors prepare candidate policy and registry state off-path, swap them as one generation, reuse connections for policy-only changes, and preserve the complete last-known-good runtime on failure.
 - **Chunked and compressed bodies.** V1 normalizes fixed and chunked HTTP/1 request bodies into bounded units and preserves validated trailers. BUFFERED remains bounded by the stage limit. STREAM middleware may own larger finite working state subject to advertised limits. Compressed bodies remain opaque unless a binding explicitly supports them.

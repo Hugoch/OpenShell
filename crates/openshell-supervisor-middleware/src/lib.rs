@@ -332,6 +332,18 @@ impl DescribedChainEntry {
     pub fn is_resolved(&self) -> bool {
         self.binding.is_some()
     }
+
+    pub fn supports_http_body_mode(&self, mode: openshell_core::proto::HttpBodyMode) -> bool {
+        self.binding
+            .as_ref()
+            .is_some_and(|binding| binding.supported_http_body_modes.contains(&(mode as i32)))
+    }
+
+    pub fn supports_http_body_processing(&self) -> bool {
+        self.binding
+            .as_ref()
+            .is_some_and(|binding| !binding.supported_http_body_modes.is_empty())
+    }
 }
 
 /// Re-checks a middleware-transformed request body against sandbox policy.
@@ -1501,7 +1513,7 @@ impl ChainRunner {
         // and does not collect a complete request in memory.
         for entry in entries {
             let preflight = self
-                .preflight_described_http_request_with_owned(
+                .preflight_described_http_request(
                     vec![entry.clone()],
                     HttpRequestPreflightInput {
                         context: context.clone(),
@@ -1510,7 +1522,6 @@ impl ChainRunner {
                         headers: headers.clone(),
                         connection_nominated_headers: connection_nominated_headers.clone(),
                     },
-                    false,
                 )
                 .await?;
 

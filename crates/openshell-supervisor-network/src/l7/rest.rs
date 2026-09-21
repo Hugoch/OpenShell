@@ -44,6 +44,15 @@ use tracing::debug;
 const MAX_HEADER_BYTES: usize = 16384; // 16 KiB for HTTP headers
 const MAX_REWRITE_BODY_BYTES: usize = 256 * 1024;
 const MAX_SIGV4_BODY_BYTES: usize = 10 * 1024 * 1024;
+
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[error("{reason}")]
+#[diagnostic(code(openshell::middleware::live_request_failed))]
+struct LiveRequestMiddlewareError {
+    reason: String,
+    denial: Option<openshell_supervisor_middleware::MiddlewareDenial>,
+    committed: bool,
+}
 #[cfg(test)]
 async fn max_middleware_body_bytes() -> usize {
     let chain = openshell_supervisor_middleware::ChainRunner::new(
@@ -1316,11 +1325,29 @@ where
     ));
 
     tokio::select! {
+        biased;
         upload_result = upload.as_mut() => {
             drop(upload);
             if let Err(error) = upload_result {
                 drop(response);
                 let _ = upstream_writer.shutdown().await;
+                if let Some(failure) = error.downcast_ref::<LiveRequestMiddlewareError>()
+                    && !failure.committed
+                {
+                    let status = if failure.denial.is_some() {
+                        "403 Forbidden"
+                    } else {
+                        "502 Bad Gateway"
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    client_writer
+                        .write_all(response.as_bytes())
+                        .await
+                        .into_diagnostic()?;
+                    return Ok(RelayOutcome::Consumed);
+                }
                 return Err(error);
             }
             upstream_writer.flush().await.into_diagnostic()?;
@@ -1470,19 +1497,43 @@ where
 {
     let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
     let run = body.run_to(client, sender);
-    let write = async {
+    let committed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let committed_for_write = std::sync::Arc::clone(&committed);
+    let upstream_for_write = &mut *upstream;
+    let write = async move {
         let mut scanner = inspect_credential_markers
             .then(|| ReservedMarkerStreamGuard::new(options.body_classifier));
         let mut started = false;
+        let mut fixed_length = false;
         while let Some(event) = receiver.recv().await {
             match event {
-                openshell_supervisor_middleware::HttpRequestBodyOutput::Start { .. }
-                    if !started =>
-                {
+                openshell_supervisor_middleware::HttpRequestBodyOutput::Start {
+                    output_body_bytes,
+                } if !started => {
                     ensure_body_generation_current(options)?;
                     if let Some(headers) = headers {
-                        upstream.write_all(headers).await.into_diagnostic()?;
-                        upstream.flush().await.into_diagnostic()?;
+                        let outgoing = if let Some(length) = output_body_bytes {
+                            let length = usize::try_from(length).map_err(|_| {
+                                miette!("middleware output length is not representable")
+                            })?;
+                            let headers = set_content_length(headers, length)?;
+                            let headers = strip_header(&headers, "transfer-encoding")?;
+                            strip_header(&headers, "trailer")?
+                        } else {
+                            if headers.starts_with(b"HTTP/1.0 ") {
+                                return Err(miette!(
+                                    "HTTP/1.0 middleware output requires a declared length"
+                                ));
+                            }
+                            headers.to_vec()
+                        };
+                        fixed_length = output_body_bytes.is_some();
+                        upstream_for_write
+                            .write_all(&outgoing)
+                            .await
+                            .into_diagnostic()?;
+                        upstream_for_write.flush().await.into_diagnostic()?;
+                        committed_for_write.store(true, std::sync::atomic::Ordering::Release);
                     }
                     started = true;
                 }
@@ -1491,7 +1542,11 @@ where
                         Some(scanner) => scanner.push(&unit)?,
                         None => unit,
                     };
-                    write_guarded_chunk(upstream, &output, options).await?;
+                    if fixed_length {
+                        write_body_bytes(upstream_for_write, &output, options).await?;
+                    } else {
+                        write_guarded_chunk(upstream_for_write, &output, options).await?;
+                    }
                 }
                 openshell_supervisor_middleware::HttpRequestBodyOutput::End { .. } if started => {
                     break;
@@ -1502,13 +1557,40 @@ where
         if !started {
             return Err(miette!("request middleware output did not start"));
         }
-        Ok::<_, miette::Report>(scanner)
+        Ok::<_, miette::Report>((scanner, fixed_length))
     };
     let (finish, scanner) = tokio::join!(run, write);
-    let mut scanner = scanner?;
-    let finish = finish?;
+    let finish = match finish {
+        Ok(finish) => finish,
+        Err(error) => {
+            if let Some(failure) =
+                error.downcast_ref::<crate::l7::middleware::RequestBodyMiddlewareError>()
+            {
+                return Err(miette::Report::new(LiveRequestMiddlewareError {
+                    reason: failure.reason.clone(),
+                    denial: failure.denial.clone(),
+                    committed: committed.load(std::sync::atomic::Ordering::Acquire),
+                }));
+            }
+            return Err(error);
+        }
+    };
+    let (mut scanner, fixed_length) = scanner?;
     if let Some(scanner) = scanner.take() {
-        write_guarded_chunk(upstream, &scanner.finish()?, options).await?;
+        let final_bytes = scanner.finish()?;
+        if fixed_length {
+            write_body_bytes(upstream, &final_bytes, options).await?;
+        } else {
+            write_guarded_chunk(upstream, &final_bytes, options).await?;
+        }
+    }
+    if fixed_length {
+        if !finish.trailers.is_empty() {
+            return Err(miette!(
+                "middleware output with Content-Length cannot include trailers"
+            ));
+        }
+        return Ok(());
     }
     write_body_bytes(upstream, b"0\r\n", options).await?;
     for trailer in finish.trailers {

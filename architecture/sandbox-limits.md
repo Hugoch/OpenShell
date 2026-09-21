@@ -58,8 +58,8 @@ budgets as new activity.
 
 | Resource | Current bound | Scope and behavior |
 |---|---:|---|
-| Concurrent buffered work | 32 | Shared by HTTP requests, WebSocket messages, and WebSocket preflight. One permit covers one complete unit of work. |
-| Admission waiters | 64 | Additional work is shed when both the active budget and waiter budget are full. HTTP receives a complete 503 response before its body is buffered. |
+| Concurrent buffered work | 32 | Shared by compatibility HTTP evaluation, WebSocket messages, and WebSocket preflight. One permit covers one complete unit of work. |
+| Admission waiters | 64 | Additional buffered work is shed when both the active budget and waiter budget are full. |
 | Persistent middleware sessions | 32 | Shared process-wide session budget for HTTP request/response and WebSocket streams. Admission is retained while any stage remains active. |
 | Middleware payload or unit | 4 MiB | Platform maximum for a complete buffered payload, WebSocket text message, or advertised stream unit. Request stream units are further capped at 64 KiB. |
 | Middleware configs and stages | 10 | At most 10 configs in policy and 10 selected stages in one chain. |
@@ -76,11 +76,12 @@ request headers totaling 64 KiB, 64 header mutations, 32 findings per stage,
 and 64 metadata entries. The detailed external contract lives in
 [Supervisor Middleware](../docs/extensibility/supervisor-middleware.mdx).
 
-The work semaphore bounds concurrent middleware progress and caps aggregate
-in-memory buffered or WebSocket input at approximately `32 × 4 MiB`, plus
-bounded envelope and parser overhead. Streaming HTTP bodies use bounded queues
-while middleware owns any processing storage. This is a concurrency safety valve, not rate
-limiting or a promise that maximum-sized work is inexpensive.
+The work semaphore bounds compatibility evaluation and WebSocket buffering at
+approximately `32 × 4 MiB`, plus bounded envelope and parser overhead.
+Streaming HTTP sessions use the separate non-queueing 32-session budget and
+bounded queues while middleware owns any processing storage. The 33rd session
+receives a complete 503 response before OpenShell reads its body. These limits
+control concurrency; they do not rate-limit requests.
 
 The persistent session semaphore is independent from the work semaphore. One
 HTTP request or WebSocket middleware session consumes one permit regardless of

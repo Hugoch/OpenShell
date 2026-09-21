@@ -17,6 +17,7 @@ use std::time::Duration;
 use futures::StreamExt as _;
 use prost::Message as _;
 use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
 
 use openshell_core::proto::{
     HeaderMutation, HttpBegin, HttpBodyLimits, HttpBodyMode, HttpBufferedBody, HttpEvent,
@@ -28,12 +29,12 @@ use openshell_core::proto::{
 
 use super::{
     ChainEntry, ChainRunner, DescribedChainEntry, EXTERNAL_FINDING_LABEL,
-    MAX_MIDDLEWARE_CONTEXT_BYTES, MAX_MIDDLEWARE_FINDING_BYTES, MAX_MIDDLEWARE_FINDINGS_PER_STAGE,
-    MAX_MIDDLEWARE_HEADER_BYTES, MAX_MIDDLEWARE_HEADERS, MAX_MIDDLEWARE_METADATA_BYTES,
-    MAX_MIDDLEWARE_METADATA_ENTRIES, MAX_MIDDLEWARE_REASON_BYTES, MAX_MIDDLEWARE_REASON_CODE_BYTES,
-    MAX_MIDDLEWARE_TARGET_BYTES, MiddlewareDiagnosticPolicy, MiddlewareSessionAdmission,
-    MiddlewareSessionPermit, NamespacedFinding, OnError, headers, is_stable_reason_code,
-    middleware_denial_reason,
+    MAX_MIDDLEWARE_CHAIN_TIMEOUT, MAX_MIDDLEWARE_CONTEXT_BYTES, MAX_MIDDLEWARE_FINDING_BYTES,
+    MAX_MIDDLEWARE_FINDINGS_PER_STAGE, MAX_MIDDLEWARE_HEADER_BYTES, MAX_MIDDLEWARE_HEADERS,
+    MAX_MIDDLEWARE_METADATA_BYTES, MAX_MIDDLEWARE_METADATA_ENTRIES, MAX_MIDDLEWARE_REASON_BYTES,
+    MAX_MIDDLEWARE_REASON_CODE_BYTES, MAX_MIDDLEWARE_TARGET_BYTES, MiddlewareDiagnosticPolicy,
+    MiddlewareSessionAdmission, MiddlewareSessionPermit, NamespacedFinding, OnError, headers,
+    is_stable_reason_code, middleware_denial_reason,
 };
 
 const STREAM_CHANNEL_CAPACITY: usize = 4;
@@ -44,7 +45,8 @@ const MAX_RECORDED_REQUEST_INVOCATIONS: usize = 1024;
 pub const MAX_HTTP_REQUEST_STREAM_UNIT_BYTES: usize = 64 * 1024;
 
 /// Compatibility limit for callers that still collect a complete body before
-/// entering the two-mode session API. The HTTP relay does not use this path.
+/// entering the two-mode session API. Complete-body protocol adapters use this
+/// bound before re-evaluating transformed payloads.
 pub const MAX_HTTP_REQUEST_DEFERRED_BYTES: usize = super::MAX_MIDDLEWARE_PAYLOAD_BYTES;
 
 #[derive(Debug, Clone)]
@@ -143,12 +145,16 @@ pub enum HttpRequestBodyOutput {
 }
 
 struct HttpStageTransport {
-    sender: mpsc::Sender<HttpEvent>,
+    sender: Option<mpsc::Sender<HttpEvent>>,
     responses: super::HttpResultStream,
     terminal_sent: bool,
 }
 
 impl HttpStageTransport {
+    fn sender(&self) -> &mpsc::Sender<HttpEvent> {
+        self.sender.as_ref().expect("active middleware sender")
+    }
+
     async fn end(&mut self, reason: MiddlewareSessionEndReason) {
         if self.terminal_sent {
             return;
@@ -160,19 +166,43 @@ impl HttpStageTransport {
                 protocol_error: None,
             })),
         };
-        let _ = tokio::time::timeout(SESSION_END_TIMEOUT, self.sender.send(event)).await;
+        let Some(sender) = self.sender.take() else {
+            return;
+        };
+        let _ = tokio::time::timeout(SESSION_END_TIMEOUT, sender.send(event)).await;
+        drop(sender);
+        let _ = tokio::time::timeout(SESSION_END_TIMEOUT, async {
+            while self.responses.next().await.is_some() {}
+        })
+        .await;
     }
 }
 
 impl Drop for HttpStageTransport {
     fn drop(&mut self) {
         if !self.terminal_sent {
-            let _ = self.sender.try_send(HttpEvent {
-                event: Some(http_event::Event::SessionEnd(MiddlewareSessionEnd {
-                    reason: MiddlewareSessionEndReason::Cancellation as i32,
-                    protocol_error: None,
-                })),
-            });
+            let Some(sender) = self.sender.take() else {
+                return;
+            };
+            let mut responses =
+                std::mem::replace(&mut self.responses, Box::pin(futures::stream::empty()));
+            let task = async move {
+                let event = HttpEvent {
+                    event: Some(http_event::Event::SessionEnd(MiddlewareSessionEnd {
+                        reason: MiddlewareSessionEndReason::Cancellation as i32,
+                        protocol_error: None,
+                    })),
+                };
+                let _ = tokio::time::timeout(SESSION_END_TIMEOUT, sender.send(event)).await;
+                drop(sender);
+                let _ = tokio::time::timeout(SESSION_END_TIMEOUT, async {
+                    while responses.next().await.is_some() {}
+                })
+                .await;
+            };
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(task);
+            }
         }
     }
 }
@@ -188,6 +218,8 @@ struct HttpRequestStage {
     transport: HttpStageTransport,
     mode: StageMode,
     connection_nominated_headers: Vec<String>,
+    output_unit_limit: usize,
+    deadline: Instant,
 }
 
 #[derive(Debug)]
@@ -307,8 +339,22 @@ impl HttpRequestSession {
             Ok::<(), HttpRequestMiddlewareFailure>(())
         });
 
+        let chain_deadline = Instant::now() + MAX_MIDDLEWARE_CHAIN_TIMEOUT;
+        let downstream_limits = self
+            .stages
+            .iter()
+            .skip(1)
+            .map(|stage| match stage.mode {
+                StageMode::Buffered { max_body_bytes } => max_body_bytes,
+                StageMode::Stream => stage.entry.max_payload_bytes(),
+            })
+            .chain(std::iter::once(MAX_HTTP_REQUEST_STREAM_UNIT_BYTES))
+            .map(|limit| limit.clamp(1, MAX_HTTP_REQUEST_STREAM_UNIT_BYTES))
+            .collect::<Vec<_>>();
         let mut stage_tasks = Vec::with_capacity(stage_count);
-        for (index, stage) in self.stages.drain(..).enumerate() {
+        for (index, mut stage) in self.stages.drain(..).enumerate() {
+            stage.output_unit_limit = downstream_limits[index];
+            stage.deadline = chain_deadline;
             let receiver = receivers[index]
                 .take()
                 .expect("stage input receiver must exist");
@@ -357,10 +403,30 @@ impl HttpRequestSession {
             .map_err(|_| failure("request_input_task_failed", None))??;
 
         let mut body_transformed = false;
-        for task in stage_tasks {
-            let report = task
-                .await
-                .map_err(|_| failure("request_stage_task_failed", None))??;
+        let mut stage_tasks = stage_tasks.into_iter();
+        while let Some(task) = stage_tasks.next() {
+            let report = match task.await {
+                Ok(Ok(report)) => report,
+                Ok(Err(mut error)) => {
+                    for task in stage_tasks {
+                        task.abort();
+                        let _ = task.await;
+                    }
+                    error.diagnostics.findings.splice(0..0, self.findings);
+                    let mut metadata = self.metadata;
+                    metadata.extend(std::mem::take(&mut error.diagnostics.metadata));
+                    error.diagnostics.metadata = metadata;
+                    error.diagnostics.invocations.splice(0..0, self.invocations);
+                    return Err(error);
+                }
+                Err(_) => {
+                    for task in stage_tasks {
+                        task.abort();
+                        let _ = task.await;
+                    }
+                    return Err(failure("request_stage_task_failed", None));
+                }
+            };
             body_transformed |= report.transformed;
             self.findings.extend(report.findings);
             self.metadata.extend(report.metadata);
@@ -415,16 +481,22 @@ impl HttpRequestSession {
         };
         let collect = async move {
             let mut units = Vec::new();
+            let mut retained = 0usize;
             while let Some(event) = output_rx.recv().await {
                 if let HttpRequestBodyOutput::Chunk(data) = event {
+                    retained = retained.saturating_add(data.len());
+                    if retained > MAX_HTTP_REQUEST_DEFERRED_BYTES {
+                        return Err(failure("request_output_over_capacity", None));
+                    }
                     units.push(data);
                 }
             }
-            units
+            Ok::<_, HttpRequestMiddlewareFailure>(units)
         };
         let (finish, feed, units) = tokio::join!(run, feed, collect);
-        feed?;
+        let units = units?;
         let mut finish = finish?;
+        feed?;
         finish.body_units = units;
         Ok(finish)
     }
@@ -482,7 +554,8 @@ async fn run_stage(
 ) -> Result<StageReport, HttpRequestMiddlewareFailure> {
     send_event_for_entry(
         &stage.entry,
-        &stage.transport.sender,
+        stage.deadline,
+        stage.transport.sender(),
         HttpEvent {
             event: Some(http_event::Event::Begin(HttpBegin {})),
         },
@@ -494,14 +567,12 @@ async fn run_stage(
         }
         StageMode::Stream => run_stream_stage(&mut stage, input, output).await,
     };
-    stage
-        .transport
-        .end(if result.is_ok() {
-            MiddlewareSessionEndReason::Normal
-        } else {
-            MiddlewareSessionEndReason::MiddlewareFailure
-        })
-        .await;
+    let terminal_reason = match &result {
+        Ok(_) => MiddlewareSessionEndReason::Normal,
+        Err(error) if error.denial.is_some() => MiddlewareSessionEndReason::MiddlewareDenial,
+        Err(_) => MiddlewareSessionEndReason::MiddlewareFailure,
+    };
+    stage.transport.end(terminal_reason).await;
     result
 }
 
@@ -579,7 +650,7 @@ async fn run_buffered_stage(
         })
         .await
         .map_err(|_| stage_failure(stage, "request_output_closed"))?;
-    for chunk in body.chunks(MAX_HTTP_REQUEST_STREAM_UNIT_BYTES) {
+    for chunk in body.chunks(stage.output_unit_limit) {
         output
             .send(StageFrame::Chunk(chunk.to_vec()))
             .await
@@ -604,13 +675,15 @@ async fn run_stream_stage(
     mut input: mpsc::Receiver<StageFrame>,
     output: mpsc::Sender<StageFrame>,
 ) -> Result<StageReport, HttpRequestMiddlewareFailure> {
+    let output_unit_limit = stage.output_unit_limit;
     let input_ended = Arc::new(AtomicBool::new(false));
     let input_trailers = Arc::new(Mutex::new(None::<Vec<HttpHeader>>));
     let input_bytes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output_bytes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (input_delivered, mut input_delivered_rx) = watch::channel(false);
 
-    let sender = stage.transport.sender.clone();
+    let sender = stage.transport.sender().clone();
+    let deadline = stage.deadline;
     let input_entry = stage.entry.clone();
     let input_ended_for_pump = Arc::clone(&input_ended);
     let trailers_for_pump = Arc::clone(&input_trailers);
@@ -635,6 +708,7 @@ async fn run_stream_stage(
                     input_bytes_for_pump.fetch_add(data.len(), Ordering::Relaxed);
                     send_event_for_entry(
                         &input_entry,
+                        deadline,
                         &sender,
                         HttpEvent {
                             event: Some(http_event::Event::InputChunk(HttpInputChunk { data })),
@@ -651,6 +725,7 @@ async fn run_stream_stage(
                     input_ended_for_pump.store(true, Ordering::Release);
                     send_event_for_entry(
                         &input_entry,
+                        deadline,
                         &sender,
                         HttpEvent {
                             event: Some(http_event::Event::InputEnd(HttpInputEnd {
@@ -695,7 +770,8 @@ async fn run_stream_stage(
             // observable while the input pump is active.
             let result = loop {
                 if *input_delivered_rx.borrow() {
-                    break next_result_for_entry(&entry, diagnostic_policy, responses).await?;
+                    break next_result_for_entry(&entry, deadline, diagnostic_policy, responses)
+                        .await?;
                 }
                 tokio::select! {
                     result = responses.next() => {
@@ -747,10 +823,12 @@ async fn run_stream_stage(
                     if declared_output.is_some_and(|declared| total as u64 > declared) {
                         return Err(failure_for_entry(&entry, "stream_output_length_mismatch"));
                     }
-                    output
-                        .send(StageFrame::Chunk(chunk.data))
-                        .await
-                        .map_err(|_| failure_for_entry(&entry, "request_output_closed"))?;
+                    for unit in chunk.data.chunks(output_unit_limit) {
+                        output
+                            .send(StageFrame::Chunk(unit.to_vec()))
+                            .await
+                            .map_err(|_| failure_for_entry(&entry, "request_output_closed"))?;
+                    }
                 }
                 Some(http_result::Result::Finish(finish)) if started => {
                     if !input_ended.load(Ordering::Acquire) {
@@ -846,6 +924,7 @@ impl ChainRunner {
         let mut findings = Vec::new();
         let mut metadata = BTreeMap::new();
         let mut invocations = Vec::new();
+        let chain_deadline = Instant::now() + MAX_MIDDLEWARE_CHAIN_TIMEOUT;
 
         for entry in described {
             if entry.on_error() == OnError::FailOpen {
@@ -891,7 +970,14 @@ impl ChainRunner {
                 limits: Some(limits),
                 declared_input_bytes: input.declared_body_length,
             };
-            let opened = tokio::time::timeout(entry.timeout(), async {
+            let stage_timeout = Instant::now() + entry.timeout();
+            let stage_deadline = chain_deadline.min(stage_timeout);
+            let timeout_reason = if chain_deadline <= stage_timeout {
+                "middleware_chain_timeout"
+            } else {
+                "middleware_timeout"
+            };
+            let opened = tokio::time::timeout_at(stage_deadline, async {
                 sender
                     .send(HttpEvent {
                         event: Some(http_event::Event::Preflight(preflight)),
@@ -925,11 +1011,11 @@ impl ChainRunner {
                 }
                 Err(_) => {
                     end_stages(&mut stages, MiddlewareSessionEndReason::MiddlewareFailure).await;
-                    invocations.push(failed_invocation(&entry, "middleware_timeout"));
+                    invocations.push(failed_invocation(&entry, timeout_reason));
                     return Ok(failed_preflight_outcome(
                         headers,
                         header_mutations,
-                        "middleware_failed: middleware_timeout".into(),
+                        format!("middleware_failed: {timeout_reason}"),
                         findings,
                         metadata,
                         invocations,
@@ -939,12 +1025,14 @@ impl ChainRunner {
             let mut stage = HttpRequestStage {
                 entry: entry.clone(),
                 transport: HttpStageTransport {
-                    sender,
+                    sender: Some(sender),
                     responses,
                     terminal_sent: false,
                 },
                 mode: StageMode::Stream,
                 connection_nominated_headers: input.connection_nominated_headers.clone(),
+                output_unit_limit: MAX_HTTP_REQUEST_STREAM_UNIT_BYTES,
+                deadline: chain_deadline,
             };
             match result.result {
                 Some(http_result::Result::PreflightResult(result)) => {
@@ -1175,26 +1263,23 @@ impl ChainRunner {
             session_capacity_exhausted: false,
         })
     }
-
-    pub(crate) async fn preflight_described_http_request_with_owned(
-        &self,
-        described: Vec<DescribedChainEntry>,
-        input: HttpRequestPreflightInput,
-        _allow_owned: bool,
-    ) -> miette::Result<HttpRequestPreflightOutcome> {
-        self.preflight_described_http_request(described, input)
-            .await
-    }
 }
 
 async fn send_event_for_entry(
     entry: &DescribedChainEntry,
+    chain_deadline: Instant,
     sender: &mpsc::Sender<HttpEvent>,
     event: HttpEvent,
 ) -> Result<(), HttpRequestMiddlewareFailure> {
-    tokio::time::timeout(entry.timeout(), sender.send(event))
+    let stage_deadline = Instant::now() + entry.timeout();
+    let (deadline, timeout_reason) = if chain_deadline <= stage_deadline {
+        (chain_deadline, "middleware_chain_timeout")
+    } else {
+        (stage_deadline, "middleware_timeout")
+    };
+    tokio::time::timeout_at(deadline, sender.send(event))
         .await
-        .map_err(|_| failure_for_entry(entry, "middleware_timeout"))?
+        .map_err(|_| failure_for_entry(entry, timeout_reason))?
         .map_err(|_| failure_for_entry(entry, "middleware_stream_closed"))
 }
 
@@ -1202,7 +1287,13 @@ async fn exchange(
     stage: &mut HttpRequestStage,
     event: HttpEvent,
 ) -> Result<HttpResult, HttpRequestMiddlewareFailure> {
-    send_event_for_entry(&stage.entry, &stage.transport.sender, event).await?;
+    send_event_for_entry(
+        &stage.entry,
+        stage.deadline,
+        stage.transport.sender(),
+        event,
+    )
+    .await?;
     let policy = stage
         .entry
         .service
@@ -1210,18 +1301,31 @@ async fn exchange(
         .map_or(MiddlewareDiagnosticPolicy::Preserve, |service| {
             service.diagnostic_policy
         });
-    next_result_for_entry(&stage.entry, policy, &mut stage.transport.responses).await
+    next_result_for_entry(
+        &stage.entry,
+        stage.deadline,
+        policy,
+        &mut stage.transport.responses,
+    )
+    .await
 }
 
 async fn next_result_for_entry(
     entry: &DescribedChainEntry,
+    chain_deadline: Instant,
     diagnostic_policy: MiddlewareDiagnosticPolicy,
     responses: &mut super::HttpResultStream,
 ) -> Result<HttpResult, HttpRequestMiddlewareFailure> {
-    tokio::time::timeout(entry.timeout(), responses.next())
+    let stage_deadline = Instant::now() + entry.timeout();
+    let (deadline, timeout_reason) = if chain_deadline <= stage_deadline {
+        (chain_deadline, "middleware_chain_timeout")
+    } else {
+        (stage_deadline, "middleware_timeout")
+    };
+    tokio::time::timeout_at(deadline, responses.next())
         .await
         .map_or_else(
-            |_| Err(failure_for_entry(entry, "middleware_timeout")),
+            |_| Err(failure_for_entry(entry, timeout_reason)),
             |result| validate_next_result_for_entry(entry, diagnostic_policy, result),
         )
 }
@@ -1524,13 +1628,32 @@ fn rejection_for_entry(
                 config_name: entry.entry.name.clone(),
                 reason_code: nonempty(&diagnostics.reason_code),
             };
+            let mut retained = HttpRequestDiagnostics::default();
+            collect_diagnostics(
+                entry,
+                diagnostics.clone(),
+                &mut retained.findings,
+                &mut retained.metadata,
+            );
+            retained.invocations.push(HttpRequestInvocation {
+                config_name: entry.entry.name.clone(),
+                implementation: entry.entry.implementation.clone(),
+                outcome: HttpRequestInvocationOutcome::Reject,
+                sequence: None,
+                input_size: 0,
+                output_size: None,
+                failed: false,
+                stage_disabled: false,
+                reason_code: nonempty(&diagnostics.reason_code),
+                failure_category: None,
+            });
             HttpRequestMiddlewareFailure {
                 reason: middleware_denial_reason(
                     &denial.config_name,
                     denial.reason_code.as_deref(),
                 ),
                 denial: Some(denial),
-                diagnostics: Box::default(),
+                diagnostics: Box::new(retained),
             }
         }
         Err(error) => error,
@@ -1659,7 +1782,12 @@ fn request_failure_category(reason: &str) -> &'static str {
         "capacity"
     } else if reason.contains("header") {
         "header_mutation"
-    } else if reason.contains("order") || reason.contains("result") || reason.contains("protocol") {
+    } else if reason.contains("order")
+        || reason.contains("result")
+        || reason.contains("protocol")
+        || reason.contains("mode")
+        || reason.contains("stream_")
+    {
         "protocol"
     } else {
         "service"
@@ -1702,5 +1830,48 @@ mod tests {
             ..MiddlewareDiagnostics::default()
         };
         assert!(validate_diagnostics_message(Some(&diagnostics)).is_err());
+    }
+
+    #[test]
+    fn rejection_preserves_diagnostics_and_denial_invocation() {
+        let entry = DescribedChainEntry {
+            entry: ChainEntry {
+                name: "guard".into(),
+                implementation: "test/guard".into(),
+                order: 0,
+                config: prost_types::Struct::default(),
+                on_error: OnError::FailClosed,
+            },
+            service: None,
+            binding: None,
+            max_payload_bytes: 1024,
+            timeout: Duration::from_millis(500),
+        };
+        let failure = rejection_for_entry(
+            &entry,
+            Some(MiddlewareDiagnostics {
+                reason_code: "content_match".into(),
+                findings: vec![openshell_core::proto::Finding {
+                    r#type: "secret".into(),
+                    label: "Secret".into(),
+                    count: 1,
+                    confidence: "high".into(),
+                    severity: "high".into(),
+                }],
+                metadata: std::iter::once(("rule".into(), "configured".into())).collect(),
+                ..Default::default()
+            }),
+        );
+
+        assert_eq!(
+            failure.denial.unwrap().reason_code.as_deref(),
+            Some("content_match")
+        );
+        assert_eq!(failure.diagnostics.findings.len(), 1);
+        assert_eq!(failure.diagnostics.metadata["guard"]["rule"], "configured");
+        assert_eq!(
+            failure.diagnostics.invocations[0].outcome,
+            HttpRequestInvocationOutcome::Reject
+        );
     }
 }

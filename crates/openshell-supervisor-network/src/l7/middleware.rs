@@ -15,6 +15,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[error("{reason}")]
+#[diagnostic(code(openshell::middleware::request_body_rejected))]
+pub(super) struct RequestBodyMiddlewareError {
+    pub(super) reason: String,
+    pub(super) denial: Option<openshell_supervisor_middleware::MiddlewareDenial>,
+}
+
 /// Maximum wall-clock time spent receiving, evaluating, and processing one
 /// request body before the supervisor cancels the middleware session.
 // Keep `from_secs` while the workspace MSRV predates `Duration::from_mins`.
@@ -575,7 +583,13 @@ pub(super) fn middleware_chain_body_limit(
     chain
         .iter()
         .filter(|entry| entry.is_resolved())
-        .map(openshell_supervisor_middleware::DescribedChainEntry::max_payload_bytes)
+        .map(|entry| {
+            if entry.supports_http_body_mode(openshell_core::proto::HttpBodyMode::Stream) {
+                openshell_supervisor_middleware::MAX_HTTP_REQUEST_DEFERRED_BYTES
+            } else {
+                entry.max_payload_bytes()
+            }
+        })
         .max()
 }
 
@@ -887,6 +901,11 @@ async fn apply_streaming_middleware_chain<C: AsyncRead + AsyncWrite + Unpin + Se
     if delivery == RequestBodyDelivery::Incremental
         && !session.requires_withholding()
         && !matches!(req.body_length, crate::l7::provider::BodyLength::None)
+        && req
+            .raw_header
+            .split(|byte| *byte == b'\n')
+            .next()
+            .is_some_and(|line| line.windows(8).any(|window| window == b"HTTP/1.1"))
     {
         let rebuilt = crate::l7::rest::rebuild_request_for_incremental_stream(
             &req,
@@ -920,7 +939,7 @@ async fn apply_streaming_middleware_chain<C: AsyncRead + AsyncWrite + Unpin + Se
     let (input_tx, input_rx) = tokio::sync::mpsc::channel(4);
     let (output_tx, mut output_rx) = tokio::sync::mpsc::channel(4);
 
-    let feed = async {
+    let feed = async move {
         loop {
             let unit = body_reader
                 .next_unit(client, Some(generation_guard), unit_limit)
@@ -940,7 +959,7 @@ async fn apply_streaming_middleware_chain<C: AsyncRead + AsyncWrite + Unpin + Se
             .await
             .map_err(|_| miette!("request middleware input closed"))
     };
-    let collect = async {
+    let collect = async move {
         let mut body = Vec::new();
         let mut trailers = Vec::new();
         let mut started = false;
@@ -978,6 +997,9 @@ async fn apply_streaming_middleware_chain<C: AsyncRead + AsyncWrite + Unpin + Se
     let run = session.run(input_rx, output_tx);
     let completed = Box::pin(tokio::time::timeout_at(body_deadline, async {
         let (finish, feed, output) = tokio::join!(run, feed, collect);
+        if finish.is_err() {
+            return Ok::<_, miette::Report>((finish, (Vec::new(), Vec::new())));
+        }
         feed?;
         let output = output?;
         Ok::<_, miette::Report>((finish, output))
@@ -1074,11 +1096,13 @@ impl RequestBodyStream {
         let unit_limit = session.stream_unit_limit();
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(4);
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(4);
-        let feed = async {
+        let deadline = self.deadline;
+        let reader = &mut self.reader;
+        let generation_guard = &self.generation_guard;
+        let feed = async move {
             loop {
-                let unit = self
-                    .reader
-                    .next_unit(client, Some(&self.generation_guard), unit_limit)
+                let unit = reader
+                    .next_unit(client, Some(generation_guard), unit_limit)
                     .await?;
                 let Some(unit) = unit else {
                     break;
@@ -1090,12 +1114,12 @@ impl RequestBodyStream {
             }
             input_tx
                 .send(openshell_supervisor_middleware::HttpRequestBodyInput::End(
-                    self.reader.take_trailers(),
+                    reader.take_trailers(),
                 ))
                 .await
                 .map_err(|_| miette!("request middleware input closed"))
         };
-        let forward = async {
+        let forward = async move {
             let mut started = false;
             while let Some(event) = event_rx.recv().await {
                 match &event {
@@ -1125,8 +1149,11 @@ impl RequestBodyStream {
             Err(miette!("request middleware output ended early"))
         };
         let run = session.run(input_rx, event_tx);
-        let completed = Box::pin(tokio::time::timeout_at(self.deadline, async {
+        let completed = Box::pin(tokio::time::timeout_at(deadline, async {
             let (finish, feed, forward) = tokio::join!(run, feed, forward);
+            if finish.is_err() {
+                return Ok::<_, miette::Report>(finish);
+            }
             feed?;
             forward?;
             Ok::<_, miette::Report>(finish)
@@ -1153,7 +1180,10 @@ impl RequestBodyStream {
                 let reason = error.reason.clone();
                 let denial = error.denial.clone();
                 self.emit_failure(&reason, denial.as_ref(), *error.diagnostics);
-                Err(miette!("{reason}"))
+                Err(miette::Report::new(RequestBodyMiddlewareError {
+                    reason,
+                    denial,
+                }))
             }
             Ok(Ok(Ok(finish))) => {
                 self.emit_success(&finish);

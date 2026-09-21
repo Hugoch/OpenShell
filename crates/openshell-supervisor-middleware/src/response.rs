@@ -26,12 +26,12 @@ use openshell_core::proto::{
 
 use super::{
     ChainEntry, ChainRunner, DescribedChainEntry, EXTERNAL_FINDING_LABEL,
-    MAX_MIDDLEWARE_CONTEXT_BYTES, MAX_MIDDLEWARE_FINDING_BYTES, MAX_MIDDLEWARE_FINDINGS_PER_STAGE,
-    MAX_MIDDLEWARE_HEADER_BYTES, MAX_MIDDLEWARE_HEADERS, MAX_MIDDLEWARE_METADATA_BYTES,
-    MAX_MIDDLEWARE_METADATA_ENTRIES, MAX_MIDDLEWARE_REASON_BYTES, MAX_MIDDLEWARE_REASON_CODE_BYTES,
-    MAX_MIDDLEWARE_TARGET_BYTES, MiddlewareDiagnosticPolicy, MiddlewareSessionAdmission,
-    MiddlewareSessionPermit, NamespacedFinding, OnError, headers, is_stable_reason_code,
-    middleware_denial_reason,
+    MAX_MIDDLEWARE_CHAIN_TIMEOUT, MAX_MIDDLEWARE_CONTEXT_BYTES, MAX_MIDDLEWARE_FINDING_BYTES,
+    MAX_MIDDLEWARE_FINDINGS_PER_STAGE, MAX_MIDDLEWARE_HEADER_BYTES, MAX_MIDDLEWARE_HEADERS,
+    MAX_MIDDLEWARE_METADATA_BYTES, MAX_MIDDLEWARE_METADATA_ENTRIES, MAX_MIDDLEWARE_REASON_BYTES,
+    MAX_MIDDLEWARE_REASON_CODE_BYTES, MAX_MIDDLEWARE_TARGET_BYTES, MiddlewareDiagnosticPolicy,
+    MiddlewareSessionAdmission, MiddlewareSessionPermit, NamespacedFinding, OnError, headers,
+    is_stable_reason_code, middleware_denial_reason,
 };
 
 const STREAM_CHANNEL_CAPACITY: usize = 4;
@@ -133,20 +133,27 @@ pub struct HttpResponseDiagnostics {
 }
 
 struct HttpResponseStageTransport {
-    sender: mpsc::Sender<HttpEvent>,
+    sender: Option<mpsc::Sender<HttpEvent>>,
     responses: super::HttpResultStream,
     terminal_sent: bool,
 }
 
 impl HttpResponseStageTransport {
+    fn sender(&self) -> &mpsc::Sender<HttpEvent> {
+        self.sender.as_ref().expect("active middleware sender")
+    }
+
     async fn end(&mut self, reason: MiddlewareSessionEndReason) {
         if self.terminal_sent {
             return;
         }
         self.terminal_sent = true;
+        let Some(sender) = self.sender.take() else {
+            return;
+        };
         let _ = tokio::time::timeout(
             SESSION_END_TIMEOUT,
-            self.sender.send(HttpEvent {
+            sender.send(HttpEvent {
                 event: Some(http_event::Event::SessionEnd(MiddlewareSessionEnd {
                     reason: reason as i32,
                     protocol_error: None,
@@ -154,18 +161,39 @@ impl HttpResponseStageTransport {
             }),
         )
         .await;
+        drop(sender);
+        let _ = tokio::time::timeout(SESSION_END_TIMEOUT, async {
+            while self.responses.next().await.is_some() {}
+        })
+        .await;
     }
 }
 
 impl Drop for HttpResponseStageTransport {
     fn drop(&mut self) {
         if !self.terminal_sent {
-            let _ = self.sender.try_send(HttpEvent {
-                event: Some(http_event::Event::SessionEnd(MiddlewareSessionEnd {
-                    reason: MiddlewareSessionEndReason::Cancellation as i32,
-                    protocol_error: None,
-                })),
-            });
+            let Some(sender) = self.sender.take() else {
+                return;
+            };
+            let mut responses =
+                std::mem::replace(&mut self.responses, Box::pin(futures::stream::empty()));
+            let task = async move {
+                let event = HttpEvent {
+                    event: Some(http_event::Event::SessionEnd(MiddlewareSessionEnd {
+                        reason: MiddlewareSessionEndReason::Cancellation as i32,
+                        protocol_error: None,
+                    })),
+                };
+                let _ = tokio::time::timeout(SESSION_END_TIMEOUT, sender.send(event)).await;
+                drop(sender);
+                let _ = tokio::time::timeout(SESSION_END_TIMEOUT, async {
+                    while responses.next().await.is_some() {}
+                })
+                .await;
+            };
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(task);
+            }
         }
     }
 }
@@ -175,6 +203,7 @@ struct HttpResponseStage {
     transport: HttpResponseStageTransport,
     max_body_bytes: usize,
     connection_nominated_headers: Vec<String>,
+    deadline: Instant,
 }
 
 pub struct HttpResponseSession {
@@ -263,28 +292,49 @@ impl HttpResponseSession {
         mut self,
         mut trailers: Vec<HttpHeader>,
     ) -> Result<HttpResponseFinish, HttpResponseMiddlewareFailure> {
+        let chain_deadline = Instant::now() + MAX_MIDDLEWARE_CHAIN_TIMEOUT;
+        for stage in &mut self.stages {
+            stage.deadline = chain_deadline;
+        }
         let mut body = std::mem::take(&mut self.body);
         for index in 0..self.stages.len() {
-            let stage = &mut self.stages[index];
-            send_event(
-                &stage.entry,
-                &stage.transport.sender,
-                HttpEvent {
-                    event: Some(http_event::Event::Begin(HttpBegin {})),
-                },
-            )
-            .await?;
+            if body.len() > self.stages[index].max_body_bytes {
+                return Err(self.failure("buffered_input_over_capacity", None));
+            }
+            let send_result = {
+                let stage = &mut self.stages[index];
+                send_event(
+                    &stage.entry,
+                    stage.deadline,
+                    stage.transport.sender(),
+                    HttpEvent {
+                        event: Some(http_event::Event::Begin(HttpBegin {})),
+                    },
+                )
+                .await
+            };
+            if let Err(error) = send_result {
+                return Err(self.retain_stage_failure(index, error));
+            }
             let input_size = body.len();
-            let result = exchange(
-                stage,
-                HttpEvent {
-                    event: Some(http_event::Event::BufferedBody(HttpBufferedBody {
-                        data: body.clone(),
-                        visible_trailers: trailers.clone(),
-                    })),
-                },
-            )
-            .await?;
+            let exchange_result = {
+                let stage = &mut self.stages[index];
+                exchange(
+                    stage,
+                    HttpEvent {
+                        event: Some(http_event::Event::BufferedBody(HttpBufferedBody {
+                            data: body.clone(),
+                            visible_trailers: trailers.clone(),
+                        })),
+                    },
+                )
+                .await
+            };
+            let result = match exchange_result {
+                Ok(result) => result,
+                Err(error) => return Err(self.retain_stage_failure(index, error)),
+            };
+            let stage = &mut self.stages[index];
             let buffered = match result.result {
                 Some(http_result::Result::BufferedResult(result)) => result,
                 Some(http_result::Result::Reject(reject)) => {
@@ -293,6 +343,23 @@ impl HttpResponseSession {
                         config_name: stage.entry.entry.name.clone(),
                         reason_code: nonempty(&diagnostics.reason_code),
                     };
+                    collect_diagnostics(
+                        &stage.entry,
+                        &diagnostics,
+                        &mut self.findings,
+                        &mut self.metadata,
+                    );
+                    self.invocations.push(invocation(
+                        &stage.entry,
+                        HttpResponseInvocationOutcome::BlockDelivery,
+                        input_size,
+                        None,
+                        nonempty(&diagnostics.reason_code),
+                    ));
+                    stage
+                        .transport
+                        .end(MiddlewareSessionEndReason::MiddlewareDenial)
+                        .await;
                     return Err(self.failure(
                         &middleware_denial_reason(
                             &denial.config_name,
@@ -407,6 +474,31 @@ impl HttpResponseSession {
             diagnostics: Box::new(self.take_diagnostics()),
         }
     }
+
+    fn retain_stage_failure(
+        &mut self,
+        index: usize,
+        mut failure: HttpResponseMiddlewareFailure,
+    ) -> HttpResponseMiddlewareFailure {
+        let mut diagnostics = self.take_diagnostics();
+        if failure.diagnostics.invocations.is_empty() {
+            diagnostics.invocations.push(failed_invocation(
+                &self.stages[index].entry,
+                &failure.reason,
+            ));
+        }
+        diagnostics
+            .findings
+            .append(&mut failure.diagnostics.findings);
+        diagnostics
+            .metadata
+            .append(&mut failure.diagnostics.metadata);
+        diagnostics
+            .invocations
+            .append(&mut failure.diagnostics.invocations);
+        failure.diagnostics = Box::new(diagnostics);
+        failure
+    }
 }
 
 impl ChainRunner {
@@ -463,6 +555,7 @@ impl ChainRunner {
         let mut findings = Vec::new();
         let mut metadata = BTreeMap::new();
         let mut invocations = Vec::new();
+        let chain_deadline = Instant::now() + MAX_MIDDLEWARE_CHAIN_TIMEOUT;
 
         for entry in described {
             if entry.on_error() == OnError::FailOpen {
@@ -525,7 +618,14 @@ impl ChainRunner {
                 limits: Some(body_limits(&entry)),
                 declared_input_bytes: input.declared_body_length,
             };
-            let opened = tokio::time::timeout(entry.timeout(), async {
+            let stage_timeout = Instant::now() + entry.timeout();
+            let stage_deadline = chain_deadline.min(stage_timeout);
+            let timeout_reason = if chain_deadline <= stage_timeout {
+                "middleware_chain_timeout"
+            } else {
+                "middleware_timeout"
+            };
+            let opened = tokio::time::timeout_at(stage_deadline, async {
                 sender
                     .send(HttpEvent {
                         event: Some(http_event::Event::Preflight(preflight)),
@@ -558,25 +658,26 @@ impl ChainRunner {
                 }
                 Err(_) => {
                     end_stages(&mut stages, MiddlewareSessionEndReason::MiddlewareFailure).await;
-                    invocations.push(failed_invocation(&entry, "middleware_timeout"));
+                    invocations.push(failed_invocation(&entry, timeout_reason));
                     return Ok(failed_outcome(
                         headers,
                         findings,
                         metadata,
                         invocations,
-                        "middleware_timeout",
+                        timeout_reason,
                     ));
                 }
             };
             let mut stage = HttpResponseStage {
                 entry: entry.clone(),
                 transport: HttpResponseStageTransport {
-                    sender,
+                    sender: Some(sender),
                     responses,
                     terminal_sent: false,
                 },
                 max_body_bytes: entry.max_payload_bytes(),
                 connection_nominated_headers: input.connection_nominated_headers.clone(),
+                deadline: chain_deadline,
             };
             match result.result {
                 Some(http_result::Result::PreflightResult(result)) => {
@@ -800,12 +901,19 @@ impl ChainRunner {
 
 async fn send_event(
     entry: &DescribedChainEntry,
+    chain_deadline: Instant,
     sender: &mpsc::Sender<HttpEvent>,
     event: HttpEvent,
 ) -> Result<(), HttpResponseMiddlewareFailure> {
-    tokio::time::timeout(entry.timeout(), sender.send(event))
+    let stage_deadline = Instant::now() + entry.timeout();
+    let (deadline, timeout_reason) = if chain_deadline <= stage_deadline {
+        (chain_deadline, "middleware_chain_timeout")
+    } else {
+        (stage_deadline, "middleware_timeout")
+    };
+    tokio::time::timeout_at(deadline, sender.send(event))
         .await
-        .map_err(|_| response_failure("middleware_timeout", None))?
+        .map_err(|_| response_failure(timeout_reason, None))?
         .map_err(|_| response_failure("middleware_stream_closed", None))
 }
 
@@ -813,9 +921,15 @@ async fn exchange(
     stage: &mut HttpResponseStage,
     event: HttpEvent,
 ) -> Result<HttpResult, HttpResponseMiddlewareFailure> {
-    tokio::time::timeout(stage.entry.timeout(), stage.transport.sender.send(event))
+    let stage_deadline = Instant::now() + stage.entry.timeout();
+    let (deadline, timeout_reason) = if stage.deadline <= stage_deadline {
+        (stage.deadline, "middleware_chain_timeout")
+    } else {
+        (stage_deadline, "middleware_timeout")
+    };
+    tokio::time::timeout_at(deadline, stage.transport.sender().send(event))
         .await
-        .map_err(|_| response_failure("middleware_timeout", None))?
+        .map_err(|_| response_failure(timeout_reason, None))?
         .map_err(|_| response_failure("middleware_stream_closed", None))?;
     let policy = stage
         .entry
@@ -824,11 +938,17 @@ async fn exchange(
         .map_or(MiddlewareDiagnosticPolicy::Preserve, |service| {
             service.diagnostic_policy
         });
-    match tokio::time::timeout(stage.entry.timeout(), stage.transport.responses.next()).await {
+    let stage_deadline = Instant::now() + stage.entry.timeout();
+    let (deadline, timeout_reason) = if stage.deadline <= stage_deadline {
+        (stage.deadline, "middleware_chain_timeout")
+    } else {
+        (stage_deadline, "middleware_timeout")
+    };
+    match tokio::time::timeout_at(deadline, stage.transport.responses.next()).await {
         Ok(Some(Ok(result))) => Ok(result),
         Ok(Some(Err(error))) => Err(response_failure(&policy.error_reason(&error), None)),
         Ok(None) => Err(response_failure("middleware_result_stream_closed", None)),
-        Err(_) => Err(response_failure("middleware_timeout", None)),
+        Err(_) => Err(response_failure(timeout_reason, None)),
     }
 }
 

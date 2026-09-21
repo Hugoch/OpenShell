@@ -106,7 +106,7 @@ uv run --no-project python examples/supervisor-middleware-content-guard/upstream
 The policy permits `GET /clean` and `GET /sensitive` on
 `http://host.openshell.internal:18081`. The first returns ordinary public text.
 The second contains both configured terms. Redact mode returns
-`contains [FILTERED] and [FILTERED]`. Deny mode returns typed `BlockDelivery`
+`contains [FILTERED] and [FILTERED]`. Deny mode returns typed `HttpReject`
 with reason code `content_match`, which produces the canonical 403 response
 before delivery. The smoke suite recreates the sandbox in deny mode and checks
 both clean and matching responses through the external gRPC service.

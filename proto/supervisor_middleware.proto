@@ -168,6 +168,9 @@ message HttpPreflight {
   // inspection. Empty in the initial public rollout.
   repeated HttpBodyMode late_header_modes = 4;
   HttpBodyLimits limits = 5;
+  // Declared length of the original admitted HTTP representation. An earlier
+  // stage may replace the body, so later stages must enforce their selected
+  // mode limit against the body events they actually receive.
   optional uint64 declared_input_bytes = 6;
 }
 
@@ -444,7 +447,7 @@ message WebSocketPreflightDecision {
   // Optional stable machine-readable code for a deny decision. Because
   // preflight runs before the HTTP upgrade completes, OpenShell may return
   // this code to the requester. Codes follow the same format and 64-byte
-  // maximum as HttpRequestPreflightResult.reason_code.
+  // maximum as MiddlewareDiagnostics.reason_code.
   string reason_code = 3;
   // Audit-safe findings produced during preflight. At most 32 findings of at
   // most 4 KiB encoded each are accepted.
