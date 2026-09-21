@@ -949,6 +949,12 @@ struct GatewayMessageContext<'a> {
     runtime_ready: &'a Arc<AtomicBool>,
 }
 
+fn update_session_readiness(accepted: bool, ready_tx: &watch::Sender<bool>) {
+    if accepted {
+        ready_tx.send_replace(true);
+    }
+}
+
 fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<'_>) {
     match &msg.payload {
         Some(gateway_message::Payload::Heartbeat(_)) => {
@@ -957,7 +963,7 @@ fn handle_gateway_message(msg: &GatewayMessage, context: &GatewayMessageContext<
         Some(gateway_message::Payload::ConfigurationAdmission(admission)) => {
             let accepted = admission.state
                 == i32::from(openshell_core::proto::ConfigurationAdmissionState::Accepted);
-            context.ready_tx.send_replace(accepted);
+            update_session_readiness(accepted, context.ready_tx);
             if accepted && context.runtime_ready.load(Ordering::Acquire) {
                 let tx = context.tx.clone();
                 tokio::spawn(async move {
@@ -1385,6 +1391,16 @@ mod target_tests {
         let error = validate_gateway_protocol_revision(SUPERVISOR_PROTOCOL_REVISION + 1)
             .expect_err("version skew must be rejected");
         assert!(error.to_string().contains("revision mismatch"));
+    }
+
+    #[test]
+    fn rejected_live_update_does_not_revoke_session_readiness() {
+        let (ready_tx, ready_rx) = watch::channel(false);
+        update_session_readiness(true, &ready_tx);
+        assert!(*ready_rx.borrow());
+
+        update_session_readiness(false, &ready_tx);
+        assert!(*ready_rx.borrow());
     }
 
     fn tcp(host: &str, port: u32) -> TcpRelayTarget {
