@@ -1317,6 +1317,56 @@ describe('config / policy', () => {
     expect(Object.hasOwn(Object, 'children')).toBe(false);
   });
 
+  it('getConfig canonicalizes legacy lists before a checked policy update', async () => {
+    let submittedPolicy: unknown;
+    const sandbox = client({
+      getSandbox: () => readySandbox('sb', 'sb-id'),
+      getSandboxConfig: () => ({
+        policy: {
+          version: 1,
+          networkPolicies: {
+            api: {
+              endpoints: [
+                {
+                  host: 'api.example.com',
+                  ports: [443, 8443, 443],
+                  protocol: 'http',
+                  rules: [
+                    {
+                      allow: {
+                        method: 'GET',
+                        query: { state: { any: ['open', 'closed', 'open'] } },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        settings: {},
+      }),
+      updateConfig: (req) => {
+        submittedPolicy = req.policy;
+        return { version: 2, policyHash: 'canonical', settingsRevision: 0n, deleted: false };
+      },
+    });
+
+    const config = await sandbox.getConfig('sb');
+    const projectedPolicy = config.policy;
+    expect(projectedPolicy).toBeDefined();
+    if (!projectedPolicy) throw new Error('expected projected policy');
+    const endpoint = projectedPolicy.networkPolicies.api?.endpoints[0];
+    expect(endpoint?.ports).toEqual([443, 8443]);
+    expect(endpoint?.rules[0]?.allow?.query.state?.kind).toEqual({
+      case: 'any',
+      value: expect.objectContaining({ values: ['open', 'closed'] }),
+    });
+
+    await expect(sandbox.setPolicy('sb', projectedPolicy)).resolves.toMatchObject({ policyHash: 'canonical' });
+    expect(submittedPolicy).toBeDefined();
+  });
+
   it('setPolicy sends global=false + version pin and (wait) polls until the hash matches', async () => {
     let updateReq: {
       sandbox?: string;

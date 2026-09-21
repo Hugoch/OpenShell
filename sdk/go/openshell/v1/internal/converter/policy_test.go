@@ -393,6 +393,39 @@ func TestPolicyDocumentFromInternalProtoExplicitProjection(t *testing.T) {
 	assert.Equal(t, []string{"2025-11-25"}, policy.NetworkPolicies["api"].Endpoints[0].Mcp.Versions)
 }
 
+func TestPolicyDocumentFromInternalProtoDeduplicatesLegacyValues(t *testing.T) {
+	internal := &sbv1.SandboxPolicy{
+		Version: 1,
+		NetworkPolicies: map[string]*sbv1.NetworkPolicyRule{
+			"api": {
+				Endpoints: []*sbv1.NetworkEndpoint{{
+					Host:     "api.example.com",
+					Ports:    []uint32{443, 8443, 443},
+					Protocol: "http",
+					Rules: []*sbv1.L7Rule{{Allow: &sbv1.L7Allow{
+						Method: "GET",
+						Query: map[string]*sbv1.L7QueryMatcher{
+							"state": {Any: []string{"open", "closed", "open"}},
+						},
+					}}},
+				}},
+			},
+		},
+	}
+
+	policy := PolicyDocumentFromInternalProto(internal)
+	require.NotNil(t, policy)
+	endpoint := policy.NetworkPolicies["api"].Endpoints[0]
+	assert.Equal(t, []uint32{443, 8443}, endpoint.Ports)
+	require.NotNil(t, endpoint.Rules[0].Allow)
+	assert.Equal(t, []string{"open", "closed"}, endpoint.Rules[0].Allow.Query["state"].Any)
+
+	// Policy updates use the checked conversion path, so a projected policy
+	// must satisfy the public protobuf uniqueness constraints before submission.
+	_, err := PolicyDocumentToProtoChecked(policy)
+	require.NoError(t, err)
+}
+
 func TestSandboxPolicyRoundTrip(t *testing.T) {
 	original := &v1.PolicyDocument{
 		Version: 5,

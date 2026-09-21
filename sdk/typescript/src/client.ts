@@ -606,7 +606,7 @@ function policyEndpointFromRuntime(
   const mcpProtocol = endpoint.protocol.toLowerCase() === 'mcp';
   return {
     host: endpoint.host,
-    ports: endpoint.ports.length > 0 ? [...endpoint.ports] : endpoint.port === 0 ? [] : [endpoint.port],
+    ports: endpoint.ports.length > 0 ? stableUnique(endpoint.ports) : endpoint.port === 0 ? [] : [endpoint.port],
     protocol: endpoint.protocol,
     tls: runtimeTLSMode(endpoint.tls),
     enforcement: runtimeEnforcementMode(endpoint.enforcement),
@@ -703,9 +703,15 @@ function policyMCPMethod(
 
 function policyMatcherFromRuntime(matcher: RuntimeMatcher | undefined): MatcherInit {
   if (matcher && matcher.any.length > 0) {
-    return { kind: { case: 'any', value: { values: [...matcher.any] } } };
+    return { kind: { case: 'any', value: { values: stableUnique(matcher.any) } } };
   }
   return { kind: { case: 'glob', value: matcher?.glob ?? '' } };
+}
+
+// The public protobuf contract requires these projected lists to be unique.
+// Set iteration retains the first-seen order from legacy runtime records.
+function stableUnique<T>(values: readonly T[]): T[] {
+  return [...new Set(values)];
 }
 
 function policyMatcherMapFromRuntime(matchers: Record<string, RuntimeMatcher>): Record<string, MatcherInit> {

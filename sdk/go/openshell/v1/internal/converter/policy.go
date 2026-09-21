@@ -245,7 +245,7 @@ func publicNetworkEndpointFromInternalProto(endpoint *sbv1.NetworkEndpoint) *pol
 		SigningRegion:                endpoint.GetSigningRegion(),
 	}
 	if ports := endpoint.GetPorts(); len(ports) > 0 {
-		result.Ports = append([]uint32(nil), ports...)
+		result.Ports = stableUnique(ports)
 	} else if port := endpoint.GetPort(); port != 0 {
 		// Older internal records may still use the legacy scalar port. The
 		// authored contract has only the canonical list representation.
@@ -435,7 +435,7 @@ func publicMatcherMapFromInternalProto(matchers map[string]*sbv1.L7QueryMatcher)
 func publicMatcherFromInternalProto(matcher *sbv1.L7QueryMatcher) *policyv1.Matcher {
 	if matcher != nil && len(matcher.GetAny()) > 0 {
 		return &policyv1.Matcher{Kind: &policyv1.Matcher_Any{Any: &policyv1.AnyMatcher{
-			Values: CopyStringSlice(matcher.GetAny()),
+			Values: stableUnique(matcher.GetAny()),
 		}}}
 	}
 	glob := ""
@@ -443,6 +443,22 @@ func publicMatcherFromInternalProto(matcher *sbv1.L7QueryMatcher) *policyv1.Matc
 		glob = matcher.GetGlob()
 	}
 	return &policyv1.Matcher{Kind: &policyv1.Matcher_Glob{Glob: glob}}
+}
+
+// stableUnique canonicalizes legacy runtime lists for public fields whose
+// protobuf contract requires unique values. Retaining the first occurrence
+// keeps the projection deterministic without changing caller-visible order.
+func stableUnique[T comparable](values []T) []T {
+	result := make([]T, 0, len(values))
+	seen := make(map[T]struct{}, len(values))
+	for _, value := range values {
+		if _, found := seen[value]; found {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func publicTLSMode(mode sbv1.NetworkTlsMode) string {
