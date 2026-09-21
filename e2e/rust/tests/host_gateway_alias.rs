@@ -321,6 +321,8 @@ async fn sandbox_reaches_host_openshell_internal_via_host_gateway_alias() {
         server.port
     );
     let guard = SandboxGuard::create(&[
+        "--from",
+        "base",
         "--policy",
         &policy_path,
         "--",
@@ -427,6 +429,8 @@ printf 'ALLOWED=%s HOST_DENIED=%s PATH_DENIED=%s\n' "$allowed" "$host_denied" "$
         server.port
     );
     let mut guard = SandboxGuard::create(&[
+        "--from",
+        "base",
         "--policy",
         &policy_path,
         "--provider",
