@@ -46,7 +46,7 @@ use openshell_core::telemetry::{
 use openshell_core::{GetResourceVersion, ObjectId, ObjectName, ObjectWorkspace};
 use prost::Message;
 use prost_types::{Struct, Value, value::Kind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -75,6 +75,7 @@ use crate::persistence::current_time_ms;
 const TCP_FORWARD_CHUNK_SIZE: usize = 64 * 1024;
 const NO_LOGIN_SHELL_ENV: (&str, &str) = ("OPENSHELL_NO_LOGIN_SHELL", "1");
 const MAX_TEMPLATES_PER_WORKSPACE: u32 = 1000;
+const MAX_CREATE_SERVICE_EXPOSURES: usize = 32;
 
 #[derive(Debug)]
 pub struct WatchSandboxStream {
@@ -627,6 +628,46 @@ async fn handle_create_sandbox_inner(
         )
         .await?;
 
+    let mut service_urls = HashMap::with_capacity(request.service_exposures.len());
+    for exposure in &request.service_exposures {
+        let endpoint = match super::service::expose_service_endpoint(
+            state,
+            sandbox.object_workspace(),
+            &sandbox,
+            &exposure.service,
+            exposure.target_port,
+        )
+        .await
+        {
+            Ok(endpoint) => endpoint,
+            Err(exposure_error) => {
+                let rollback = state
+                    .compute
+                    .delete_sandbox_by_id(sandbox.object_id(), sandbox.object_name())
+                    .await;
+                if let Err(rollback_error) = rollback {
+                    warn!(
+                        sandbox_id = %sandbox.object_id(),
+                        sandbox_name = %sandbox.object_name(),
+                        service_name = %exposure.service,
+                        exposure_error = %exposure_error,
+                        rollback_error = %rollback_error,
+                        "Failed to roll back sandbox after service exposure failed"
+                    );
+                    return Err(Status::internal(format!(
+                        "create sandbox failed while exposing service '{}': {}; rollback failed: {}; sandbox '{}' may require manual deletion",
+                        exposure.service,
+                        exposure_error.message(),
+                        rollback_error.message(),
+                        sandbox.object_name(),
+                    )));
+                }
+                return Err(exposure_error);
+            }
+        };
+        service_urls.insert(exposure.service.clone(), endpoint.into_inner().url);
+    }
+
     info!(
         sandbox_id = %id,
         sandbox_name = %name,
@@ -634,6 +675,7 @@ async fn handle_create_sandbox_inner(
     );
     Ok(Response::new(SandboxResponse {
         sandbox: Some(sandbox),
+        service_urls,
     }))
 }
 
@@ -647,6 +689,22 @@ fn validate_create_sandbox_request_pre_io(
         crate::grpc::validation::validate_label_value(value)?;
     }
     crate::grpc::validation::validate_annotations(&request.annotations, "annotations")?;
+
+    if request.service_exposures.len() > MAX_CREATE_SERVICE_EXPOSURES {
+        return Err(Status::invalid_argument(format!(
+            "service_exposures must contain at most {MAX_CREATE_SERVICE_EXPOSURES} entries"
+        )));
+    }
+    let mut service_names = HashSet::with_capacity(request.service_exposures.len());
+    for exposure in &request.service_exposures {
+        super::service::validate_service_exposure_request(&exposure.service, exposure.target_port)?;
+        if !service_names.insert(exposure.service.as_str()) {
+            return Err(Status::invalid_argument(format!(
+                "duplicate service exposure name: '{}'",
+                exposure.service
+            )));
+        }
+    }
 
     if workload_template_name.is_empty() {
         let spec = request
@@ -782,6 +840,7 @@ pub(super) async fn handle_get_sandbox(
     .await?;
     Ok(Response::new(SandboxResponse {
         sandbox: Some(sandbox),
+        service_urls: HashMap::new(),
     }))
 }
 
@@ -1531,6 +1590,7 @@ async fn handle_stop_sandbox_inner(
     info!(sandbox_name = %name, "StopSandbox request completed successfully");
     Ok(Response::new(SandboxResponse {
         sandbox: Some(sandbox),
+        service_urls: HashMap::new(),
     }))
 }
 
@@ -1567,27 +1627,13 @@ async fn handle_start_sandbox_inner(
     .await?;
     let workspace = resolved.object_workspace().to_string();
     let name = resolved.object_name().to_string();
-    let current = resolved;
-    let current_phase = SandboxPhase::try_from(current.phase()).unwrap_or(SandboxPhase::Unknown);
-    let launch_authentication = if current_phase == SandboxPhase::Ready {
-        Vec::new()
-    } else if state.sandbox_session_jwt_authority.is_some() {
-        let authentication = if matches!(
-            current_phase,
-            SandboxPhase::Stopped | SandboxPhase::Completed
-        ) {
-            mint_next_runtime_authentication(state, &current).await?
-        } else {
-            mint_persisted_authentication(state, &current)?
-        };
-        serde_json::to_vec(&authentication)
-            .map_err(|error| Status::internal(format!("encode launch authentication: {error}")))?
-    } else {
-        Vec::new()
-    };
     let mut sandbox = state
         .compute
-        .start_sandbox_authenticated(&workspace, &name, launch_authentication)
+        .start_sandbox_authenticated(
+            &workspace,
+            &name,
+            state.sandbox_session_jwt_authority.as_deref(),
+        )
         .await?;
     state
         .supervisor_sessions
@@ -1595,6 +1641,7 @@ async fn handle_start_sandbox_inner(
     info!(sandbox_name = %name, "StartSandbox request completed successfully");
     Ok(Response::new(SandboxResponse {
         sandbox: Some(sandbox),
+        service_urls: HashMap::new(),
     }))
 }
 
@@ -1614,50 +1661,6 @@ pub fn mint_persisted_authentication(
         crate::auth::sandbox_session::PersistedSandboxIdentity::read(&metadata.annotations)
             .map_err(|error| Status::failed_precondition(error.to_string()))?;
     authority.mint_persisted_launch(sandbox.object_id(), &identity)
-}
-
-async fn mint_next_runtime_authentication(
-    state: &Arc<ServerState>,
-    sandbox: &Sandbox,
-) -> Result<openshell_core::jwt::SandboxLaunchAuthentication, Status> {
-    let authority = state
-        .sandbox_session_jwt_authority
-        .as_ref()
-        .ok_or_else(|| Status::failed_precondition("sandbox session authority is unavailable"))?;
-    let metadata = sandbox
-        .metadata
-        .as_ref()
-        .ok_or_else(|| Status::failed_precondition("sandbox metadata is missing"))?;
-    let current =
-        crate::auth::sandbox_session::PersistedSandboxIdentity::read(&metadata.annotations)
-            .map_err(|error| Status::failed_precondition(error.to_string()))?;
-    let next_epoch = current
-        .auth_epoch
-        .get()
-        .checked_add(1)
-        .and_then(|epoch| openshell_core::jwt::CredentialEpoch::new(epoch).ok())
-        .ok_or_else(|| Status::internal("sandbox authorization epoch overflow"))?;
-    let next = crate::auth::sandbox_session::PersistedSandboxIdentity {
-        runtime_generation: current.runtime_generation,
-        auth_epoch: next_epoch,
-        gateway_token_id: uuid::Uuid::new_v4(),
-        refresh_replay: None,
-    };
-    let authentication = authority.mint_persisted_launch(sandbox.object_id(), &next)?;
-    state
-        .store
-        .update_message_cas::<Sandbox, _>(
-            sandbox.object_id(),
-            metadata.resource_version,
-            |updated| {
-                if let Some(metadata) = updated.metadata.as_mut() {
-                    next.write(&mut metadata.annotations);
-                }
-            },
-        )
-        .await
-        .map_err(|error| Status::aborted(format!("persist sandbox runtime identity: {error}")))?;
-    Ok(authentication)
 }
 
 async fn providers_for_sandbox(
@@ -3342,8 +3345,8 @@ mod tests {
     use crate::grpc::test_support::{
         authed_request, test_server_state, test_server_state_with_driver,
     };
-    use openshell_core::proto::GpuResourceRequirements;
     use openshell_core::proto::datamodel::v1::ObjectMeta;
+    use openshell_core::proto::{GpuResourceRequirements, SandboxServiceExposure, ServiceEndpoint};
 
     // ---- shell_escape ----
 
@@ -4444,6 +4447,7 @@ mod tests {
                 )),
                 await_main_process_attachment: false,
                 workload_template: String::new(),
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -4472,6 +4476,7 @@ mod tests {
                 )),
                 await_main_process_attachment: false,
                 workload_template: String::new(),
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -4509,6 +4514,7 @@ mod tests {
                 )),
                 await_main_process_attachment: false,
                 workload_template: String::new(),
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -4590,6 +4596,7 @@ mod tests {
                 )),
                 await_main_process_attachment: false,
                 workload_template: String::new(),
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -4965,6 +4972,7 @@ mod tests {
                 )),
                 await_main_process_attachment: false,
                 workload_template: String::new(),
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -5004,6 +5012,199 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_sandbox_registers_requested_service_exposures() {
+        let state = test_server_state().await;
+
+        let response = handle_create_sandbox(
+            &state,
+            authed_request(CreateSandboxRequest {
+                name: "services".to_string(),
+                spec: Some(SandboxSpec::default()),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                service_exposures: vec![
+                    SandboxServiceExposure {
+                        service: String::new(),
+                        target_port: 4500,
+                    },
+                    SandboxServiceExposure {
+                        service: "metrics".to_string(),
+                        target_port: 9090,
+                    },
+                ],
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("sandbox with service exposures should be created")
+        .into_inner();
+
+        let sandbox = response.sandbox.expect("created sandbox");
+        assert_eq!(response.service_urls.len(), 2);
+        assert_eq!(
+            response.service_urls.get("").map(String::as_str),
+            Some("http://default--services.openshell.localhost:17670/")
+        );
+        assert_eq!(
+            response.service_urls.get("metrics").map(String::as_str),
+            Some("http://default--services--metrics.openshell.localhost:17670/")
+        );
+        for (service, target_port) in [("", 4500), ("metrics", 9090)] {
+            let key = crate::service_routing::endpoint_key("services", service);
+            let endpoint = state
+                .store
+                .get_message_by_name::<ServiceEndpoint>("default", &key)
+                .await
+                .expect("service endpoint lookup should succeed")
+                .expect("service endpoint should be persisted");
+            assert_eq!(endpoint.sandbox_id, sandbox.object_id());
+            assert_eq!(endpoint.sandbox, "services");
+            assert_eq!(endpoint.name, service);
+            assert_eq!(endpoint.target_port, target_port);
+            assert!(endpoint.domain);
+        }
+    }
+
+    #[tokio::test]
+    async fn create_sandbox_begins_rollback_when_service_exposure_fails() {
+        let state = test_server_state().await;
+        let corrupt_service_key =
+            crate::service_routing::endpoint_key("rollback-services", "metrics");
+        state
+            .store
+            .put_if(
+                ServiceEndpoint::object_type(),
+                "corrupt-service-endpoint",
+                &corrupt_service_key,
+                "default",
+                b"not-a-service-endpoint",
+                None,
+                WriteCondition::MustCreate,
+            )
+            .await
+            .expect("corrupt service endpoint fixture should be stored");
+
+        let error = handle_create_sandbox(
+            &state,
+            authed_request(CreateSandboxRequest {
+                name: "rollback-services".to_string(),
+                spec: Some(SandboxSpec::default()),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                service_exposures: vec![
+                    SandboxServiceExposure {
+                        service: "web".to_string(),
+                        target_port: 8080,
+                    },
+                    SandboxServiceExposure {
+                        service: "metrics".to_string(),
+                        target_port: 9090,
+                    },
+                ],
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect_err("corrupt endpoint should fail sandbox creation");
+
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert!(error.message().contains("fetch endpoint failed"));
+        let sandbox = state
+            .store
+            .get_message_by_name::<Sandbox>("default", "rollback-services")
+            .await
+            .expect("sandbox lookup should succeed")
+            .expect("asynchronous driver cleanup retains a deleting record");
+        assert_eq!(
+            SandboxPhase::try_from(sandbox.phase()).ok(),
+            Some(SandboxPhase::Deleting),
+            "failed create must begin sandbox cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rollback_by_id_preserves_same_name_replacement() {
+        let state = test_server_state().await;
+        let original = handle_create_sandbox(
+            &state,
+            authed_request(CreateSandboxRequest {
+                name: "rollback-replace".to_string(),
+                spec: Some(SandboxSpec::default()),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .into_inner()
+        .sandbox
+        .unwrap();
+        let original_id = original.object_id().to_string();
+        let original_name = original.object_name().to_string();
+
+        state
+            .store
+            .delete(Sandbox::object_type(), &original_id)
+            .await
+            .unwrap();
+        let mut replacement = original;
+        let replacement_id = uuid::Uuid::new_v4().to_string();
+        let metadata = replacement.metadata.as_mut().unwrap();
+        metadata.id.clone_from(&replacement_id);
+        metadata.resource_version = 0;
+        state.store.put_message(&replacement).await.unwrap();
+
+        state
+            .compute
+            .delete_sandbox_by_id(&original_id, &original_name)
+            .await
+            .unwrap();
+
+        let stored = state
+            .store
+            .get_message_by_name::<Sandbox>("default", &original_name)
+            .await
+            .unwrap()
+            .expect("replacement must survive rollback for the original ID");
+        assert_eq!(stored.object_id(), replacement_id);
+    }
+
+    #[tokio::test]
+    async fn create_sandbox_rejects_duplicate_service_exposures_before_persisting() {
+        let state = test_server_state().await;
+        let error = handle_create_sandbox(
+            &state,
+            authed_request(CreateSandboxRequest {
+                name: "duplicate-services".to_string(),
+                spec: Some(SandboxSpec::default()),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                service_exposures: vec![
+                    SandboxServiceExposure {
+                        service: "web".to_string(),
+                        target_port: 8080,
+                    },
+                    SandboxServiceExposure {
+                        service: "web".to_string(),
+                        target_port: 8081,
+                    },
+                ],
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect_err("duplicate service names should be rejected");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains("duplicate service exposure name"));
+        assert!(
+            state
+                .store
+                .get_message_by_name::<Sandbox>("default", "duplicate-services")
+                .await
+                .expect("sandbox lookup should succeed")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn create_and_get_preserve_partial_process_identity() {
         let state = test_server_state_with_driver("docker").await;
         let policy = openshell_core::proto::SandboxPolicy {
@@ -5031,6 +5232,7 @@ mod tests {
                 )),
                 await_main_process_attachment: false,
                 workload_template: String::new(),
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -5101,6 +5303,7 @@ mod tests {
                 )),
                 await_main_process_attachment: false,
                 workload_template: String::new(),
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -5136,6 +5339,7 @@ mod tests {
                 )),
                 await_main_process_attachment: false,
                 workload_template: String::new(),
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -5173,6 +5377,7 @@ mod tests {
                     )),
                     await_main_process_attachment: false,
                     workload_template: String::new(),
+                    service_exposures: Vec::new(),
                 }),
             )
             .await
@@ -5689,7 +5894,7 @@ mod tests {
         let message = pool
             .get_message_by_name(message_name)
             .expect("message descriptor");
-        let classified: std::collections::HashSet<&str> = copied_from_create_request
+        let classified: HashSet<&str> = copied_from_create_request
             .iter()
             .chain(rejected_template_workload_overrides.iter())
             .chain(generated_by_gateway.iter())
@@ -5702,7 +5907,7 @@ mod tests {
                 + generated_by_gateway.len(),
             "every field must have exactly one create-time owner"
         );
-        let actual: std::collections::HashSet<String> = message
+        let actual: HashSet<String> = message
             .fields()
             .map(|field| field.name().to_string())
             .collect();
@@ -5742,7 +5947,7 @@ mod tests {
         .await
         .unwrap();
         let supplied_epoch = uuid::Uuid::new_v4().to_string();
-        let mut generated_epochs = std::collections::HashSet::new();
+        let mut generated_epochs = HashSet::new();
         for (name, workload_template_name) in
             [("direct-epoch", ""), ("template-epoch", "epoch-template")]
         {
@@ -5832,6 +6037,7 @@ mod tests {
                 )),
                 workload_template: "gpu-kata".to_string(),
                 await_main_process_attachment: false,
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -5920,6 +6126,7 @@ mod tests {
                 )),
                 workload_template: "default-image".to_string(),
                 await_main_process_attachment: false,
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -5973,6 +6180,7 @@ mod tests {
                 )),
                 workload_template: "default-gpu".to_string(),
                 await_main_process_attachment: false,
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -6013,6 +6221,7 @@ mod tests {
                 )),
                 workload_template: "corrupt-template".to_string(),
                 await_main_process_attachment: false,
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -6054,6 +6263,7 @@ mod tests {
                 )),
                 workload_template: "gpu-kata".to_string(),
                 await_main_process_attachment: false,
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -6080,6 +6290,7 @@ mod tests {
                 )),
                 workload_template: "Invalid_Template_Name".to_string(),
                 await_main_process_attachment: false,
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -6109,6 +6320,7 @@ mod tests {
                 )),
                 workload_template: "missing-template".to_string(),
                 await_main_process_attachment: false,
+                service_exposures: Vec::new(),
             }),
         )
         .await
@@ -6138,6 +6350,7 @@ mod tests {
                 )),
                 workload_template: String::new(),
                 await_main_process_attachment: false,
+                service_exposures: Vec::new(),
             }),
         )
         .await
