@@ -222,23 +222,14 @@ async fn authorize_service_request(
     context: ServiceRequestAuthContext,
     workspace: &str,
 ) -> Result<ServiceRequestAuthorization, ServiceRouteError> {
-    let dedicated = bearer_token(&headers, SERVICE_AUTHORIZATION_HEADER)?;
-    let cookie = service_authorization_cookie(&headers)?;
-    if dedicated.is_some() && cookie.is_some() {
-        return Err(ServiceRouteError::invalid_authentication());
-    }
-
-    let (principal, source, session_token) = if let Some(token) = dedicated {
+    let credential = service_request_credential(&headers)?;
+    let (principal, source, session_token) = if let Some((source, token)) = credential {
+        let session_token =
+            (source == ServiceCredentialSource::DedicatedHeader).then(|| token.clone());
         (
             authenticate_service_token(state, &token).await?,
-            ServiceCredentialSource::DedicatedHeader,
-            Some(token),
-        )
-    } else if let Some(token) = cookie {
-        (
-            authenticate_service_token(state, &token).await?,
-            ServiceCredentialSource::Cookie,
-            None,
+            source,
+            session_token,
         )
     } else if context.trusted_local {
         (
@@ -253,12 +244,6 @@ async fn authorize_service_request(
             Principal::User(UserPrincipal { identity }),
             ServiceCredentialSource::Mtls,
             None,
-        )
-    } else if let Some(token) = bearer_token(&headers, header::AUTHORIZATION.as_str())? {
-        (
-            authenticate_service_token(state, &token).await?,
-            ServiceCredentialSource::AuthorizationHeader,
-            Some(token),
         )
     } else if state.config.auth.allow_unauthenticated_users {
         (
@@ -296,6 +281,21 @@ async fn authorize_service_request(
         source,
         session_token,
     })
+}
+
+fn service_request_credential(
+    headers: &HeaderMap,
+) -> Result<Option<(ServiceCredentialSource, String)>, ServiceRouteError> {
+    if let Some(token) = bearer_token(headers, SERVICE_AUTHORIZATION_HEADER)? {
+        return Ok(Some((ServiceCredentialSource::DedicatedHeader, token)));
+    }
+    if let Some(token) = bearer_token(headers, header::AUTHORIZATION.as_str())? {
+        return Ok(Some((ServiceCredentialSource::AuthorizationHeader, token)));
+    }
+    if let Some(token) = service_authorization_cookie(headers)? {
+        return Ok(Some((ServiceCredentialSource::Cookie, token)));
+    }
+    Ok(None)
 }
 
 async fn authenticate_service_token(
@@ -1470,13 +1470,22 @@ mod tests {
             .uri("https://my-sandbox--web.dev.openshell.localhost/path")
             .header(header::AUTHORIZATION, "Bearer application-token")
             .header(SERVICE_AUTHORIZATION_HEADER, "Bearer gateway-token")
+            .header(
+                header::COOKIE,
+                format!("{SERVICE_AUTHORIZATION_COOKIE}=old-gateway-token"),
+            )
             .body(Body::empty())
             .unwrap();
+        let (source, token) = service_request_credential(request.headers())
+            .unwrap()
+            .unwrap();
+        assert_eq!(source, ServiceCredentialSource::DedicatedHeader);
+        assert_eq!(token, "gateway-token");
         request
             .extensions_mut()
             .insert(ServiceRequestAuthorization {
-                source: ServiceCredentialSource::DedicatedHeader,
-                session_token: None,
+                source,
+                session_token: Some(token),
             });
 
         let upstream = build_upstream_request(request, 8080, false).unwrap();
@@ -1490,10 +1499,40 @@ mod tests {
                 .headers()
                 .contains_key(SERVICE_AUTHORIZATION_HEADER)
         );
+        assert!(!upstream.headers().contains_key(header::COOKIE));
     }
 
     #[test]
-    fn rejects_conflicting_or_malformed_service_credentials() {
+    fn standard_gateway_authorization_precedes_cookie_and_is_stripped() {
+        let mut request = Request::builder()
+            .uri("https://my-sandbox--web.dev.openshell.localhost/path")
+            .header(header::AUTHORIZATION, "Bearer gateway-token")
+            .header(
+                header::COOKIE,
+                format!("{SERVICE_AUTHORIZATION_COOKIE}=old-gateway-token"),
+            )
+            .body(Body::empty())
+            .unwrap();
+        let (source, token) = service_request_credential(request.headers())
+            .unwrap()
+            .unwrap();
+        assert_eq!(source, ServiceCredentialSource::AuthorizationHeader);
+        assert_eq!(token, "gateway-token");
+        request
+            .extensions_mut()
+            .insert(ServiceRequestAuthorization {
+                source,
+                session_token: None,
+            });
+
+        let upstream = build_upstream_request(request, 8080, false).unwrap();
+
+        assert!(!upstream.headers().contains_key(header::AUTHORIZATION));
+        assert!(!upstream.headers().contains_key(header::COOKIE));
+    }
+
+    #[test]
+    fn rejects_malformed_service_credentials() {
         let mut headers = HeaderMap::new();
         headers.insert(
             SERVICE_AUTHORIZATION_HEADER,

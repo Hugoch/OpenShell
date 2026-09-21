@@ -891,17 +891,19 @@ The loopback plaintext path trusts the local machine. Every other service
 request authenticates through the gateway and requires user access to the
 workspace encoded in the service hostname. Clients can use
 `OpenShell-Service-Authorization: Bearer <token>` or the standard
-`Authorization` bearer header. A successful header-authenticated HTTPS request
-also establishes an exact-host `__Host-OpenShell-Service-Authorization`
-session cookie for browser and WebSocket requests. The gateway removes its
-dedicated header, cookie, and trusted-proxy assertions before relaying the
-request. When the dedicated header or cookie authenticates the gateway request,
-an application-specific `Authorization` header remains available to the
-sandbox service. When `Authorization` itself authenticates the gateway request,
-the gateway consumes it. Sandbox responses cannot set the reserved gateway
-session cookie. Service routing has no unauthenticated public exposure mode;
-only the gateway-wide explicit unauthenticated-development override can relax
-the remote user-auth boundary.
+`Authorization` bearer header. A successful HTTPS request authenticated by the
+dedicated header also establishes an exact-host
+`__Host-OpenShell-Service-Authorization` session cookie for browser and
+WebSocket requests. The dedicated header replaces an existing service cookie;
+standard `Authorization` authentication never mints one. The gateway removes
+its dedicated header, cookie, and trusted-proxy assertions before relaying the
+request. When the dedicated header or cookie authenticates the gateway
+request, an application-specific `Authorization` header remains available to
+the sandbox service. When `Authorization` itself authenticates the gateway
+request, the gateway consumes it. Sandbox responses cannot set the reserved
+gateway session cookie. Service routing has no unauthenticated public exposure
+mode; only the gateway-wide explicit unauthenticated-development override can
+relax the remote user-auth boundary.
 
 For `target.tcp`, the gateway only accepts loopback destinations such as
 `localhost`, `127.0.0.0/8`, or `::1`. The gateway never needs to know or dial a

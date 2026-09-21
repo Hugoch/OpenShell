@@ -62,7 +62,7 @@ curl \
 
 Standard `Authorization: Bearer <token>` also authenticates clients that cannot select a custom header. The gateway consumes that header before proxying. When the dedicated header or the OpenShell browser cookie authenticates the request, the gateway preserves an application-specific `Authorization` header for the sandbox service.
 
-After a successful header-authenticated HTTPS request, the gateway sets an exact-host, secure, HTTP-only `__Host-OpenShell-Service-Authorization` session cookie. Browsers include it automatically on later HTTP and WebSocket requests. The gateway strips its header and cookie before proxying and prevents sandbox responses from replacing the reserved cookie.
+After a successful HTTPS request authenticated by the dedicated header, the gateway sets an exact-host, secure, HTTP-only `__Host-OpenShell-Service-Authorization` session cookie. The dedicated header takes precedence over an existing cookie so clients can rotate the session safely. Standard `Authorization` authentication never creates a service cookie. Browsers include the cookie automatically on later HTTP and WebSocket requests. The gateway strips its header and cookie before proxying and prevents sandbox responses from replacing the reserved cookie.
 
 ## Register an Existing Gateway
 
