@@ -988,6 +988,15 @@ Explore related topics:
 Completion can mean applied, inactive, failed, superseded, or cancelled. An
 applied operation can have a degraded outcome; the CLI reports that separately.
 A wait timeout does not cancel the update or undo the saved policy.
+OpenShell compares only the policy dimension when completing a policy operation,
+so a concurrent settings change does not supersede an otherwise applied policy.
+`superseded` means a newer policy revision replaced the requested revision.
+
+When a gateway-global policy is active, a sandbox policy update changes the
+dormant sandbox-authored policy. Its operation can complete after the supervisor
+accepts the resulting configuration snapshot, but the global policy remains the
+effective source. Inspect the sandbox policy status and its `policy_source`
+before assuming that the authored sandbox policy controls traffic.
 
 API clients select `WAIT_FOR_COMPLETION` and set `wait_timeout` to a protobuf
 `Duration`. Inspect the returned operation's state and outcome before treating

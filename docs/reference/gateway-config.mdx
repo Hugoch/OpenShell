@@ -566,6 +566,7 @@ sandbox_runtime_image_pull_policy = "if_not_present"
 # Defaults to the gateway version. Custom builds must match the gateway's
 # internal supervisor protocol revision; mismatched peers reject the session.
 # Protocol revision 3 is required; older peers are rejected.
+# After upgrading the gateway, recreate sandboxes started by the previous release.
 # supervisor_image             = "ghcr.io/nvidia/openshell/supervisor:<version>"
 supervisor_image_pull_policy   = "if_not_present"
 

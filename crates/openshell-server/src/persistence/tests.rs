@@ -5,7 +5,9 @@ use super::{
     AtomicSandboxProjection, ObjectId, ObjectListQuery, ObjectName, ObjectType, PersistenceError,
     PolicyRecord, Store, generate_name, test_store,
 };
-use crate::config_update_operation::{CommittedResponse, OperationTarget, new_record};
+use crate::config_update_operation::{
+    CommittedResponse, OperationDimension, OperationTarget, new_record,
+};
 use crate::policy_store::{AtomicPolicyRevisionWrite, PolicyStoreExt};
 use openshell_core::proto::datamodel::v1::ObjectMeta as ProtoObjectMeta;
 use openshell_core::proto::{ObjectForTest, Sandbox, SandboxPolicy, SandboxSpec};
@@ -1114,10 +1116,17 @@ fn config_operation_for(
     policy_version: u32,
     settings_revision: u64,
 ) -> crate::storage_proto::StoredConfigUpdateOperation {
+    let dimension = if policy_version == 0 {
+        OperationDimension::Settings
+    } else {
+        OperationDimension::Policy
+    };
     new_record(
         sandbox,
         "default",
         "",
+        dimension,
+        None,
         OperationTarget {
             policy_version,
             settings_revision,
@@ -1446,6 +1455,8 @@ async fn settings_projection_uses_locked_sandbox_version(
         &stale,
         "default",
         "",
+        OperationDimension::Settings,
+        None,
         OperationTarget {
             policy_version: 0,
             settings_revision: 1,
@@ -1536,6 +1547,8 @@ async fn operation_insert_failure_rolls_back_settings_write() {
         &sandbox,
         "default",
         "same-request",
+        OperationDimension::Settings,
+        None,
         OperationTarget {
             policy_version: 0,
             settings_revision: 1,
@@ -1559,6 +1572,8 @@ async fn operation_insert_failure_rolls_back_settings_write() {
         &sandbox,
         "default",
         "same-request",
+        OperationDimension::Settings,
+        None,
         OperationTarget {
             policy_version: 0,
             settings_revision: 2,
@@ -1600,6 +1615,8 @@ async fn operation_insert_failure_rolls_back_policy_and_projection() {
         &sandbox,
         "default",
         "duplicate-policy-request",
+        OperationDimension::Settings,
+        None,
         OperationTarget {
             policy_version: 0,
             settings_revision: 1,
@@ -1628,6 +1645,8 @@ async fn operation_insert_failure_rolls_back_policy_and_projection() {
         &sandbox,
         "default",
         "duplicate-policy-request",
+        OperationDimension::Policy,
+        None,
         OperationTarget {
             policy_version: 1,
             settings_revision: 0,

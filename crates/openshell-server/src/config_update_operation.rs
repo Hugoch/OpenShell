@@ -37,6 +37,23 @@ const MAX_TRANSITION_RETRIES: usize = 8;
 const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_mins(1);
 const MAX_WAIT_TIMEOUT: Duration = Duration::from_hours(1);
 const MAX_SANITIZED_ERROR_BYTES: usize = 1_024;
+const OPERATION_DIMENSION_ANNOTATION: &str = "openshell.nvidia.com/config-operation-dimension";
+const REQUEST_FINGERPRINT_ANNOTATION: &str = "openshell.nvidia.com/request-fingerprint";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationDimension {
+    Policy,
+    Settings,
+}
+
+impl OperationDimension {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Policy => "policy",
+            Self::Settings => "settings",
+        }
+    }
+}
 
 /// Gateway-local wakeups for callers waiting on one durable operation.
 #[derive(Debug, Clone)]
@@ -185,6 +202,8 @@ pub fn new_record(
     sandbox: &Sandbox,
     workspace: &str,
     idempotency_key: &str,
+    dimension: OperationDimension,
+    request_fingerprint: Option<&str>,
     target: OperationTarget,
     response: CommittedResponse,
 ) -> StoredConfigUpdateOperation {
@@ -199,6 +218,21 @@ pub fn new_record(
             name: operation_name(sandbox.object_id(), idempotency_key, &operation_id),
             created_time: Some(timestamp(now)),
             workspace: workspace.to_string(),
+            annotations: std::iter::once((
+                OPERATION_DIMENSION_ANNOTATION.to_string(),
+                dimension.as_str().to_string(),
+            ))
+            .chain(
+                request_fingerprint
+                    .filter(|_| !idempotency_key.is_empty())
+                    .map(|fingerprint| {
+                        (
+                            REQUEST_FINGERPRINT_ANNOTATION.to_string(),
+                            fingerprint.to_string(),
+                        )
+                    }),
+            )
+            .collect(),
             ..Default::default()
         }),
         operation: Some(ConfigUpdateOperation {
@@ -233,18 +267,31 @@ pub async fn find_idempotent(
     workspace: &str,
     sandbox_id: &str,
     idempotency_key: &str,
+    request_fingerprint: &str,
 ) -> Result<Option<StoredConfigUpdateOperation>, Status> {
     if idempotency_key.is_empty() {
         return Ok(None);
     }
-    state
+    let existing = state
         .store
         .get_message_by_name::<StoredConfigUpdateOperation>(
             workspace,
             &operation_name(sandbox_id, idempotency_key, ""),
         )
         .await
-        .map_err(|error| Status::internal(format!("fetch update operation failed: {error}")))
+        .map_err(|error| Status::internal(format!("fetch update operation failed: {error}")))?;
+    if let Some(record) = existing.as_ref() {
+        let stored_fingerprint = record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.annotations.get(REQUEST_FINGERPRINT_ANNOTATION));
+        if stored_fingerprint.is_none_or(|stored| stored != request_fingerprint) {
+            return Err(Status::invalid_argument(
+                "idempotency_key was already used with a different request payload",
+            ));
+        }
+    }
+    Ok(existing)
 }
 
 pub async fn get_record(
@@ -496,18 +543,25 @@ fn target_relation(
     record: &StoredConfigUpdateOperation,
     snapshot: &openshell_core::proto::SandboxConfigSnapshot,
 ) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
+    match operation_dimension(record) {
+        OperationDimension::Policy => snapshot.version.cmp(&record.target_policy_version),
+        OperationDimension::Settings => snapshot
+            .settings_revision
+            .cmp(&record.target_settings_revision),
+    }
+}
 
-    let policy = snapshot.version.cmp(&record.target_policy_version);
-    let settings = snapshot
-        .settings_revision
-        .cmp(&record.target_settings_revision);
-    if policy == Ordering::Equal && settings == Ordering::Equal {
-        Ordering::Equal
-    } else if policy == Ordering::Greater || settings == Ordering::Greater {
-        Ordering::Greater
-    } else {
-        Ordering::Less
+fn operation_dimension(record: &StoredConfigUpdateOperation) -> OperationDimension {
+    match record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.annotations.get(OPERATION_DIMENSION_ANNOTATION))
+        .map(String::as_str)
+    {
+        Some("policy") => OperationDimension::Policy,
+        Some("settings") => OperationDimension::Settings,
+        _ if record.response_policy_version != 0 => OperationDimension::Policy,
+        _ => OperationDimension::Settings,
     }
 }
 
@@ -624,7 +678,7 @@ async fn reconcile_records_for_sandbox(
     // recoverable when the claim's retry deadline expires.
     let publish_provider_environment = claimed_records
         .iter()
-        .any(|record| record.response_policy_version != 0);
+        .any(|record| operation_dimension(record) == OperationDimension::Policy);
     let components = if publish_provider_environment {
         crate::config_delivery::ConfigComponents::SANDBOX_AND_PROVIDER
     } else {
@@ -918,6 +972,8 @@ mod tests {
             &sandbox,
             "default",
             "operation-test-request",
+            OperationDimension::Settings,
+            None,
             OperationTarget {
                 policy_version: 0,
                 settings_revision: 1,
@@ -982,8 +1038,15 @@ mod tests {
     }
 
     #[test]
-    fn target_relation_requires_exact_policy_and_settings_tuple() {
-        let record = StoredConfigUpdateOperation {
+    fn target_relation_compares_only_the_mutated_dimension() {
+        let mut record = StoredConfigUpdateOperation {
+            metadata: Some(ObjectMeta {
+                annotations: HashMap::from([(
+                    OPERATION_DIMENSION_ANNOTATION.to_string(),
+                    OperationDimension::Policy.as_str().to_string(),
+                )]),
+                ..Default::default()
+            }),
             target_policy_version: 7,
             target_settings_revision: 11,
             ..Default::default()
@@ -1004,11 +1067,24 @@ mod tests {
         );
         assert_eq!(
             target_relation(&record, &snapshot(7, 12)),
-            std::cmp::Ordering::Greater
+            std::cmp::Ordering::Equal
         );
         assert_eq!(
             target_relation(&record, &snapshot(6, 11)),
             std::cmp::Ordering::Less
+        );
+
+        record.metadata.as_mut().unwrap().annotations.insert(
+            OPERATION_DIMENSION_ANNOTATION.to_string(),
+            OperationDimension::Settings.as_str().to_string(),
+        );
+        assert_eq!(
+            target_relation(&record, &snapshot(8, 11)),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            target_relation(&record, &snapshot(7, 12)),
+            std::cmp::Ordering::Greater
         );
     }
 

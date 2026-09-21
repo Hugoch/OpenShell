@@ -739,9 +739,6 @@ async fn run_prepared_session(
         .map_err(|_| "failed to queue configuration bootstrap result")?;
     }
     let config_sequences = Arc::new(Mutex::new(ConfigSequenceWatermarks::default()));
-    if prepared.protocol_revision != SUPERVISOR_PROTOCOL_REVISION {
-        config.ready_tx.send_replace(true);
-    }
 
     // Main loop: receive gateway messages + send heartbeats.
     let mut heartbeat_interval =

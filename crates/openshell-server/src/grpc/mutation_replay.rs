@@ -377,7 +377,7 @@ fn validate_request_id(value: &str) -> Result<String, Status> {
     Ok(id.hyphenated().to_string())
 }
 
-fn fingerprint<M: Mutation>(request: &M) -> Result<String, Status> {
+pub(super) fn fingerprint<M: Mutation>(request: &M) -> Result<String, Status> {
     let descriptor = DESCRIPTORS
         .get_message_by_name(&format!("openshell.v1.{}Request", M::METHOD))
         .ok_or_else(|| Status::internal("mutation request descriptor missing"))?;

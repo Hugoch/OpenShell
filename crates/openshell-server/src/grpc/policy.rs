@@ -25,7 +25,9 @@ use crate::auth::principal::Principal;
 use crate::auth::workspace_authz::{
     MinWorkspaceRole, authorize_workspace, require_platform_admin, selected_workspace_name,
 };
-use crate::config_update_operation::{self, CommittedResponse, OperationTarget};
+use crate::config_update_operation::{
+    self, CommittedResponse, OperationDimension, OperationTarget,
+};
 use crate::pagination::Pagination;
 use crate::persistence::ObjectType;
 use crate::persistence::{
@@ -164,11 +166,18 @@ async fn finish_config_update_operation(
     ))
 }
 
+#[derive(Clone, Copy)]
+struct ConfigOperationIdentity<'a> {
+    idempotency_key: &'a str,
+    dimension: OperationDimension,
+    request_fingerprint: &'a str,
+}
+
 async fn finish_unchanged_config_update(
     state: &Arc<ServerState>,
     sandbox: &Sandbox,
     workspace: &str,
-    idempotency_key: &str,
+    identity: ConfigOperationIdentity<'_>,
     response: Response<UpdateConfigResponse>,
     consistency: ConfigUpdateConsistency,
     timeout: std::time::Duration,
@@ -177,7 +186,9 @@ async fn finish_unchanged_config_update(
     let record = config_update_operation::new_record(
         sandbox,
         workspace,
-        idempotency_key,
+        identity.idempotency_key,
+        identity.dimension,
+        Some(identity.request_fingerprint),
         OperationTarget {
             policy_version: response.version,
             settings_revision: response.settings_revision,
@@ -4111,7 +4122,7 @@ async fn handle_update_config_inner(
             save_global_settings(state.store.as_ref(), &global_settings).await?;
             crate::config_delivery::publish_all_connected(
                 state,
-                crate::config_delivery::ConfigComponents::SANDBOX_CONFIG,
+                crate::config_delivery::ConfigComponents::SANDBOX_AND_PROVIDER,
             );
 
             if req.delete_setting
@@ -4139,6 +4150,7 @@ async fn handle_update_config_inner(
 
     let sandbox = sandbox.expect("non-global config update resolves a sandbox");
     let sandbox_id = sandbox.object_id().to_string();
+    let request_fingerprint = super::mutation_replay::fingerprint(&req)?;
     replay_facts.resource(&sandbox)?;
     let mut response_annotations = sandbox_metadata_annotations(&sandbox);
 
@@ -4147,6 +4159,7 @@ async fn handle_update_config_inner(
         &workspace,
         &sandbox_id,
         &req.idempotency_key,
+        &request_fingerprint,
     )
     .await?
     {
@@ -4201,6 +4214,8 @@ async fn handle_update_config_inner(
                     &sandbox,
                     &workspace,
                     &req.idempotency_key,
+                    OperationDimension::Settings,
+                    Some(&request_fingerprint),
                     OperationTarget {
                         policy_version: 0,
                         settings_revision: sandbox_settings.revision,
@@ -4248,7 +4263,11 @@ async fn handle_update_config_inner(
                 state,
                 &sandbox,
                 &workspace,
-                &req.idempotency_key,
+                ConfigOperationIdentity {
+                    idempotency_key: &req.idempotency_key,
+                    dimension: OperationDimension::Settings,
+                    request_fingerprint: &request_fingerprint,
+                },
                 update_config_response(
                     0,
                     String::new(),
@@ -4284,6 +4303,8 @@ async fn handle_update_config_inner(
                 &sandbox,
                 &workspace,
                 &req.idempotency_key,
+                OperationDimension::Settings,
+                Some(&request_fingerprint),
                 OperationTarget {
                     policy_version: 0,
                     settings_revision: sandbox_settings.revision,
@@ -4324,7 +4345,11 @@ async fn handle_update_config_inner(
             state,
             &sandbox,
             &workspace,
-            &req.idempotency_key,
+            ConfigOperationIdentity {
+                idempotency_key: &req.idempotency_key,
+                dimension: OperationDimension::Settings,
+                request_fingerprint: &request_fingerprint,
+            },
             update_config_response(
                 0,
                 String::new(),
@@ -4363,6 +4388,7 @@ async fn handle_update_config_inner(
             annotations: &req.annotations,
             sandbox: &sandbox,
             idempotency_key: &req.idempotency_key,
+            request_fingerprint: &request_fingerprint,
         };
         let baseline_policy = spec.policy.clone();
         let (version, hash, updated_sandbox, operation_id) = apply_merge_operations_with_retry(
@@ -4436,7 +4462,11 @@ async fn handle_update_config_inner(
             state,
             &sandbox,
             &workspace,
-            &req.idempotency_key,
+            ConfigOperationIdentity {
+                idempotency_key: &req.idempotency_key,
+                dimension: OperationDimension::Policy,
+                request_fingerprint: &request_fingerprint,
+            },
             update_config_response(
                 u32::try_from(version).unwrap_or(0),
                 hash,
@@ -4563,7 +4593,11 @@ async fn handle_update_config_inner(
                     state,
                     &sandbox,
                     &workspace,
-                    &req.idempotency_key,
+                    ConfigOperationIdentity {
+                        idempotency_key: &req.idempotency_key,
+                        dimension: OperationDimension::Policy,
+                        request_fingerprint: &request_fingerprint,
+                    },
                     update_config_response(
                         u32::try_from(current.version).unwrap_or(0),
                         hash,
@@ -4584,6 +4618,8 @@ async fn handle_update_config_inner(
                 &sandbox,
                 &workspace,
                 &req.idempotency_key,
+                OperationDimension::Policy,
+                Some(&request_fingerprint),
                 OperationTarget {
                     policy_version: u32::try_from(next_version).unwrap_or(u32::MAX),
                     settings_revision: 0,
@@ -7299,6 +7335,7 @@ struct AtomicPolicyWriteContext<'a> {
     annotations: &'a HashMap<String, String>,
     sandbox: &'a Sandbox,
     idempotency_key: &'a str,
+    request_fingerprint: &'a str,
 }
 
 struct PolicyCredentialBindingValidationContext<'a> {
@@ -7530,6 +7567,8 @@ async fn apply_merge_operations_with_retry(
                 context.sandbox,
                 workspace,
                 context.idempotency_key,
+                OperationDimension::Policy,
+                Some(context.request_fingerprint),
                 OperationTarget {
                     policy_version: u32::try_from(next_version).unwrap_or(u32::MAX),
                     settings_revision: 0,
@@ -23654,7 +23693,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_operation_transition_wakes_local_waiter() {
+    async fn idempotency_key_rejects_a_different_update_payload() {
+        let state = test_server_state().await;
+        let mut sandbox = test_sandbox(
+            "sb-idempotency-payload",
+            "idempotency-payload",
+            ProtoSandboxPolicy::default(),
+            Vec::new(),
+        );
+        sandbox.set_phase(openshell_core::proto::SandboxPhase::Stopped as i32);
+        state.store.put_message(&sandbox).await.unwrap();
+        let request = |value| {
+            with_user(Request::new(UpdateConfigRequest {
+                sandbox: sandbox.object_name().to_string(),
+                setting_key: "ocsf_json_enabled".to_string(),
+                setting_value: Some(SettingValue {
+                    value: Some(setting_value::Value::BoolValue(value)),
+                }),
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                idempotency_key: "payload-bound-key".to_string(),
+                ..Default::default()
+            }))
+        };
+
+        handle_update_config(&state, request(true)).await.unwrap();
+        let error = handle_update_config(&state, request(false))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("different request payload"));
+    }
+
+    #[tokio::test]
+    async fn settings_operation_without_policy_history_applies_and_wakes_local_waiter() {
         let state = test_server_state().await;
         let sandbox = test_sandbox(
             "sb-operation-wake",
@@ -23663,18 +23734,6 @@ mod tests {
             Vec::new(),
         );
         state.store.put_message(&sandbox).await.unwrap();
-        state
-            .store
-            .put_policy_revision(
-                "operation-wake-policy",
-                sandbox.object_id(),
-                "default",
-                1,
-                &ProtoSandboxPolicy::default().encode_to_vec(),
-                "operation-wake-policy-hash",
-            )
-            .await
-            .unwrap();
         let response = handle_update_config(
             &state,
             with_user(Request::new(UpdateConfigRequest {

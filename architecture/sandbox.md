@@ -618,9 +618,8 @@ quickly.
 ## Supervisor Configuration Delivery
 
 The gateway and supervisor must implement the same internal supervisor protocol
-revision. Peers built before the handshake existed report revision zero and are
-accepted for one release with a warning and a counter, because sandboxes keep
-their supervisor binary until they are recreated.
+revision. A gateway upgrade rejects supervisors from the previous release, so
+operators must recreate those sandboxes.
 
 On the initial `ConnectSupervisor` stream, `SupervisorHello` carries an explicit
 workload image discovery result: missing, invalid, or a parsed policy. A gateway
@@ -685,8 +684,9 @@ snapshot retains its own content revision.
 Bootstrap components are independent read projections, not one atomic database
 snapshot. The sandbox configuration carries the provider-environment revision
 it was built against. The gateway retries bootstrap construction when that
-revision does not match the provider snapshot. Later component updates and gateway reconciliation repair changes committed
-while the other projections were being built.
+revision does not match the provider snapshot. The owner reconciler periodically
+rebuilds current state to repair a change missed while another projection was
+being built or delivered.
 
 Configuration delivery goes through a gateway-owned routing boundary rather
 than exposing local supervisor channels to mutation handlers. The current
