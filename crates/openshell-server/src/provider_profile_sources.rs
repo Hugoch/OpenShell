@@ -22,8 +22,11 @@ use sha2::{Digest, Sha256};
 use tonic::Status;
 use tracing::debug;
 
-use crate::persistence::{ObjectListQuery, ObjectType, Store};
-use crate::storage_proto::StoredProviderProfile;
+use crate::persistence::{ObjectListQuery, Store};
+use crate::storage_proto::{
+    StoredProviderProfileData, StoredProviderProfileWire as StoredProviderProfile,
+    provider_profile_from_public, provider_profile_to_public,
+};
 
 const USER_SOURCE_ID: &str = "user";
 
@@ -38,12 +41,6 @@ pub enum ProfileScope {
 pub struct ScopedSnapshotProfile {
     pub scope: ProfileScope,
     pub profile: ProviderProfile,
-}
-
-impl ObjectType for StoredProviderProfile {
-    fn object_type() -> &'static str {
-        "provider_profile"
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +97,7 @@ impl ProviderProfileSource for UserProviderProfileSource {
             let resource_version = stored_profile_resource_version(&stored);
             hasher.update(resource_version.to_le_bytes());
             if let Some(profile) = stored.profile {
-                let mut profile = profile_response_payload(profile, resource_version);
+                let mut profile = profile_response_payload(profile, resource_version)?;
                 normalize_provider_profile_mcp_fields(&mut profile);
                 hasher.update(profile.encode_to_vec());
                 profiles.push(ScopedSnapshotProfile {
@@ -121,7 +118,7 @@ impl ProviderProfileSource for UserProviderProfileSource {
                 let resource_version = stored_profile_resource_version(&stored);
                 hasher.update(resource_version.to_le_bytes());
                 if let Some(profile) = stored.profile {
-                    let mut profile = profile_response_payload(profile, resource_version);
+                    let mut profile = profile_response_payload(profile, resource_version)?;
                     normalize_provider_profile_mcp_fields(&mut profile);
                     hasher.update(profile.encode_to_vec());
                     profiles.push(ScopedSnapshotProfile {
@@ -727,7 +724,7 @@ fn profile_snapshot_revision(profiles: &[ProviderProfile]) -> String {
 pub fn stored_provider_profile(profile: ProviderProfile) -> StoredProviderProfile {
     use crate::persistence::current_time_ms;
     let now_ms = current_time_ms();
-    let profile = profile_storage_payload(profile);
+    let profile = profile_storage_payload(profile).expect("test provider profile must be valid");
     StoredProviderProfile {
         metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
             id: uuid::Uuid::new_v4().to_string(),
@@ -743,19 +740,21 @@ pub fn stored_provider_profile(profile: ProviderProfile) -> StoredProviderProfil
     }
 }
 
-pub fn profile_storage_payload(mut profile: ProviderProfile) -> ProviderProfile {
+pub fn profile_storage_payload(
+    mut profile: ProviderProfile,
+) -> Result<StoredProviderProfileData, Status> {
     profile.resource_version = 0;
     profile.source = String::new();
     profile.scope = String::new();
-    profile
+    provider_profile_from_public(&profile)
 }
 
 pub fn profile_response_payload(
-    mut profile: ProviderProfile,
+    mut profile: StoredProviderProfileData,
     resource_version: u64,
-) -> ProviderProfile {
+) -> Result<ProviderProfile, Status> {
     profile.resource_version = resource_version;
-    profile
+    provider_profile_to_public(&profile)
 }
 
 pub fn stored_profile_resource_version(stored: &StoredProviderProfile) -> u64 {
@@ -1604,7 +1603,7 @@ mod tests {
         use crate::persistence::current_time_ms;
         let now_ms = current_time_ms();
         let proto = profile(id);
-        let proto = profile_storage_payload(proto);
+        let proto = profile_storage_payload(proto).unwrap();
         StoredProviderProfile {
             metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                 id: uuid::Uuid::new_v4().to_string(),

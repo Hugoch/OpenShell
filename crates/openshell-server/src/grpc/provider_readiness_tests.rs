@@ -6,8 +6,7 @@ use crate::auth::principal::{Principal, SandboxIdentitySource, SandboxPrincipal}
 use crate::config_update_operation::CONFIG_UPDATE_OPERATION_OBJECT_TYPE;
 use crate::grpc::test_support::{authed_request, test_server_state};
 use crate::persistence::WriteCondition;
-use crate::storage_proto::StoredConfigUpdateOperation;
-use openshell_core::proto::SandboxSpec;
+use crate::storage_proto::{StoredConfigUpdateOperation, StoredSandboxSpec as SandboxSpec};
 use openshell_core::proto::datamodel::v1::ObjectMeta;
 use prost::Message;
 use std::collections::HashMap;
@@ -784,12 +783,7 @@ async fn attach_waiting_for_update_captures_published_revision_and_becomes_ready
             ..Default::default()
         }),
         spec: Some(SandboxSpec {
-            policy: Some(
-                openshell_policy::project_base_policy(
-                    &openshell_policy::restrictive_default_policy(),
-                )
-                .unwrap(),
-            ),
+            policy: Some(openshell_policy::restrictive_default_policy()),
             ..Default::default()
         }),
         ..Default::default()
@@ -937,12 +931,7 @@ async fn status_rejects_oversized_provider_name_before_persisting_receipt() {
             ..Default::default()
         }),
         spec: Some(SandboxSpec {
-            policy: Some(
-                openshell_policy::project_base_policy(
-                    &openshell_policy::restrictive_default_policy(),
-                )
-                .unwrap(),
-            ),
+            policy: Some(openshell_policy::restrictive_default_policy()),
             ..Default::default()
         }),
         ..Default::default()
@@ -982,12 +971,7 @@ async fn status_accepts_maximum_provider_name_and_receipt_only_lookup() {
             ..Default::default()
         }),
         spec: Some(SandboxSpec {
-            policy: Some(
-                openshell_policy::project_base_policy(
-                    &openshell_policy::restrictive_default_policy(),
-                )
-                .unwrap(),
-            ),
+            policy: Some(openshell_policy::restrictive_default_policy()),
             ..Default::default()
         }),
         ..Default::default()
@@ -1070,12 +1054,7 @@ async fn observation_fixture() -> (
             ..Default::default()
         }),
         spec: Some(SandboxSpec {
-            policy: Some(
-                openshell_policy::project_base_policy(
-                    &openshell_policy::restrictive_default_policy(),
-                )
-                .unwrap(),
-            ),
+            policy: Some(openshell_policy::restrictive_default_policy()),
             provider_attachment_epoch: Uuid::new_v4().to_string(),
             ..Default::default()
         }),
@@ -1211,12 +1190,7 @@ async fn stored_change_is_bound_to_its_sandbox_and_provider() {
         }),
         spec: Some(SandboxSpec {
             provider_attachment_epoch: Uuid::new_v4().to_string(),
-            policy: Some(
-                openshell_policy::project_base_policy(
-                    &openshell_policy::restrictive_default_policy(),
-                )
-                .unwrap(),
-            ),
+            policy: Some(openshell_policy::restrictive_default_policy()),
             ..Default::default()
         }),
         ..Default::default()
@@ -1268,12 +1242,7 @@ async fn detach_receipt_persists_but_gateway_restart_requires_fresh_installation
         }),
         spec: Some(SandboxSpec {
             provider_attachment_epoch: Uuid::new_v4().to_string(),
-            policy: Some(
-                openshell_policy::project_base_policy(
-                    &openshell_policy::restrictive_default_policy(),
-                )
-                .unwrap(),
-            ),
+            policy: Some(openshell_policy::restrictive_default_policy()),
             ..Default::default()
         }),
         ..Default::default()

@@ -399,9 +399,14 @@ Public RPC contracts and durable protobuf formats have separate ownership. The `
 
 Authored policy is an explicit conversion boundary. Public RPCs use
 `openshell.policy.v1.PolicyDocument`; persistence, composition, and supervisor
-configuration use `openshell.sandbox.v1.SandboxPolicy`. The gateway validates
-and lowers a `PolicyDocument` before storing the internal message, and projects
-the internal message for authored API responses. The shared
+configuration use `openshell.sandbox.v1.SandboxPolicy`. RPC ingress validates
+and lowers a `PolicyDocument` once. The gateway then carries and directly
+prost-encodes the internal message through persistence, reconciliation, and
+compute. RPC response construction projects that internal message back to the
+authored contract. If a legacy sandbox policy cannot be projected, resource
+reads keep the sandbox visible with an empty public policy and a
+`PolicyProjection=False` condition; policy-specific reads still reject the
+invalid policy. The shared
 `GetSandboxConfig` supervisor RPC is the exception: its wire response carries
 the effective internal policy required for enforcement, and curated SDKs
 project that field to `PolicyDocument` before exposing it. Existing policy rows

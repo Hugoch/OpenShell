@@ -34,8 +34,8 @@ use openshell_core::proto::compute::v1::{
     compute_driver_server::ComputeDriver, watch_sandboxes_event,
 };
 use openshell_core::proto::{
-    PlatformEvent, Sandbox, SandboxCondition, SandboxPhase, SandboxSpec, SandboxStatus,
-    SandboxTemplate, SandboxWorkloadTemplate, ServiceEndpoint, SshSession,
+    PlatformEvent, SandboxCondition, SandboxPhase, SandboxStatus, SandboxTemplate,
+    SandboxWorkloadTemplate, ServiceEndpoint, SshSession,
 };
 use openshell_core::telemetry::TelemetryComputeDriver;
 use openshell_core::{ObjectLabels, ObjectWorkspace};
@@ -57,6 +57,8 @@ use tonic::{Code, Request, Status};
 #[cfg(unix)]
 use tower::service_fn;
 use tracing::{Instrument as _, debug, info, warn};
+
+use crate::storage_proto::{StoredSandbox as Sandbox, StoredSandboxSpec as SandboxSpec};
 
 pub type DriverWatchStream =
     Pin<Box<dyn Stream<Item = Result<WatchSandboxesEvent, Status>> + Send>>;
@@ -827,7 +829,7 @@ impl ComputeRuntime {
     }
 
     pub async fn validate_sandbox_create(&self, sandbox: &Sandbox) -> Result<(), Status> {
-        let mut driver_sandbox = driver_sandbox_from_public(sandbox, &self.driver_info.name)
+        let mut driver_sandbox = driver_sandbox_from_stored(sandbox, &self.driver_info.name)
             .map_err(|status| *status)?;
         // Peek, never consume: create runs the same path immediately after and
         // must still find the token.
@@ -885,7 +887,7 @@ impl ComputeRuntime {
             .map(|token| self.rootfs_tar_staging.consume(&token))
             .transpose()?;
 
-        let mut driver_sandbox = driver_sandbox_from_public(&sandbox, &self.driver_info.name)
+        let mut driver_sandbox = driver_sandbox_from_stored(&sandbox, &self.driver_info.name)
             .map_err(|status| *status)?;
         if let Some(staged) = staged.as_ref() {
             set_rootfs_tar_path(&mut driver_sandbox, staged.path());
@@ -909,9 +911,7 @@ impl ComputeRuntime {
                 &sandbox_id,
                 sandbox.object_name(),
                 sandbox.object_workspace(),
-                &crate::storage_proto::encode_sandbox(&sandbox).map_err(|error| {
-                    Status::internal(format!("encode sandbox for persistence failed: {error}"))
-                })?,
+                &sandbox.encode_to_vec(),
                 labels_json.as_deref(),
                 WriteCondition::MustCreate,
             )
@@ -1352,7 +1352,7 @@ impl ComputeRuntime {
         {
             // A partial provisioning attempt may have been canceled before a
             // restartable backend object existed. Keep the API identity/spec.
-            let mut driver_sandbox = driver_sandbox_from_public(&starting, &self.driver_info.name)
+            let mut driver_sandbox = driver_sandbox_from_stored(&starting, &self.driver_info.name)
                 .map_err(|status| *status)?;
             if let Some(spec) = driver_sandbox.spec.as_mut() {
                 spec.launch_authentication = authentication_for_recreate;
@@ -1843,7 +1843,7 @@ impl ComputeRuntime {
                     return false;
                 }
             };
-            let sandbox = match decode_sandbox_record(&record) {
+            let sandbox = match decode_stored_sandbox_record(&record) {
                 Ok(sandbox) => sandbox,
                 Err(err) => {
                     warn!(sandbox_id, error = %err, "Failed to decode sandbox during cleanup");
@@ -1913,7 +1913,7 @@ impl ComputeRuntime {
             return Ok(false);
         }
 
-        let sandbox = decode_sandbox_record(&record)?;
+        let sandbox = decode_stored_sandbox_record(&record)?;
         self.cleanup_sandbox_owned_records(&sandbox).await?;
 
         match self
@@ -2175,11 +2175,7 @@ impl ComputeRuntime {
                 &id,
                 &name,
                 sandbox.object_workspace(),
-                &crate::storage_proto::encode_sandbox(&sandbox).map_err(|error| {
-                    crate::persistence::PersistenceError::Encode(format!(
-                        "encode sandbox for persistence failed: {error}"
-                    ))
-                })?,
+                &sandbox.encode_to_vec(),
                 labels_json.as_deref(),
                 WriteCondition::MatchResourceVersion(expected_resource_version),
             )
@@ -2995,7 +2991,7 @@ impl ComputeRuntime {
         let grace_ms = grace_period.as_millis().try_into().unwrap_or(i64::MAX);
 
         for record in records {
-            let sandbox = match crate::storage_proto::decode_sandbox(record.payload.as_slice()) {
+            let sandbox = match Sandbox::decode(record.payload.as_slice()) {
                 Ok(sandbox) => sandbox,
                 Err(err) => {
                     warn!(error = %err, "Failed to decode sandbox record during reconciliation");
@@ -3088,7 +3084,10 @@ impl ComputeRuntime {
             .get(Sandbox::object_type(), &incoming.id)
             .await
             .map_err(|e| e.to_string())?;
-        let existing_sandbox = existing.as_ref().map(decode_sandbox_record).transpose()?;
+        let existing_sandbox = existing
+            .as_ref()
+            .map(decode_stored_sandbox_record)
+            .transpose()?;
         let existing_phase = existing_sandbox
             .as_ref()
             .map_or(SandboxPhase::Unknown, |sandbox| {
@@ -3123,7 +3122,7 @@ impl ComputeRuntime {
             .map_err(|e| e.to_string())?;
         let current_phase = existing
             .as_ref()
-            .map(decode_sandbox_record)
+            .map(decode_stored_sandbox_record)
             .transpose()?
             .map_or(SandboxPhase::Unknown, |sandbox| {
                 SandboxPhase::try_from(sandbox.phase()).unwrap_or(SandboxPhase::Unknown)
@@ -3162,7 +3161,7 @@ impl ComputeRuntime {
             );
             return Ok(());
         };
-        let existing = decode_sandbox_record(&existing_record)?;
+        let existing = decode_stored_sandbox_record(&existing_record)?;
 
         if SandboxPhase::try_from(existing.phase()).unwrap_or(SandboxPhase::Unknown)
             == SandboxPhase::Deleting
@@ -3885,7 +3884,7 @@ impl ComputeRuntime {
                 return Ok(());
             }
 
-            let sandbox = decode_sandbox_record(&current_record)?;
+            let sandbox = decode_stored_sandbox_record(&current_record)?;
             let age_ms =
                 openshell_core::time::now_ms().saturating_sub(current_record.created_at_ms);
             if age_ms < grace_ms {
@@ -3923,7 +3922,7 @@ impl ComputeRuntime {
                 .await;
         }
 
-        let sandbox = decode_sandbox_record(&current_record)?;
+        let sandbox = decode_stored_sandbox_record(&current_record)?;
         let phase = SandboxPhase::try_from(sandbox.phase()).unwrap_or(SandboxPhase::Unknown);
         if phase == SandboxPhase::Completed
             || is_failed_main_process_result(&sandbox)
@@ -4175,7 +4174,7 @@ pub async fn connect_remote_compute_driver(
     ))
 }
 
-fn driver_sandbox_from_public(
+fn driver_sandbox_from_stored(
     sandbox: &Sandbox,
     driver_name: &str,
 ) -> Result<DriverSandbox, Box<Status>> {
@@ -4186,7 +4185,7 @@ fn driver_sandbox_from_public(
         spec: sandbox
             .spec
             .as_ref()
-            .map(|spec| driver_sandbox_spec_from_public(spec, driver_name))
+            .map(|spec| driver_sandbox_spec_from_stored(spec, driver_name))
             .transpose()?,
         status: sandbox
             .status
@@ -4196,20 +4195,11 @@ fn driver_sandbox_from_public(
     })
 }
 
-fn driver_sandbox_spec_from_public(
+fn driver_sandbox_spec_from_stored(
     spec: &SandboxSpec,
     driver_name: &str,
 ) -> Result<DriverSandboxSpec, Box<Status>> {
-    let policy = spec
-        .policy
-        .clone()
-        .map(openshell_policy::lower_authored_policy)
-        .transpose()
-        .map_err(|error| {
-            Box::new(Status::invalid_argument(format!(
-                "invalid authored policy: {error}"
-            )))
-        })?;
+    let policy = spec.policy.clone();
     Ok(DriverSandboxSpec {
         log_level: spec.log_level.clone(),
         environment: spec.environment.clone(),
@@ -4529,12 +4519,6 @@ fn driver_condition_from_public(condition: &SandboxCondition) -> DriverCondition
         transition_time: condition.transition_time,
     }
 }
-impl ObjectType for Sandbox {
-    fn object_type() -> &'static str {
-        "sandbox"
-    }
-}
-
 impl ObjectType for SandboxWorkloadTemplate {
     fn object_type() -> &'static str {
         "sandbox_workload_template"
@@ -4549,8 +4533,8 @@ fn compute_error_from_status(status: Status) -> ComputeError {
     }
 }
 
-fn decode_sandbox_record(record: &ObjectRecord) -> Result<Sandbox, String> {
-    crate::storage_proto::decode_sandbox(record.payload.as_slice())
+fn decode_stored_sandbox_record(record: &ObjectRecord) -> Result<Sandbox, String> {
+    Sandbox::decode(record.payload.as_slice()).map_err(|error| error.to_string())
 }
 
 fn sandbox_resource_version(sandbox: &Sandbox) -> u64 {
@@ -5474,7 +5458,7 @@ mod tests {
     }
 
     #[test]
-    fn driver_sandbox_spec_from_public_preserves_gpu_requirement() {
+    fn driver_sandbox_spec_from_stored_preserves_gpu_requirement() {
         let public = SandboxSpec {
             resource_requirements: Some(openshell_core::proto::ResourceRequirements {
                 gpu: Some(openshell_core::proto::GpuResourceRequirements { count: Some(2) }),
@@ -5482,7 +5466,7 @@ mod tests {
             ..Default::default()
         };
 
-        let driver = driver_sandbox_spec_from_public(&public, "test-driver")
+        let driver = driver_sandbox_spec_from_stored(&public, "test-driver")
             .expect("driver spec should map");
 
         let gpu = driver
@@ -5496,20 +5480,17 @@ mod tests {
     #[test]
     fn driver_sandbox_spec_carries_admitted_identity_selectors() {
         let public = SandboxSpec {
-            policy: Some(
-                openshell_policy::project_base_policy(&openshell_core::proto::SandboxPolicy {
-                    process: Some(openshell_core::proto::sandbox::v1::ProcessPolicy {
-                        run_as_user: "10001".to_string(),
-                        run_as_group: "10002".to_string(),
-                    }),
-                    ..Default::default()
-                })
-                .unwrap(),
-            ),
+            policy: Some(openshell_core::proto::SandboxPolicy {
+                process: Some(openshell_core::proto::sandbox::v1::ProcessPolicy {
+                    run_as_user: "10001".to_string(),
+                    run_as_group: "10002".to_string(),
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
-        let driver = driver_sandbox_spec_from_public(&public, "test-driver")
+        let driver = driver_sandbox_spec_from_stored(&public, "test-driver")
             .expect("driver spec should map");
         let identity = driver
             .workload_identity
@@ -11910,13 +11891,10 @@ mod tests {
         let mut sandbox = sandbox_record("sb-uds", "uds-sandbox", SandboxPhase::Provisioning);
         sandbox.spec = Some(SandboxSpec {
             log_level: "debug".to_string(),
-            policy: Some(
-                openshell_policy::project_base_policy(&openshell_core::proto::SandboxPolicy {
-                    version: 1,
-                    ..Default::default()
-                })
-                .unwrap(),
-            ),
+            policy: Some(openshell_core::proto::SandboxPolicy {
+                version: 1,
+                ..Default::default()
+            }),
             template: Some(SandboxTemplate {
                 image: "ghcr.io/nvidia/openshell-community/sandboxes/base:latest".to_string(),
                 driver_config: Some(prost_types::Struct {
@@ -12142,7 +12120,7 @@ mod tests {
     }
 
     #[test]
-    fn driver_sandbox_from_public_populates_workspace() {
+    fn driver_sandbox_from_stored_populates_workspace() {
         let sandbox = Sandbox {
             metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
                 id: "sb-1".to_string(),
@@ -12152,7 +12130,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let driver_sb = driver_sandbox_from_public(&sandbox, "kubernetes").unwrap();
+        let driver_sb = driver_sandbox_from_stored(&sandbox, "kubernetes").unwrap();
         assert_eq!(driver_sb.workspace, "alpha");
         assert_eq!(driver_sb.name, "work");
         assert_eq!(driver_sb.id, "sb-1");
@@ -12388,6 +12366,37 @@ mod tests {
             "durable backoff must suppress immediate retries"
         );
     }
+
+    #[tokio::test]
+    async fn provisioning_deadline_scan_skips_undecodable_rows() {
+        let runtime = test_runtime(ControlledDriver::new()).await;
+        runtime
+            .store
+            .put(
+                "sandbox",
+                "corrupt-sandbox",
+                "corrupt-sandbox",
+                "default",
+                b"not-a-protobuf",
+                None,
+            )
+            .await
+            .unwrap();
+        let sandbox = sandbox_record("sb-valid", "valid", SandboxPhase::Provisioning);
+        runtime.store.put_message(&sandbox).await.unwrap();
+
+        let now = openshell_core::time::now_ms();
+        runtime.reconcile_provisioning_deadlines(now).await.unwrap();
+
+        let valid = runtime
+            .store
+            .get_message::<Sandbox>("sb-valid")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(valid.status.unwrap().provisioning.is_some());
+    }
+
     #[tokio::test]
     async fn provisioning_worker_adopts_legacy_once_and_reclaims_without_inventory() {
         let driver = ControlledDriver::new();

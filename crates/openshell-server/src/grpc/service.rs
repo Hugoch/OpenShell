@@ -392,7 +392,8 @@ fn is_dns_label(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::grpc::test_support::{authed_request, test_server_state};
-    use openshell_core::proto::{Sandbox, SandboxPhase};
+    use crate::storage_proto::{StoredSandbox as Sandbox, StoredSandboxSpec};
+    use openshell_core::proto::SandboxPhase;
 
     async fn seed_sandbox(state: &Arc<ServerState>, name: &str) {
         let mut sandbox = Sandbox {
@@ -406,7 +407,7 @@ mod tests {
                 workspace: "default".to_string(),
                 deletion_time: None,
             }),
-            spec: Some(openshell_core::proto::SandboxSpec::default()),
+            spec: Some(StoredSandboxSpec::default()),
             ..Default::default()
         };
         sandbox.set_phase(SandboxPhase::Ready as i32);
@@ -804,7 +805,7 @@ mod tests {
                 workspace: "beta".to_string(),
                 deletion_time: None,
             }),
-            spec: Some(openshell_core::proto::SandboxSpec::default()),
+            spec: Some(StoredSandboxSpec::default()),
             ..Default::default()
         };
         sbx_beta.set_phase(SandboxPhase::Ready as i32);

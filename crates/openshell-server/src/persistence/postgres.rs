@@ -11,8 +11,9 @@ use crate::policy_store::{
     policy_payload_from_record, policy_record_for_atomic_write, policy_record_from_parts,
     project_policy_revision_onto_sandbox,
 };
+use crate::storage_proto::StoredSandbox as Sandbox;
 use openshell_core::SetResourceVersion;
-use openshell_core::proto::Sandbox;
+use prost::Message as _;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, PgPool, Postgres, QueryBuilder, Row};
 
@@ -1021,11 +1022,7 @@ WHERE object_type = 'sandbox' AND id = $1 AND resource_version = $4
 ",
             )
             .bind(&write.sandbox_id)
-            .bind(
-                crate::storage_proto::encode_sandbox(&sandbox).map_err(|error| {
-                    PersistenceError::Encode(format!("encode sandbox payload failed: {error}"))
-                })?,
-            )
+            .bind(sandbox.encode_to_vec())
             .bind(now_ms)
             .bind(i64::try_from(current_version).unwrap_or(i64::MAX))
             .execute(&mut *tx)

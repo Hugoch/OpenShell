@@ -8,8 +8,10 @@ use super::{POLICY_SETTING_KEY, load_global_settings, load_sandbox_settings};
 use crate::compute::provisioning_deadline::ConfigurationChange;
 use crate::persistence::{ObjectId, ObjectName, ObjectType, ObjectWorkspace, Store};
 use crate::policy_store::PolicyStoreExt;
-use crate::storage_proto::StoredProviderProfile;
-use openshell_core::proto::{Provider, Sandbox};
+use crate::storage_proto::{
+    StoredProviderProfileWire as StoredProviderProfile, StoredSandbox as Sandbox,
+};
+use openshell_core::proto::Provider;
 use openshell_core::time::timestamp_to_millis;
 use prost::Message;
 use sha2::{Digest, Sha256};
@@ -76,14 +78,7 @@ pub async fn configuration_change(
                 .spec
                 .as_ref()
                 .and_then(|spec| spec.policy.as_ref())
-                .map(|policy| {
-                    openshell_policy::lower_authored_policy(policy.clone())
-                        .map(|policy| {
-                            openshell_core::policy_identity::deterministic_policy_hash(&policy)
-                        })
-                        .map_err(|error| error.to_string())
-                })
-                .transpose()?
+                .map(openshell_core::policy_identity::deterministic_policy_hash)
                 .unwrap_or_default();
             sources.push(("policy".into(), format!("1:{hash}")));
         }
@@ -241,8 +236,8 @@ mod tests {
         let mut sandbox = sandbox();
         let policy = openshell_policy::restrictive_default_policy();
         let hash = openshell_core::policy_identity::deterministic_policy_hash(&policy);
-        sandbox.spec = Some(openshell_core::proto::SandboxSpec {
-            policy: Some(openshell_policy::project_base_policy(&policy).unwrap()),
+        sandbox.spec = Some(crate::storage_proto::StoredSandboxSpec {
+            policy: Some(policy.clone()),
             ..Default::default()
         });
         let first = configuration_change(&store, &sandbox).await.unwrap();

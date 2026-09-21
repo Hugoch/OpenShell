@@ -4,8 +4,8 @@
 use crate::persistence::{
     DraftChunkRecord, PersistenceError, PersistenceResult, PolicyRecord, SetResourceVersion, Store,
 };
-use crate::storage_proto::{DraftChunkPayload, PolicyRevisionPayload};
-use openshell_core::proto::{NetworkPolicyRule, Sandbox, SandboxPolicy as ProtoSandboxPolicy};
+use crate::storage_proto::{DraftChunkPayload, PolicyRevisionPayload, StoredSandbox as Sandbox};
+use openshell_core::proto::{NetworkPolicyRule, SandboxPolicy as ProtoSandboxPolicy};
 use prost::Message;
 use std::collections::HashMap;
 
@@ -91,31 +91,25 @@ pub fn project_policy_revision_onto_sandbox(
     }
 
     let payload = crate::persistence::migrate_legacy_time_fields("sandbox", payload)?;
-    let mut sandbox = crate::storage_proto::decode_sandbox(payload.as_slice())
+    let mut sandbox = Sandbox::decode(payload.as_slice())
         .map_err(|e| PersistenceError::Decode(format!("decode sandbox payload failed: {e}")))?;
     sandbox.set_resource_version(current_resource_version);
 
     let mut changed = false;
     let startup_blocked = permits_initial_static_policy_repair(&sandbox);
     if let Some(backfill_policy) = write.backfill_policy.as_ref() {
-        let public_backfill =
-            openshell_policy::project_base_policy(backfill_policy).map_err(|e| {
-                PersistenceError::Decode(format!(
-                    "project policy revision onto sandbox failed: {e}"
-                ))
-            })?;
         let spec = sandbox
             .spec
             .as_mut()
             .ok_or_else(|| PersistenceError::Decode("sandbox payload missing spec".to_string()))?;
         match spec.policy.as_ref() {
             None => {
-                spec.policy = Some(public_backfill);
+                spec.policy = Some(backfill_policy.clone());
                 changed = true;
             }
-            Some(current) if current == &public_backfill => {}
+            Some(current) if current == backfill_policy => {}
             Some(_) if startup_blocked => {
-                spec.policy = Some(public_backfill);
+                spec.policy = Some(backfill_policy.clone());
                 changed = true;
             }
             Some(_) => {
@@ -634,9 +628,9 @@ pub fn draft_chunk_record_from_parts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage_proto::StoredSandboxSpec as SandboxSpec;
     use openshell_core::proto::{
-        ConfigurationAdmissionState as Admission, SandboxConfigurationAdmission, SandboxSpec,
-        SandboxStatus,
+        ConfigurationAdmissionState as Admission, SandboxConfigurationAdmission, SandboxStatus,
     };
 
     #[test]
@@ -665,7 +659,7 @@ mod tests {
             for state in [Admission::Pending, Admission::Rejected, Admission::Accepted] {
                 let sandbox = Sandbox {
                     spec: Some(SandboxSpec {
-                        policy: Some(openshell_policy::project_base_policy(&baseline).unwrap()),
+                        policy: Some(baseline.clone()),
                         ..Default::default()
                     }),
                     status: Some(SandboxStatus {
@@ -678,16 +672,12 @@ mod tests {
                     }),
                     ..Default::default()
                 };
-                let payload = crate::storage_proto::encode_sandbox(&sandbox)
-                    .expect("encode durable sandbox fixture");
+                let payload = sandbox.encode_to_vec();
                 let result = project_policy_revision_onto_sandbox(&write, &payload, 1);
                 if activated == Some(false) && state != Admission::Accepted {
                     let (projected, changed) = result.unwrap();
                     assert!(changed);
-                    assert_eq!(
-                        projected.spec.unwrap().policy,
-                        Some(openshell_policy::project_base_policy(&replacement).unwrap())
-                    );
+                    assert_eq!(projected.spec.unwrap().policy, Some(replacement.clone()));
                 } else {
                     assert!(
                         matches!(result, Err(PersistenceError::Conflict { .. })),

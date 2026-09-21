@@ -18,13 +18,13 @@ use crate::provider_profile_sources::{
 };
 use crate::storage_proto::{
     StoredProviderCredentialRefreshStateV2 as StoredProviderCredentialRefreshState,
-    StoredProviderProfile,
+    StoredProviderProfileWire as StoredProviderProfile,
 };
 use openshell_core::metadata::ObjectWorkspace;
 use openshell_core::proto::{
     CredentialHandle, Provider, ProviderCredentialRefreshStrategy,
     ProviderCredentialTokenGrantAudienceOverride, ProviderCredentialTokenGrantType,
-    ProviderProfile, ProviderProfileCredential, Sandbox, StaticCredentialBinding,
+    ProviderProfile, ProviderProfileCredential, StaticCredentialBinding,
     StaticCredentialEndpointBinding,
 };
 use openshell_core::telemetry::{
@@ -36,6 +36,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use tonic::Status;
 use tracing::warn;
+
+use crate::storage_proto::StoredSandbox as Sandbox;
 
 use super::validation::{validate_provider_fields, validate_provider_mutable_fields};
 use super::{MAX_MAP_KEY_LEN, MAX_MAP_VALUE_LEN, MAX_PROVIDER_CONFIG_ENTRIES};
@@ -2799,7 +2801,7 @@ pub(super) async fn handle_import_provider_profiles(
 
     let mut imported = Vec::with_capacity(profiles.len());
     for (_, profile) in profiles {
-        let mut stored = stored_provider_profile_for_workspace(profile.to_proto(), &workspace);
+        let mut stored = stored_provider_profile_for_workspace(profile.to_proto(), &workspace)?;
         let profile_labels = stored.object_labels();
         let profile_labels_json = if profile_labels.as_ref().is_none_or(HashMap::is_empty) {
             None
@@ -2816,9 +2818,7 @@ pub(super) async fn handle_import_provider_profiles(
                 stored.object_id(),
                 stored.object_name(),
                 &workspace,
-                &crate::storage_proto::encode_provider_profile(&stored).map_err(|error| {
-                    Status::internal(format!("encode provider profile failed: {error}"))
-                })?,
+                &stored.encode_to_vec(),
                 profile_labels_json.as_deref(),
                 WriteCondition::MustCreate,
             )
@@ -2832,7 +2832,7 @@ pub(super) async fn handle_import_provider_profiles(
         imported.push(profile_response_payload(
             stored.profile.unwrap_or_default(),
             resource_version,
-        ));
+        )?);
     }
 
     Ok(Response::new(ImportProviderProfilesResponse {
@@ -2937,7 +2937,7 @@ pub(super) async fn handle_update_provider_profiles(
         )));
     }
 
-    stored.profile = Some(profile_storage_payload(profile.to_proto()));
+    stored.profile = Some(profile_storage_payload(profile.to_proto())?);
     let labels_json = stored
         .object_labels()
         .filter(|labels| !labels.is_empty())
@@ -2953,9 +2953,7 @@ pub(super) async fn handle_update_provider_profiles(
             stored.object_id(),
             stored.object_name(),
             &workspace,
-            &crate::storage_proto::encode_provider_profile(&stored).map_err(|error| {
-                Status::internal(format!("encode provider profile failed: {error}"))
-            })?,
+            &stored.encode_to_vec(),
             labels_json.as_deref(),
             WriteCondition::MatchResourceVersion(expected_resource_version),
         )
@@ -2966,7 +2964,7 @@ pub(super) async fn handle_update_provider_profiles(
     }
     replay_facts.resource(&stored)?;
     let resource_version = stored_profile_resource_version(&stored);
-    let profile = profile_response_payload(stored.profile.unwrap_or_default(), resource_version);
+    let profile = profile_response_payload(stored.profile.unwrap_or_default(), resource_version)?;
 
     Ok(Response::new(UpdateProviderProfilesResponse {
         diagnostics: Vec::new(),
@@ -3143,7 +3141,8 @@ pub(super) async fn get_provider_type_profile(
         if let Some(profile) = sp.profile.as_ref()
             && normalize_profile_id(&profile.id) == id_norm
         {
-            return Ok(Some(ProviderTypeProfile::from_proto(profile)));
+            let profile = crate::storage_proto::provider_profile_to_public(profile)?;
+            return Ok(Some(ProviderTypeProfile::from_proto(&profile)));
         }
     }
     // Fall back to builtin profiles (workspace-agnostic).
@@ -3776,11 +3775,11 @@ async fn profile_attached_sandbox_diagnostics(
 fn stored_provider_profile_for_workspace(
     profile: ProviderProfile,
     workspace: &str,
-) -> StoredProviderProfile {
+) -> Result<StoredProviderProfile, Status> {
     use crate::persistence::current_time_ms;
     let now_ms = current_time_ms();
-    let profile = profile_storage_payload(profile);
-    StoredProviderProfile {
+    let profile = profile_storage_payload(profile)?;
+    Ok(StoredProviderProfile {
         metadata: Some(openshell_core::proto::datamodel::v1::ObjectMeta {
             id: uuid::Uuid::new_v4().to_string(),
             name: profile.id.clone(),
@@ -3792,12 +3791,12 @@ fn stored_provider_profile_for_workspace(
             deletion_time: None,
         }),
         profile: Some(profile),
-    }
+    })
 }
 
 #[cfg(test)]
 fn stored_provider_profile(profile: ProviderProfile) -> StoredProviderProfile {
-    stored_provider_profile_for_workspace(profile, "default")
+    stored_provider_profile_for_workspace(profile, "default").unwrap()
 }
 
 fn proto_diagnostic(diagnostic: ProfileValidationDiagnostic) -> ProviderProfileDiagnostic {
@@ -5129,6 +5128,7 @@ mod tests {
         authed_request, test_server_state, test_server_state_without_provider_profiles,
     };
     use crate::grpc::{MAX_MAP_KEY_LEN, MAX_PROVIDER_TYPE_LEN};
+    use crate::storage_proto::{StoredSandbox as Sandbox, StoredSandboxSpec as SandboxSpec};
     use openshell_core::proto::policy::{
         L7Allow, L7Rule, NetworkBinary, NetworkEndpoint, NetworkPolicyRule,
     };
@@ -5160,7 +5160,7 @@ mod tests {
         ProviderCredentialTokenGrantAudienceOverride, ProviderCredentialTokenGrantSubjectToken,
         ProviderCredentialTokenGrantType, ProviderProfile, ProviderProfileCategory,
         ProviderProfileCredential, ProviderProfileImportItem, RotateProviderCredentialRequest,
-        Sandbox, SandboxSpec, UpdateProviderProfilesRequest, UpdateProviderRequest,
+        UpdateProviderProfilesRequest, UpdateProviderRequest,
     };
     use openshell_core::{ObjectId, ObjectName};
     use tonic::{Code, Request};
@@ -6637,22 +6637,27 @@ mod tests {
                 }),
                 spec: Some(SandboxSpec {
                     providers: vec!["fanout-provider".to_string()],
-                    policy: Some(openshell_core::proto::policy::PolicyDocument {
-                        version: 1,
-                        network_policies: HashMap::from([(
-                            "base".to_string(),
-                            NetworkPolicyRule {
-                                name: "base".to_string(),
-                                endpoints: vec![NetworkEndpoint {
-                                    host: "api.example.com".to_string(),
-                                    ports: vec![443],
-                                    ..Default::default()
-                                }],
+                    policy: Some(
+                        openshell_policy::lower_authored_policy(
+                            openshell_core::proto::policy::PolicyDocument {
+                                version: 1,
+                                network_policies: HashMap::from([(
+                                    "base".to_string(),
+                                    NetworkPolicyRule {
+                                        name: "base".to_string(),
+                                        endpoints: vec![NetworkEndpoint {
+                                            host: "api.example.com".to_string(),
+                                            ports: vec![443],
+                                            ..Default::default()
+                                        }],
+                                        ..Default::default()
+                                    },
+                                )]),
                                 ..Default::default()
                             },
-                        )]),
-                        ..Default::default()
-                    }),
+                        )
+                        .unwrap(),
+                    ),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -7258,10 +7263,10 @@ mod tests {
         let state = test_server_state().await;
         state
             .store
-            .put_message(&stored_provider_profile_for_workspace(
-                custom_profile("global-custom"),
-                "",
-            ))
+            .put_message(
+                &stored_provider_profile_for_workspace(custom_profile("global-custom"), "")
+                    .unwrap(),
+            )
             .await
             .unwrap();
         let catalog = state
@@ -9414,12 +9419,7 @@ mod tests {
                     spec: Some(SandboxSpec {
                         providers: vec!["openai-local".to_string()],
                         provider_attachment_epoch: attachment_epoch.clone(),
-                        policy: Some(
-                            openshell_policy::project_base_policy(
-                                &openshell_policy::restrictive_default_policy(),
-                            )
-                            .unwrap(),
-                        ),
+                        policy: Some(openshell_policy::restrictive_default_policy()),
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -12691,7 +12691,7 @@ mod tests {
 
     #[tokio::test]
     async fn handler_flow_resolves_credentials_from_sandbox_providers() {
-        use openshell_core::proto::{Sandbox, SandboxPhase, SandboxSpec};
+        use openshell_core::proto::SandboxPhase;
 
         let store = test_store().await;
 
@@ -12760,7 +12760,7 @@ mod tests {
 
     #[tokio::test]
     async fn handler_flow_returns_empty_when_no_providers() {
-        use openshell_core::proto::{Sandbox, SandboxPhase, SandboxSpec};
+        use openshell_core::proto::SandboxPhase;
 
         let store = test_store().await;
 
@@ -12797,8 +12797,6 @@ mod tests {
 
     #[tokio::test]
     async fn handler_flow_returns_none_for_unknown_sandbox() {
-        use openshell_core::proto::Sandbox;
-
         let store = test_store().await;
         let result = store.get_message::<Sandbox>("nonexistent").await.unwrap();
         assert!(result.is_none());
@@ -14853,14 +14851,15 @@ mod tests {
         use crate::persistence::{ObjectName, WriteCondition};
         let store = test_store().await;
 
-        let stored = stored_provider_profile_for_workspace(custom_profile("global-custom"), "");
+        let stored =
+            stored_provider_profile_for_workspace(custom_profile("global-custom"), "").unwrap();
         store
             .put_if(
                 StoredProviderProfile::object_type(),
                 stored.object_id(),
                 stored.object_name(),
                 "",
-                &crate::storage_proto::encode_provider_profile(&stored).unwrap(),
+                &stored.encode_to_vec(),
                 None,
                 WriteCondition::MustCreate,
             )

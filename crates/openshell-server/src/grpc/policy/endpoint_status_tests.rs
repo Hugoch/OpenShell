@@ -233,7 +233,14 @@ async fn unchanged_policy_revision_preserves_endpoint_evidence() {
         &state,
         authed_request(UpdateConfigRequest {
             sandbox: sandbox_id.to_string(),
-            policy: sandbox.spec.expect("sandbox spec").policy,
+            policy: sandbox
+                .spec
+                .expect("sandbox spec")
+                .policy
+                .as_ref()
+                .map(openshell_policy::project_base_policy)
+                .transpose()
+                .unwrap(),
             annotations: HashMap::from([("audit".to_string(), "v2".to_string())]),
             workspace_scope: Some(openshell_core::proto::workspace_selector(
                 "default".to_string(),
@@ -278,8 +285,7 @@ async fn loaded_policy_comparison_uses_one_provider_profile_snapshot() {
         .expect("sandbox spec")
         .policy
         .expect("sandbox policy");
-    let internal_policy =
-        openshell_policy::lower_authored_policy(policy).expect("stored public policy must lower");
+    let internal_policy = policy;
     state
         .store
         .put_policy_revision(
@@ -350,7 +356,7 @@ async fn loaded_policy_hash_cycle_resets_endpoint_evidence() {
             &state,
             authed_request(UpdateConfigRequest {
                 sandbox: sandbox_id.to_string(),
-                policy: Some(policy),
+                policy: Some(openshell_policy::project_base_policy(&policy).unwrap()),
                 workspace_scope: Some(openshell_core::proto::workspace_selector(
                     "default".to_string(),
                 )),

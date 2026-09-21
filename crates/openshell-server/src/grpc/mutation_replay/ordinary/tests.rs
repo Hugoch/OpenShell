@@ -536,7 +536,7 @@ async fn provider_replay_preserves_receipts_after_attachment_changes() {
     .into_inner();
     let sandbox = Sandbox {
         metadata: Some(meta("receipt-sandbox")),
-        spec: Some(SandboxSpec::default()),
+        spec: Some(crate::storage_proto::StoredSandboxSpec::default()),
         ..Default::default()
     };
     state.store.put_message(&sandbox).await.unwrap();
@@ -1005,11 +1005,14 @@ async fn draft_receipts_replay_after_chunk_state_and_review_tokens_change() {
     let name = "draft-parent";
     let sandbox = Sandbox {
         metadata: Some(meta(name)),
-        spec: Some(SandboxSpec {
-            policy: Some(PolicyDocument {
-                version: 1,
-                ..Default::default()
-            }),
+        spec: Some(crate::storage_proto::StoredSandboxSpec {
+            policy: Some(
+                policy::lower_public_policy(PolicyDocument {
+                    version: 1,
+                    ..Default::default()
+                })
+                .unwrap(),
+            ),
             ..Default::default()
         }),
         ..Default::default()

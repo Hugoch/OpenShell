@@ -15,9 +15,8 @@ use uuid::Uuid;
 
 use openshell_core::proto::{
     GatewayMessage, ProviderReadinessObservation, RelayFrame, RelayInit, RelayOpen,
-    ReportMainProcessExitRequest, ReportMainProcessExitResponse, Sandbox, SandboxPhase,
-    SessionAccepted, SshRelayTarget, SupervisorMessage, gateway_message, relay_open,
-    supervisor_message,
+    ReportMainProcessExitRequest, ReportMainProcessExitResponse, SandboxPhase, SessionAccepted,
+    SshRelayTarget, SupervisorMessage, gateway_message, relay_open, supervisor_message,
 };
 use openshell_core::transport_errors::is_expected_transport_close_status;
 
@@ -25,6 +24,7 @@ use crate::ServerState;
 use crate::auth::principal::Principal;
 use crate::grpc::provider_readiness::ProviderReadinessEvidence;
 use crate::persistence::ObjectId;
+use crate::storage_proto::StoredSandbox as Sandbox;
 
 const HEARTBEAT_INTERVAL_SECS: u32 = 15;
 const RELAY_PENDING_TIMEOUT: Duration = Duration::from_secs(10);

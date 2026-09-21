@@ -44,8 +44,10 @@ parameter names are open user-data maps rather than schema extensions.
 The generated `openshell.policy.v1` package is the language-neutral authored
 contract used by policy inputs and curated SDK policy surfaces. The gateway
 lowers that message at ingress into the internal `openshell.sandbox.v1` runtime
-policy and projects stored or effective runtime policy back to the public
-message at authored API boundaries. Compute drivers, the supervisor, policy
+policy and retains that working type through persistence, compute, and policy
+composition. Durable sandbox and provider-profile messages are direct Prost
+encodings; response builders project stored or effective runtime policy back
+to the public message at authored API boundaries. Compute drivers, the supervisor, policy
 history payloads, and merge execution continue to use the internal
 representation. `GetSandboxConfig` is also the authenticated supervisor's
 configuration RPC, so its wire response necessarily carries the effective
@@ -57,8 +59,11 @@ reserved in the authored endpoint message.
 Existing policy revision rows, sandbox records, and provider-profile records
 remain internal and retain their current wire encoding. The gateway uses
 private storage envelopes whose field numbers mirror the historical records,
-then projects their policy fields to the public schema on read. No clean
-database or policy-data migration is required for this boundary. Mixed-version
+then projects their policy fields only while constructing public responses. A
+sandbox whose legacy policy cannot be projected remains listable and deletable;
+its public policy is omitted and its status carries a `PolicyProjection=False`
+condition, while policy-specific reads fail closed. No clean database or
+policy-data migration is required for this boundary. Mixed-version
 gateway rollouts remain unsupported because the public RPC contract changes.
 
 Policy YAML uses the public protobuf field shape directly. The schema crate

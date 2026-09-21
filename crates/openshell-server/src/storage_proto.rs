@@ -20,173 +20,173 @@ pub(crate) const STORAGE_FILE_DESCRIPTOR_SET: &[u8] =
 
 use openshell_core::proto::{
     ProviderProfile, ProviderProfileCredential, ProviderProfileDiscovery, ResourceRequirements,
-    Sandbox, SandboxSpec, SandboxStatus, SandboxTemplate, SandboxWorkloadTemplateProvenance,
+    Sandbox, SandboxCondition, SandboxSpec, SandboxStatus, SandboxTemplate,
+    SandboxWorkloadTemplateProvenance,
 };
 use openshell_core::{
     GetResourceVersion, ObjectId, ObjectLabels, ObjectName, ObjectWorkspace, SetResourceVersion,
 };
 use prost::Message;
 use std::collections::HashMap;
+use tonic::Status;
+use tracing::warn;
 
-pub(crate) fn encode_sandbox(sandbox: &Sandbox) -> Result<Vec<u8>, String> {
-    let spec = sandbox
-        .spec
-        .as_ref()
-        .map(|spec| -> Result<StoredSandboxSpec, String> {
-            Ok(StoredSandboxSpec {
-                log_level: spec.log_level.clone(),
-                environment: spec.environment.clone(),
-                template: spec.template.clone(),
-                policy: spec
-                    .policy
-                    .clone()
-                    .map(openshell_policy::lower_authored_policy)
-                    .transpose()
-                    .map_err(|error| error.to_string())?,
-                providers: spec.providers.clone(),
-                resource_requirements: spec.resource_requirements.clone(),
-                command: spec.command.clone(),
-                tty: spec.tty,
-                provider_attachment_epoch: spec.provider_attachment_epoch.clone(),
+use crate::persistence::ObjectType;
+
+pub(crate) fn sandbox_spec_from_public(spec: SandboxSpec) -> Result<StoredSandboxSpec, Status> {
+    Ok(StoredSandboxSpec {
+        log_level: spec.log_level,
+        environment: spec.environment,
+        template: spec.template,
+        policy: spec
+            .policy
+            .map(|policy| {
+                openshell_policy::lower_authored_policy(policy)
+                    .map_err(|error| Status::invalid_argument(error.to_string()))
             })
-        })
-        .transpose()?;
+            .transpose()?,
+        providers: spec.providers,
+        resource_requirements: spec.resource_requirements,
+        command: spec.command,
+        tty: spec.tty,
+        provider_attachment_epoch: spec.provider_attachment_epoch,
+    })
+}
 
-    Ok(StoredSandbox {
+/// Build the public resource at the RPC boundary.
+///
+/// A legacy or corrupt policy must not hide the sandbox itself. Callers can
+/// still inspect and delete the resource, while policy-specific reads retain
+/// their stricter validation path.
+pub(crate) fn sandbox_to_public(sandbox: &StoredSandbox) -> Sandbox {
+    let mut status = sandbox.status.clone();
+    let spec = sandbox.spec.as_ref().map(|spec| {
+        let policy = spec.policy.as_ref().and_then(|policy| {
+            match openshell_policy::project_base_policy(policy) {
+                Ok(projected) => Some(projected),
+                Err(error) => {
+                    warn!(
+                        sandbox.id = %sandbox.object_id(),
+                        sandbox.name = %sandbox.object_name(),
+                        error = %error,
+                        "stored sandbox policy could not be projected to the public API"
+                    );
+                    let condition = SandboxCondition {
+                        r#type: "PolicyProjection".to_string(),
+                        status: "False".to_string(),
+                        reason: "InvalidStoredPolicy".to_string(),
+                        message: error.to_string(),
+                        ..Default::default()
+                    };
+                    let public_status = status.get_or_insert_with(SandboxStatus::default);
+                    public_status
+                        .conditions
+                        .retain(|existing| existing.r#type != condition.r#type);
+                    public_status.conditions.push(condition);
+                    None
+                }
+            }
+        });
+        SandboxSpec {
+            log_level: spec.log_level.clone(),
+            environment: spec.environment.clone(),
+            template: spec.template.clone(),
+            policy,
+            providers: spec.providers.clone(),
+            resource_requirements: spec.resource_requirements.clone(),
+            command: spec.command.clone(),
+            tty: spec.tty,
+            provider_attachment_epoch: spec.provider_attachment_epoch.clone(),
+        }
+    });
+
+    Sandbox {
         metadata: sandbox.metadata.clone(),
         spec,
-        status: sandbox.status.clone(),
+        status,
         created_from_workload_template: sandbox.created_from_workload_template.clone(),
     }
-    .encode_to_vec())
 }
 
-pub(crate) fn decode_sandbox(payload: &[u8]) -> Result<Sandbox, String> {
-    let stored = StoredSandbox::decode(payload).map_err(|error| error.to_string())?;
-    let spec = stored
-        .spec
-        .map(|spec| -> Result<SandboxSpec, String> {
-            Ok(SandboxSpec {
-                log_level: spec.log_level,
-                environment: spec.environment,
-                template: spec.template,
-                policy: spec
-                    .policy
-                    .as_ref()
-                    .map(openshell_policy::project_base_policy)
-                    .transpose()
-                    .map_err(|error| error.to_string())?,
-                providers: spec.providers,
-                resource_requirements: spec.resource_requirements,
-                command: spec.command,
-                tty: spec.tty,
-                provider_attachment_epoch: spec.provider_attachment_epoch,
-            })
-        })
-        .transpose()?;
-
-    Ok(Sandbox {
-        metadata: stored.metadata,
-        spec,
-        status: stored.status,
-        created_from_workload_template: stored.created_from_workload_template,
+pub(crate) fn provider_profile_from_public(
+    profile: &ProviderProfile,
+) -> Result<StoredProviderProfileData, Status> {
+    let rule = openshell_policy::lower_authored_rule(
+        "provider-profile",
+        openshell_core::proto::policy::NetworkPolicyRule {
+            name: "provider-profile".to_string(),
+            endpoints: profile.endpoints.clone(),
+            binaries: profile.binaries.clone(),
+        },
+    )
+    .map_err(|error| {
+        Status::invalid_argument(format!("invalid provider profile policy: {error}"))
+    })?;
+    Ok(StoredProviderProfileData {
+        id: profile.id.clone(),
+        display_name: profile.display_name.clone(),
+        description: profile.description.clone(),
+        category: profile.category,
+        credentials: profile.credentials.clone(),
+        endpoints: rule.endpoints,
+        binaries: rule.binaries,
+        inference_capable: profile.inference_capable,
+        discovery: profile.discovery.clone(),
+        resource_version: profile.resource_version,
+        annotations: profile.annotations.clone(),
+        source: profile.source.clone(),
+        scope: profile.scope.clone(),
     })
 }
 
-pub(crate) fn encode_provider_profile(stored: &StoredProviderProfile) -> Result<Vec<u8>, String> {
-    let profile = stored
-        .profile
-        .as_ref()
-        .map(|profile| -> Result<StoredProviderProfileData, String> {
-            let rule = openshell_policy::lower_authored_rule(
-                "provider-profile",
-                openshell_core::proto::policy::NetworkPolicyRule {
-                    name: "provider-profile".to_string(),
-                    endpoints: profile.endpoints.clone(),
-                    binaries: profile.binaries.clone(),
-                },
-            )
-            .map_err(|error| error.to_string())?;
-            Ok(StoredProviderProfileData {
-                id: profile.id.clone(),
-                display_name: profile.display_name.clone(),
-                description: profile.description.clone(),
-                category: profile.category,
-                credentials: profile.credentials.clone(),
-                endpoints: rule.endpoints,
-                binaries: rule.binaries,
-                inference_capable: profile.inference_capable,
-                discovery: profile.discovery.clone(),
-                resource_version: profile.resource_version,
-                annotations: profile.annotations.clone(),
-                source: profile.source.clone(),
-                scope: profile.scope.clone(),
-            })
-        })
-        .transpose()?;
-    Ok(StoredProviderProfileWire {
-        metadata: stored.metadata.clone(),
-        profile,
-    }
-    .encode_to_vec())
-}
-
-pub(crate) fn decode_provider_profile(payload: &[u8]) -> Result<StoredProviderProfile, String> {
-    let stored = StoredProviderProfileWire::decode(payload).map_err(|error| error.to_string())?;
-    let profile = stored
-        .profile
-        .map(|profile| -> Result<ProviderProfile, String> {
-            let rule = openshell_policy::project_authored_rule(
-                "provider-profile",
-                &openshell_core::proto::NetworkPolicyRule {
-                    name: "provider-profile".to_string(),
-                    endpoints: profile.endpoints,
-                    binaries: profile.binaries,
-                },
-            )
-            .map_err(|error| error.to_string())?;
-            Ok(ProviderProfile {
-                id: profile.id,
-                display_name: profile.display_name,
-                description: profile.description,
-                category: profile.category,
-                credentials: profile.credentials,
-                endpoints: rule.endpoints,
-                binaries: rule.binaries,
-                inference_capable: profile.inference_capable,
-                discovery: profile.discovery,
-                resource_version: profile.resource_version,
-                annotations: profile.annotations,
-                source: profile.source,
-                scope: profile.scope,
-            })
-        })
-        .transpose()?;
-    Ok(StoredProviderProfile {
-        metadata: stored.metadata,
-        profile,
+pub(crate) fn provider_profile_to_public(
+    profile: &StoredProviderProfileData,
+) -> Result<ProviderProfile, Status> {
+    let rule = openshell_policy::project_authored_rule(
+        "provider-profile",
+        &openshell_core::proto::NetworkPolicyRule {
+            name: "provider-profile".to_string(),
+            endpoints: profile.endpoints.clone(),
+            binaries: profile.binaries.clone(),
+        },
+    )
+    .map_err(|error| Status::internal(format!("stored provider profile is invalid: {error}")))?;
+    Ok(ProviderProfile {
+        id: profile.id.clone(),
+        display_name: profile.display_name.clone(),
+        description: profile.description.clone(),
+        category: profile.category,
+        credentials: profile.credentials.clone(),
+        endpoints: rule.endpoints,
+        binaries: rule.binaries,
+        inference_capable: profile.inference_capable,
+        discovery: profile.discovery.clone(),
+        resource_version: profile.resource_version,
+        annotations: profile.annotations.clone(),
+        source: profile.source.clone(),
+        scope: profile.scope.clone(),
     })
 }
 
-impl ObjectId for StoredProviderProfile {
+impl ObjectId for StoredProviderProfileWire {
     fn object_id(&self) -> &str {
         self.metadata.as_ref().map_or("", |m| m.id.as_str())
     }
 }
 
-impl ObjectName for StoredProviderProfile {
+impl ObjectName for StoredProviderProfileWire {
     fn object_name(&self) -> &str {
         self.metadata.as_ref().map_or("", |m| m.name.as_str())
     }
 }
 
-impl ObjectLabels for StoredProviderProfile {
+impl ObjectLabels for StoredProviderProfileWire {
     fn object_labels(&self) -> Option<HashMap<String, String>> {
         self.metadata.as_ref().map(|m| m.labels.clone())
     }
 }
 
-impl SetResourceVersion for StoredProviderProfile {
+impl SetResourceVersion for StoredProviderProfileWire {
     fn set_resource_version(&mut self, version: u64) {
         if let Some(meta) = self.metadata.as_mut() {
             meta.resource_version = version;
@@ -194,19 +194,95 @@ impl SetResourceVersion for StoredProviderProfile {
     }
 }
 
-impl GetResourceVersion for StoredProviderProfile {
+impl GetResourceVersion for StoredProviderProfileWire {
     fn get_resource_version(&self) -> u64 {
         self.metadata.as_ref().map_or(0, |m| m.resource_version)
     }
 }
 
-impl ObjectWorkspace for StoredProviderProfile {
+impl ObjectWorkspace for StoredProviderProfileWire {
     fn object_workspace(&self) -> &str {
         self.metadata.as_ref().map_or("", |m| m.workspace.as_str())
     }
 
     fn requires_workspace() -> bool {
         false
+    }
+}
+
+impl ObjectType for StoredProviderProfileWire {
+    fn object_type() -> &'static str {
+        "provider_profile"
+    }
+}
+
+impl ObjectId for StoredSandbox {
+    fn object_id(&self) -> &str {
+        self.metadata.as_ref().map_or("", |m| m.id.as_str())
+    }
+}
+
+impl ObjectName for StoredSandbox {
+    fn object_name(&self) -> &str {
+        self.metadata.as_ref().map_or("", |m| m.name.as_str())
+    }
+}
+
+impl ObjectLabels for StoredSandbox {
+    fn object_labels(&self) -> Option<HashMap<String, String>> {
+        self.metadata.as_ref().map(|m| m.labels.clone())
+    }
+}
+
+impl SetResourceVersion for StoredSandbox {
+    fn set_resource_version(&mut self, version: u64) {
+        if let Some(meta) = self.metadata.as_mut() {
+            meta.resource_version = version;
+        }
+    }
+}
+
+impl GetResourceVersion for StoredSandbox {
+    fn get_resource_version(&self) -> u64 {
+        self.metadata.as_ref().map_or(0, |m| m.resource_version)
+    }
+}
+
+impl ObjectWorkspace for StoredSandbox {
+    fn object_workspace(&self) -> &str {
+        self.metadata.as_ref().map_or("", |m| m.workspace.as_str())
+    }
+
+    fn requires_workspace() -> bool {
+        true
+    }
+}
+
+impl ObjectType for StoredSandbox {
+    fn object_type() -> &'static str {
+        "sandbox"
+    }
+}
+
+impl StoredSandbox {
+    pub(crate) fn phase(&self) -> i32 {
+        self.status.as_ref().map_or(0, |status| status.phase)
+    }
+
+    pub(crate) fn set_phase(&mut self, phase: i32) {
+        self.status.get_or_insert_with(SandboxStatus::default).phase = phase;
+    }
+
+    pub(crate) fn current_policy_version(&self) -> u32 {
+        self.status
+            .as_ref()
+            .map_or(0, |status| status.current_policy_version)
+    }
+
+    pub(crate) fn set_current_policy_version(&mut self, version: u32) {
+        self.status
+            .get_or_insert_with(SandboxStatus::default)
+            .current_policy_version = version;
     }
 }
 
@@ -749,11 +825,11 @@ mod tests {
 
     #[test]
     fn pre_admission_sandbox_bytes_preserve_legacy_status() {
-        use openshell_core::proto::{Sandbox, SandboxPhase};
+        use openshell_core::proto::SandboxPhase;
         // Synthetic Sandbox encoded with main 0357daee, before admission fields.
         let bytes =
             legacy_bytes("0a180a096c65676163792d6964120b6c65676163792d6e616d651a0430023807");
-        let sandbox = Sandbox::decode(bytes.as_slice()).unwrap();
+        let sandbox = StoredSandbox::decode(bytes.as_slice()).unwrap();
         let status = sandbox.status.as_ref().unwrap();
         assert_eq!(status.phase, SandboxPhase::Ready as i32);
         assert_eq!(status.current_policy_version, 7);
@@ -866,24 +942,24 @@ network_policies:
 "#,
         )
         .unwrap();
-        let sandbox = Sandbox {
-            spec: Some(SandboxSpec {
-                policy: Some(policy.clone()),
+        let sandbox = StoredSandbox {
+            spec: Some(StoredSandboxSpec {
+                policy: Some(openshell_policy::lower_authored_policy(policy.clone()).unwrap()),
                 ..Default::default()
             }),
             ..Default::default()
         };
 
-        let payload = encode_sandbox(&sandbox).unwrap();
+        let payload = sandbox.encode_to_vec();
         let stored = StoredSandbox::decode(payload.as_slice()).unwrap();
-        let internal = stored.spec.unwrap().policy.unwrap();
+        let internal = stored.spec.as_ref().unwrap().policy.as_ref().unwrap();
         assert!(internal.network_policies["mcp"].endpoints[0].mcp.is_some());
         assert!(
             Sandbox::decode(payload.as_slice()).is_err(),
             "the private durable envelope must not be decoded as the public API message"
         );
 
-        let decoded = decode_sandbox(&payload).unwrap();
+        let decoded = sandbox_to_public(&stored);
         let decoded_policy = decoded.spec.unwrap().policy.unwrap();
         assert_eq!(
             decoded_policy.network_policies["mcp"].endpoints[0].enforcement,
@@ -918,7 +994,8 @@ network_policies:
         }
         .encode_to_vec();
 
-        let mut sandbox = decode_sandbox(&payload).expect("legacy sandbox should decode");
+        let mut sandbox =
+            StoredSandbox::decode(payload.as_slice()).expect("legacy sandbox should decode");
         assert_eq!(
             sandbox
                 .spec
@@ -930,18 +1007,18 @@ network_policies:
                 .network_policies["legacy"]
                 .endpoints[0]
                 .ports,
-            [443]
+            [443, 443]
         );
         sandbox.status = Some(SandboxStatus {
             phase: SandboxPhase::Ready as i32,
             ..Default::default()
         });
 
-        let rewritten = encode_sandbox(&sandbox).expect("status-only rewrite should encode");
+        let rewritten = sandbox.encode_to_vec();
         let stored = StoredSandbox::decode(rewritten.as_slice()).unwrap();
         assert_eq!(
             stored.spec.unwrap().policy.unwrap().network_policies["legacy"].endpoints[0].ports,
-            [443]
+            [443, 443]
         );
     }
 
@@ -967,24 +1044,26 @@ network_policies:
         )
         .unwrap();
         let authored_rule = policy.network_policies["profile"].clone();
-        let stored = StoredProviderProfile {
-            profile: Some(ProviderProfile {
-                id: "profile".to_string(),
-                display_name: "Profile".to_string(),
-                endpoints: authored_rule.endpoints.clone(),
-                binaries: authored_rule.binaries.clone(),
-                ..Default::default()
-            }),
+        let stored = StoredProviderProfileWire {
+            profile: Some(
+                provider_profile_from_public(&ProviderProfile {
+                    id: "profile".to_string(),
+                    display_name: "Profile".to_string(),
+                    endpoints: authored_rule.endpoints.clone(),
+                    binaries: authored_rule.binaries.clone(),
+                    ..Default::default()
+                })
+                .unwrap(),
+            ),
             ..Default::default()
         };
 
-        let payload = encode_provider_profile(&stored).unwrap();
+        let payload = stored.encode_to_vec();
         let wire = StoredProviderProfileWire::decode(payload.as_slice()).unwrap();
         let internal = wire.profile.unwrap();
         assert!(internal.endpoints[0].mcp.is_some());
 
-        let decoded = decode_provider_profile(&payload).unwrap();
-        let profile = decoded.profile.unwrap();
+        let profile = provider_profile_to_public(stored.profile.as_ref().unwrap()).unwrap();
         let decoded_rule = openshell_core::proto::policy::NetworkPolicyRule {
             name: authored_rule.name.clone(),
             endpoints: profile.endpoints,
@@ -1009,12 +1088,17 @@ network_policies:
         }
         .encode_to_vec();
 
-        let profile = decode_provider_profile(&payload).expect("legacy profile should decode");
-        assert_eq!(profile.profile.as_ref().unwrap().endpoints[0].ports, [443]);
+        let mut profile = StoredProviderProfileWire::decode(payload.as_slice())
+            .expect("legacy profile should decode");
+        assert_eq!(
+            profile.profile.as_ref().unwrap().endpoints[0].ports,
+            [443, 443]
+        );
 
-        let rewritten = encode_provider_profile(&profile).expect("profile rewrite should encode");
+        profile.metadata = Some(Default::default());
+        let rewritten = profile.encode_to_vec();
         let stored = StoredProviderProfileWire::decode(rewritten.as_slice()).unwrap();
-        assert_eq!(stored.profile.unwrap().endpoints[0].ports, [443]);
+        assert_eq!(stored.profile.unwrap().endpoints[0].ports, [443, 443]);
     }
 
     #[test]
@@ -1044,7 +1128,7 @@ network_policies:
         assert_eq!(deletion.material_key, "old");
         assert_eq!(deletion.handle.expect("handle").driver, "test");
 
-        let profile = decode_provider_profile(legacy_bytes(V0_0_116_PROFILE).as_slice())
+        let profile = StoredProviderProfileWire::decode(legacy_bytes(V0_0_116_PROFILE).as_slice())
             .expect("legacy provider profile must decode");
         let profile = profile.profile.expect("profile");
         assert_eq!(profile.id, "profile");
@@ -1191,7 +1275,7 @@ network_policies:
         assert_eq!(refresh.get_resource_version(), 1);
 
         let profile = current_store
-            .get_message::<StoredProviderProfile>("legacy-profile-id")
+            .get_message::<StoredProviderProfileWire>("legacy-profile-id")
             .await
             .expect("decode profile fixture")
             .expect("profile fixture must remain present");
