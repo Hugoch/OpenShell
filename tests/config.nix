@@ -102,6 +102,17 @@ let
           openshell_sandbox_image = "../artifacts/images/openshell-sandbox-tmachine.tar";
         };
       }
+      {
+        name = "deb-upgrade-source";
+        use_galaxy = false;
+        playbooks = [ "ansible/playbooks/openshell-deb-upgrade-source.yaml" ];
+        inputs = {
+          openshell_deb = "../artifacts/upgrade/source/openshell.deb";
+          openshell_upgrade_source_version = "../artifacts/upgrade/source/version";
+          openshell_supervisor_image = "../artifacts/upgrade/source/openshell-supervisor-tmachine.tar";
+          openshell_sandbox_image = "../artifacts/upgrade/source/openshell-sandbox-tmachine.tar";
+        };
+      }
     ];
 
     testsuites = [
@@ -124,6 +135,15 @@ let
         inputs = {
           keycloak_realm_file = "../scripts/keycloak-realm.json";
           provider_refresh_keycloak_test_bundle = "../artifacts/test-archives/${muslTarget}/provider-refresh-keycloak-tests.tar";
+        };
+      }
+      {
+        name = "deb-upgrade";
+        playbooks = [ "ansible/playbooks/upgrade/deb.yaml" ];
+        inputs = {
+          openshell_deb = "../artifacts/packages/openshell.deb";
+          openshell_supervisor_image = "../artifacts/images/openshell-supervisor-tmachine.tar";
+          openshell_sandbox_image = "../artifacts/images/openshell-sandbox-tmachine.tar";
         };
       }
     ];
