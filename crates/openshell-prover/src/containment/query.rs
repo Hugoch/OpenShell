@@ -3,7 +3,9 @@
 
 //! Exact finite abstraction of decoded REST query parameters for exact / `*`
 //! matchers. Each key has one Boolean per literal mentioned by either policy,
-//! plus one shared class for all other values. Multiple classes may be present:
+//! plus separate wildcard-matching and nonmatching classes for other values.
+//! The runtime's `glob.match(pattern, [], value)` uses `.` as a delimiter,
+//! so `*` does not match dotted values. Multiple classes may be present:
 //! runtime allow rules require ALL repeated values to match, while deny rules
 //! require ANY value to match. Multiplicity and order do not affect either rule.
 //! All-false represents an absent key. The REST parser never produces a present
@@ -45,8 +47,13 @@ pub(super) struct SymbolicQuery(BTreeMap<String, QueryKey>);
 
 struct QueryKey {
     literals: BTreeMap<String, Bool>,
-    other: Bool,
-    other_value: String,
+    // Index 0 matches `*`; index 1 does not.
+    other: [Bool; 2],
+    other_values: [String; 2],
+}
+
+fn wildcard_matches(value: &str) -> bool {
+    !value.contains('.')
 }
 
 pub(super) fn supported(rules: &QueryRules) -> bool {
@@ -63,7 +70,9 @@ pub(super) fn supported(rules: &QueryRules) -> bool {
 pub(super) fn contains(boundary: &QueryRules, candidate: &QueryRules) -> bool {
     boundary.iter().all(|(key, required)| {
         candidate.get(key).is_some_and(|proposed| {
-            required == proposed || matches!(required, QueryMatcher::Glob(value) if value == "*")
+            required == proposed
+                || (matches!(required, QueryMatcher::Glob(value) if value == "*")
+                    && matches!(proposed, QueryMatcher::Glob(value) if wildcard_matches(value)))
         })
     })
 }
@@ -110,9 +119,11 @@ impl SymbolicQuery {
                 .into_iter()
                 .enumerate()
                 .map(|(key_index, (key, values))| {
-                    let mut other_value = String::new();
-                    while values.contains(&other_value) {
-                        other_value.push('a');
+                    let mut other_values = [String::new(), ".".to_owned()];
+                    for value in &mut other_values {
+                        while values.contains(value) {
+                            value.push('a');
+                        }
                     }
                     (
                         key,
@@ -129,8 +140,10 @@ impl SymbolicQuery {
                                     )
                                 })
                                 .collect(),
-                            other: Bool::new_const(format!("{name}_query_{key_index}_other")),
-                            other_value,
+                            other: std::array::from_fn(|class| {
+                                Bool::new_const(format!("{name}_query_{key_index}_other_{class}"))
+                            }),
+                            other_values,
                         },
                     )
                 })
@@ -146,11 +159,12 @@ impl SymbolicQuery {
         let mut query = Self::new("concrete", boundary, candidate);
         for (key, classes) in &mut query.0 {
             let present = values.get(key).map_or(&[][..], Vec::as_slice);
-            classes.other = Bool::from_bool(
-                present
-                    .iter()
-                    .any(|value| !classes.literals.contains_key(value)),
-            );
+            classes.other = std::array::from_fn(|class| {
+                Bool::from_bool(present.iter().any(|value| {
+                    !classes.literals.contains_key(value)
+                        && usize::from(!wildcard_matches(value)) == class
+                }))
+            });
             for (value, flag) in &mut classes.literals {
                 *flag = Bool::from_bool(present.contains(value));
             }
@@ -168,19 +182,35 @@ impl SymbolicQuery {
                         unreachable!("query matchers must be validated before modeling")
                     };
                     if value == "*" {
-                        bool_or(
+                        let matching = bool_or(
                             classes
                                 .literals
-                                .values()
-                                .cloned()
-                                .chain([classes.other.clone()]),
-                        )
+                                .iter()
+                                .filter(|(literal, _)| wildcard_matches(literal))
+                                .map(|(_, flag)| flag.clone())
+                                .chain([classes.other[0].clone()]),
+                        );
+                        if deny {
+                            matching
+                        } else {
+                            Bool::and(&[
+                                matching,
+                                !bool_or(
+                                    classes
+                                        .literals
+                                        .iter()
+                                        .filter(|(literal, _)| !wildcard_matches(literal))
+                                        .map(|(_, flag)| flag.clone())
+                                        .chain([classes.other[1].clone()]),
+                                ),
+                            ])
+                        }
                     } else if deny {
                         classes.literals[value].clone()
                     } else {
                         Bool::and(&[
                             classes.literals[value].clone(),
-                            !classes.other.clone(),
+                            !bool_or(classes.other.iter().cloned()),
                             !bool_or(
                                 classes
                                     .literals
@@ -204,8 +234,10 @@ impl SymbolicQuery {
                     values.push(literal.clone());
                 }
             }
-            if model.eval(&classes.other, true)?.as_bool()? {
-                values.push(classes.other_value.clone());
+            for (flag, value) in classes.other.iter().zip(&classes.other_values) {
+                if model.eval(flag, true)?.as_bool()? {
+                    values.push(value.clone());
+                }
             }
             if !values.is_empty() {
                 query.insert(key.clone(), values);
@@ -221,6 +253,36 @@ mod tests {
     use regorus::{Engine, Value};
     use serde_json::json;
     use z3::ast::Ast;
+
+    #[test]
+    fn symbolic_wildcard_preserves_mixed_other_values_in_witness() {
+        let policy = super::super::parse_policy_str(
+            r#"{"version":1,"network_policies":{"n":{"endpoints":[{
+                "host":"example.com","port":443,"protocol":"rest","enforcement":"enforce",
+                "rules":[{"allow":{"method":"GET","path":"/**","query":{"q":"*"}}}]
+            }]}}}"#,
+        )
+        .unwrap();
+        let query = SymbolicQuery::new("mixed", &policy, &policy);
+        let rules = BTreeMap::from([("q".to_owned(), QueryMatcher::Glob("*".to_owned()))]);
+        let solver = z3::Solver::new();
+        solver.assert(&query.0["q"].other[0]);
+        solver.assert(&query.0["q"].other[1]);
+        solver.assert(!query.matches(&rules, false));
+        solver.assert(query.matches(&rules, true));
+        assert_eq!(solver.check(), z3::SatResult::Sat);
+        let decoded = query.decode(&solver.get_model().unwrap()).unwrap();
+        assert_eq!(decoded["q"], ["", "."]);
+        let concrete = SymbolicQuery::concrete(&policy, &policy, &decoded);
+        assert_eq!(
+            concrete.matches(&rules, false).simplify().as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            concrete.matches(&rules, true).simplify().as_bool(),
+            Some(true)
+        );
+    }
 
     #[test]
     fn decoded_query_model_matches_runtime_for_missing_and_repeated_values() {
@@ -248,6 +310,7 @@ deny := data.openshell.sandbox.deny_query_params_match(input.request, input.rule
             json!({}),
             json!({"service":"*"}),
             json!({"service":"a"}),
+            json!({"service":"a.b"}),
             json!({"service":""}),
             json!({"service":"a", "v":"2"}),
             json!({"":"*"}),
@@ -265,6 +328,12 @@ deny := data.openshell.sandbox.deny_query_params_match(input.request, input.rule
                 json!({}),
                 json!({"service":["a"]}),
                 json!({"service":["b"]}),
+                json!({"service":["a.b"]}),
+                json!({"service":["a", "a.b"]}),
+                json!({"service":["a.b", "a"]}),
+                json!({"service":["a.b", "a.b"]}),
+                json!({"service":["."]}),
+                json!({"service":["/", "a/b", "é", "\n"]}),
                 json!({"service":["a","a"]}),
                 json!({"service":["a","b"]}),
                 json!({"service":[""]}),

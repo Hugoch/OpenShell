@@ -38,6 +38,8 @@ fn check(boundary: &str, candidate: &str) -> CheckResult {
 #[test]
 fn exact_wildcard_and_required_keys() {
     for (parent, child, within) in [
+        (json!({"service":"*"}), json!({"service":"a.b"}), false),
+        (json!({"service":"*"}), json!({"service":"a/b"}), true),
         (
             json!({"service":"git-upload-pack"}),
             json!({"service":"git-upload-pack"}),
@@ -112,6 +114,11 @@ fn exact_wildcard_and_required_keys() {
 #[test]
 fn query_denies_and_allow_unions() {
     for (parent, child, within) in [
+        (
+            policy(&[json!({})], &[json!({"service":"a.b"})]),
+            policy(&[json!({})], &[json!({"service":"*"})]),
+            false,
+        ),
         (
             policy(&[json!({})], &[json!({"service":"git-receive-pack"})]),
             policy(&[json!({"service":"git-upload-pack"})], &[]),

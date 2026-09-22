@@ -99,6 +99,14 @@ fn query_counterexamples_replay_against_runtime() {
     };
     for (boundary, candidate) in [
         (
+            policy(json!({"service":"*"}), None),
+            policy(json!({"service":"a.b"}), None),
+        ),
+        (
+            policy(json!({}), Some(json!({"service":"a.b"}))),
+            policy(json!({}), Some(json!({"service":"*"}))),
+        ),
+        (
             policy(json!({"service":"git-upload-pack"}), None),
             policy(json!({"service":"git-receive-pack"}), None),
         ),
