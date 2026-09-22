@@ -719,16 +719,18 @@ impl russh::server::Handler for SshHandler {
             }
         } else if name == "sftp" {
             session.channel_success(channel)?;
-            // sftp-server speaks the SFTP binary protocol over stdin/stdout,
-            // which the boundary executor preserves as separate pipes. This enables
-            // modern scp (SFTP-based, OpenSSH 9.0+) and SFTP clients to
-            // transfer files into and out of the sandbox.
+            // The sandbox runtime implements SFTP over the boundary streams so
+            // the workload image does not need an sftp-server executable.
             self.start_exec_spec(
                 channel,
                 session.handle(),
                 openshell_isolation_interface::contract::ExecSpec {
-                    program: "/usr/lib/openssh/sftp-server".to_string(),
-                    args: vec![],
+                    program: String::new(),
+                    args: Vec::new(),
+                    shell: None,
+                    runtime_helper: Some(
+                        openshell_isolation_interface::contract::RuntimeHelper::Sftp,
+                    ),
                     env: vec![],
                     workdir: None,
                     pty: false,
@@ -892,21 +894,6 @@ impl SshHandler {
         let no_login_shell = state.no_login_shell;
         let pty = state.pty_request.take();
         let pty_requested = pty.is_some();
-        let (program, args) = command.map_or_else(
-            || {
-                if pty_requested {
-                    ("/bin/bash".to_string(), vec!["-i".to_string()])
-                } else {
-                    ("/bin/bash".to_string(), vec![])
-                }
-            },
-            |command| {
-                (
-                    "/bin/bash".to_string(),
-                    vec![login_shell_flag(no_login_shell).to_string(), command],
-                )
-            },
-        );
         let env = pty
             .as_ref()
             .map(|request| vec![("TERM".to_string(), request.term.clone())])
@@ -915,8 +902,13 @@ impl SshHandler {
             channel,
             handle,
             openshell_isolation_interface::contract::ExecSpec {
-                program,
-                args,
+                program: String::new(),
+                args: Vec::new(),
+                shell: Some(openshell_isolation_interface::contract::ShellSpec {
+                    command,
+                    login: !no_login_shell,
+                }),
+                runtime_helper: None,
                 env,
                 workdir: None,
                 pty: pty_requested,
@@ -1078,10 +1070,6 @@ async fn send_main_output(handle: &Handle, channel: ChannelId, event: MainOutput
             eof && status && close
         }
     }
-}
-
-const fn login_shell_flag(no_login_shell: bool) -> &'static str {
-    if no_login_shell { "-c" } else { "-lc" }
 }
 
 #[allow(dead_code)]

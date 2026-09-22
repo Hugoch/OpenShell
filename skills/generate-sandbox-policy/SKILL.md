@@ -171,7 +171,7 @@ Key sections to reference:
 
 When middleware is requested, also read the published [supervisor middleware guide](https://docs.nvidia.com/openshell/latest/extensibility/supervisor-middleware.md).
 
-For enforcement concepts and the shipped baseline, read [sandbox policies](https://docs.nvidia.com/openshell/latest/sandboxes/policies.md) and the [default policy reference](https://docs.nvidia.com/openshell/latest/reference/default-policy.md). The default policy is baked into the community base image (`ghcr.io/nvidia/openshell-community/sandboxes/base:latest`).
+For enforcement concepts and the shipped baseline, read [sandbox policies](https://docs.nvidia.com/openshell/latest/sandboxes/policies.md) and the [default policy reference](https://docs.nvidia.com/openshell/latest/reference/default-policy.md). The default policy is built into the OpenShell runtime and applies when no explicit policy is supplied.
 
 Validate the intended provider combination as well as the authored policy.
 An image endpoint can become credentialed after provider composition and block
@@ -642,5 +642,5 @@ private_services:
 - [Sandbox policies](https://docs.nvidia.com/openshell/latest/sandboxes/policies.md)
 - [Default policy](https://docs.nvidia.com/openshell/latest/reference/default-policy.md)
 - [Supervisor middleware](https://docs.nvidia.com/openshell/latest/extensibility/supervisor-middleware.md)
-- Default policy: baked into the community base image (`ghcr.io/nvidia/openshell-community/sandboxes/base:latest`)
+- Default policy: built into the OpenShell runtime
 - For translation examples from real API docs, see [examples.md](examples.md)
