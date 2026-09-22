@@ -167,11 +167,18 @@ process env. In every environment mode, the driver stages the public CA files
 under the authorized `<cwd>/.openshell-proxy/<sandbox-id>` directory. The host
 proxy's private temporary directory is never added to the sandbox's read-write
 shares. The staged directory contains only public CA certificates; the ephemeral
-CA private key remains in the host proxy's memory. The driver
-seeds only `SYSTEMROOT`, `WINDIR`, `PATH`, `COMSPEC`, and `LOCALAPPDATA` from the
-gateway host before applying sandbox and TLS overrides, so required Windows
-bootstrap values remain available without exposing the gateway's full
-environment unless the gateway explicitly opts into another environment mode.
+CA private key remains in the host proxy's memory.
+
+Windows inbox `curl.exe` uses Schannel and ignores `CURL_CA_BUNDLE` as an
+environment variable, so workloads using it must pass
+`--cacert %CURL_CA_BUNDLE%` explicitly. Clients that honor the injected trust
+variables consume the same per-sandbox bundle directly.
+
+The driver seeds only `SYSTEMROOT`, `WINDIR`, `PATH`, `COMSPEC`, and
+`LOCALAPPDATA` from the gateway host before applying sandbox and TLS overrides,
+so required Windows bootstrap values remain available without exposing the
+gateway's full environment unless the gateway explicitly opts into another
+environment mode.
 
 When governed egress is disabled, any network rule fails closed during sandbox creation.
 
@@ -194,10 +201,12 @@ This example uses `process_container`. The `IsoSessionApp.dll` and
 
 ## Real-MXC test lane
 
-The generic real-`wxc-exec.exe` tasks are **skip-safe**: a test or scenario that
-requires an absent binary or backend prints a SKIP reason and exits 0. They are
-useful developer diagnostics, but a skipped run is not qualification evidence.
-The GB300 task is deliberately strict and fails on every required skip.
+The generic real-`wxc-exec.exe` tasks print a SKIP reason and exit 0 when the
+binary or requested backend is unavailable. Once ProcessContainer is live,
+required capabilities are authoritative: rejection of `network.proxy` or
+another enforcement failure fails the task. These tasks are useful developer
+diagnostics, but a skipped run is not qualification evidence. The GB300 task
+is deliberately strict and fails on every required skip.
 
 | Task | What it runs | When to use |
 |---|---|---|
