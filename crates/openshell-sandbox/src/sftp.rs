@@ -96,7 +96,10 @@ impl SftpHandler {
             .file_name()
             .ok_or(StatusCode::PermissionDenied)?
             .to_os_string();
-        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         let fd = self.open_path(
             parent,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
@@ -241,8 +244,13 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Err(StatusCode::BadMessage);
         }
         let path = self.path(&filename)?;
-        let mode = Mode::from_bits_truncate(attrs.permissions.unwrap_or(0o666) & SAFE_MODE_MASK);
-        let fd = self.open_path(&path, open_flags(pflags), mode)?;
+        let flags = open_flags(pflags);
+        let mode = if flags.contains(OFlags::CREATE) {
+            Mode::from_bits_truncate(attrs.permissions.unwrap_or(0o666) & SAFE_MODE_MASK)
+        } else {
+            Mode::empty()
+        };
+        let fd = self.open_path(&path, flags, mode)?;
         let handle = Self::handle();
         self.files
             .insert(handle.clone(), tokio::fs::File::from_std(StdFile::from(fd)));
@@ -413,7 +421,20 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
         let path = self.path(&path)?;
-        self.open_path(&path, OFlags::PATH | OFlags::CLOEXEC, Mode::empty())?;
+        if let Err(error) = self.open_path(&path, OFlags::PATH | OFlags::CLOEXEC, Mode::empty()) {
+            if error != StatusCode::NoSuchFile {
+                return Err(error);
+            }
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            self.open_path(
+                parent,
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+        }
         let display = if path == Path::new(".") {
             "/".to_string()
         } else {
@@ -535,6 +556,33 @@ mod tests {
         let mut contents = String::new();
         file.read_to_string(&mut contents).await.unwrap();
         assert_eq!(contents, "hello from sftp");
+        drop(file);
+
+        let mut file = client.open("hello.txt").await.unwrap();
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).await.unwrap();
+        assert_eq!(contents, "hello from sftp");
+    }
+
+    #[tokio::test]
+    async fn adapter_creates_entries_at_virtual_root() {
+        let root = tempfile::tempdir().unwrap();
+        let client = client(root.path()).await;
+
+        client.create_dir("incoming").await.unwrap();
+
+        assert!(root.path().join("incoming").is_dir());
+    }
+
+    #[tokio::test]
+    async fn realpath_accepts_a_missing_leaf_under_an_existing_directory() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("incoming")).unwrap();
+        let client = client(root.path()).await;
+
+        let canonical = client.canonicalize("incoming/tree").await.unwrap();
+
+        assert_eq!(canonical, PathBuf::from("/incoming/tree"));
     }
 
     #[tokio::test]
