@@ -13,9 +13,9 @@ use openshell_core::proto::middleware::v1::supervisor_middleware_server::{
 };
 use openshell_core::proto::{
     Decision, ExistingHeaderAction, HeaderMutation, HttpRequestEvaluation, HttpRequestResult,
-    MiddlewareBinding, MiddlewareManifest, SupervisorMiddlewareOperation,
-    SupervisorMiddlewarePhase, ValidateConfigRequest, ValidateConfigResponse,
-    WebSocketSessionEvent, WriteHeader, header_mutation,
+    MiddlewareBinding, MiddlewareDescribeRequest, MiddlewareManifest,
+    SupervisorMiddlewareOperation, SupervisorMiddlewarePhase, ValidateConfigRequest,
+    ValidateConfigResponse, WebSocketSessionEvent, WriteHeader, header_mutation,
 };
 use openshell_sdk::extension::{ExtensionCallerKind, GatewayJwtAuthenticator};
 use tonic::transport::{Identity, Server, ServerTlsConfig};
@@ -81,7 +81,10 @@ impl ScriptedMiddleware {
 impl SupervisorMiddleware for ScriptedMiddleware {
     type EvaluateWebSocketSessionStream = WebSocketResponseStream;
 
-    async fn describe(&self, request: Request<()>) -> Result<Response<MiddlewareManifest>, Status> {
+    async fn describe(
+        &self,
+        request: Request<MiddlewareDescribeRequest>,
+    ) -> Result<Response<MiddlewareManifest>, Status> {
         self.authenticate(
             &request,
             &[
@@ -89,7 +92,7 @@ impl SupervisorMiddleware for ScriptedMiddleware {
                 ExtensionCallerKind::Supervisor,
             ],
         )?;
-        Ok(Response::new(MiddlewareManifest {
+        let manifest = MiddlewareManifest {
             name: "openshell-e2e-middleware-fixture".into(),
             service_version: env!("CARGO_PKG_VERSION").into(),
             bindings: vec![MiddlewareBinding {
@@ -99,7 +102,21 @@ impl SupervisorMiddleware for ScriptedMiddleware {
                 request_timeout: None,
             }],
             expected_audience: self.audience.clone(),
-        }))
+            extension: Some(openshell_core::extension_protocol::extension_metadata(
+                openshell_core::extension_protocol::ExtensionFamily::SupervisorMiddleware,
+                "openshell-e2e-middleware-fixture",
+                openshell_core::VERSION,
+                [],
+            )),
+        };
+        openshell_core::extension_protocol::validate_gateway_metadata(
+            openshell_core::extension_protocol::ExtensionFamily::SupervisorMiddleware,
+            "openshell-e2e-middleware-fixture",
+            manifest.extension.as_ref(),
+            request.into_inner().gateway,
+        )
+        .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        Ok(Response::new(manifest))
     }
 
     async fn validate_config(

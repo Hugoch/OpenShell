@@ -47,6 +47,7 @@ First run takes a few minutes while `mise run vm:setup` stages libkrun/libkrunfw
 By default `mise run gateway:vm`:
 
 - Listens on plaintext HTTP at `127.0.0.1:18081`.
+- Uses `nvcr.io/nvidia/base/ubuntu:24.04` as the sandbox and bootstrap image.
 - Configures the gateway installation name as `vm-dev` and registers the same
   name with the CLI by writing
   `~/.config/openshell/gateways/vm-dev/metadata.json`. It does not modify the
@@ -198,7 +199,9 @@ payload to a temporary bootstrap VM, and guest init runs `umoci raw unpack` onto
 Linux-owned ext4 storage. The resulting disk is cached under
 `<state-dir>/images/<cache-id>/rootfs.ext4` and attached read-only to later
 sandboxes. Local Docker images are still exported as rootfs tar archives and
-prepared inside the bootstrap VM. Set `OPENSHELL_VM_IMAGE_PULL_CONCURRENCY` to
+prepared inside the bootstrap VM. The driver checks that a prepared disk
+contains the unpacked rootfs before caching it; on failure it caches nothing
+and reports the image-prep console tail. Set `OPENSHELL_VM_IMAGE_PULL_CONCURRENCY` to
 tune registry layer download parallelism (default `4`, maximum `16`).
 Both caches are scoped by source image identity and OpenShell version, so an
 OpenShell upgrade builds a fresh guest rootfs instead of reusing one with an old

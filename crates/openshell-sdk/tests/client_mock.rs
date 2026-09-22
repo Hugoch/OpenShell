@@ -13,7 +13,7 @@ use openshell_core::proto::open_shell_server::{OpenShell, OpenShellServer};
 use openshell_sdk::{
     AuthConfig, ClientConfig, ExecOptions, ListOptions, OpenShellClient, Refresh, RefreshError,
     RefreshedToken, SandboxPhase, SandboxSpec, SandboxTemplateCreateSpec,
-    SandboxTemplateListOptions, ServiceStatus as SdkServiceStatus,
+    SandboxTemplateListOptions, ServiceExposure, ServiceStatus as SdkServiceStatus,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -161,6 +161,27 @@ fn workload_template_proto(name: &str, workspace: &str) -> proto::SandboxWorkloa
 
 #[tonic::async_trait]
 impl OpenShell for TestOpenShell {
+    async fn peer_report_provider_readiness(
+        &self,
+        _request: tonic::Request<proto::ReportProviderReadinessRequest>,
+    ) -> Result<Response<proto::ReportProviderReadinessResponse>, Status> {
+        Err(Status::unimplemented("not used by this test server"))
+    }
+
+    async fn peer_report_endpoint_status(
+        &self,
+        _request: tonic::Request<proto::ReportEndpointStatusRequest>,
+    ) -> Result<Response<proto::ReportEndpointStatusResponse>, Status> {
+        Err(Status::unimplemented("not used by this test server"))
+    }
+
+    async fn peer_get_sandbox_provider_status(
+        &self,
+        _request: tonic::Request<proto::GetSandboxProviderStatusRequest>,
+    ) -> Result<Response<proto::GetSandboxProviderStatusResponse>, Status> {
+        Err(Status::unimplemented("not used by this test server"))
+    }
+
     async fn report_endpoint_status(
         &self,
         _request: tonic::Request<proto::ReportEndpointStatusRequest>,
@@ -224,6 +245,7 @@ impl OpenShell for TestOpenShell {
             status: proto::ServiceStatus::Healthy.into(),
             gateway_version: "test-1.2.3".to_string(),
             compute_drivers: Vec::new(),
+            extensions: Vec::new(),
         }))
     }
 
@@ -246,9 +268,20 @@ impl OpenShell for TestOpenShell {
         } else {
             req.name.clone()
         };
+        let service_urls = req
+            .service_exposures
+            .iter()
+            .map(|exposure| {
+                (
+                    exposure.service.clone(),
+                    format!("https://{}.example.test/", exposure.service),
+                )
+            })
+            .collect();
         *self.state.last_create.lock().await = Some(req);
         Ok(Response::new(proto::SandboxResponse {
             sandbox: Some(sandbox_with_phase(&name, proto::SandboxPhase::Provisioning)),
+            service_urls,
         }))
     }
 
@@ -318,6 +351,7 @@ impl OpenShell for TestOpenShell {
         *self.state.last_stop.lock().await = Some(request);
         Ok(Response::new(proto::SandboxResponse {
             sandbox: Some(sandbox),
+            service_urls: HashMap::new(),
         }))
     }
 
@@ -334,6 +368,7 @@ impl OpenShell for TestOpenShell {
         *self.state.last_start.lock().await = Some(request);
         Ok(Response::new(proto::SandboxResponse {
             sandbox: Some(sandbox),
+            service_urls: HashMap::new(),
         }))
     }
 
@@ -374,6 +409,7 @@ impl OpenShell for TestOpenShell {
         }
         Ok(Response::new(proto::SandboxResponse {
             sandbox: Some(sandbox),
+            service_urls: HashMap::new(),
         }))
     }
 
@@ -546,6 +582,16 @@ impl OpenShell for TestOpenShell {
         &self,
         _: tonic::Request<tonic::Streaming<proto::TcpForwardFrame>>,
     ) -> Result<Response<Self::ForwardTcpStream>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
+
+    type PeerRelayStream =
+        tokio_stream::wrappers::ReceiverStream<Result<proto::PeerRelayFrame, Status>>;
+
+    async fn peer_relay(
+        &self,
+        _: tonic::Request<tonic::Streaming<proto::PeerRelayFrame>>,
+    ) -> Result<Response<Self::PeerRelayStream>, Status> {
         Err(Status::unimplemented("unused"))
     }
 
@@ -983,17 +1029,28 @@ async fn create_sandbox_passes_spec_through() {
         image: Some("ghcr.io/foo:bar".to_string()),
         labels: labels.clone(),
         gpu: true,
+        service_exposures: vec![ServiceExposure {
+            service: "web".to_string(),
+            target_port: 8080,
+        }],
         ..Default::default()
     };
 
     let result = client.create_sandbox(spec).await.unwrap();
     assert_eq!(result.name, "my-box");
     assert_eq!(result.phase, SandboxPhase::Provisioning);
+    assert_eq!(
+        result.service_urls.get("web").map(String::as_str),
+        Some("https://web.example.test/")
+    );
 
     let observed = state.last_create.lock().await.clone().unwrap();
     assert_eq!(observed.name, "my-box");
     assert_eq!(observed.labels, labels);
     assert!(observed.annotations.is_empty());
+    assert_eq!(observed.service_exposures.len(), 1);
+    assert_eq!(observed.service_exposures[0].service, "web");
+    assert_eq!(observed.service_exposures[0].target_port, 8080);
     let observed_spec = observed.spec.unwrap();
     assert!(
         observed_spec
