@@ -4,9 +4,12 @@
 //! Workload-side implementation of RFC 0012 sandbox exec.
 
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
 use std::io::Write as _;
+#[cfg(target_os = "linux")]
 use std::net::Shutdown;
 use std::os::fd::{AsRawFd, OwnedFd};
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -438,11 +441,13 @@ impl BoundaryExec for LocalBoundaryExec {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn helper_socket_pair() -> Result<(StdUnixStream, StdUnixStream), BackendError> {
     StdUnixStream::pair()
         .map_err(|error| BackendError::Process(format!("create runtime helper pipe: {error}")))
 }
 
+#[cfg(target_os = "linux")]
 fn async_socket(socket: StdUnixStream) -> Result<tokio::net::UnixStream, BackendError> {
     socket.set_nonblocking(true).map_err(|error| {
         BackendError::Process(format!("configure runtime helper pipe: {error}"))
@@ -451,6 +456,7 @@ fn async_socket(socket: StdUnixStream) -> Result<tokio::net::UnixStream, Backend
         .map_err(|error| BackendError::Process(format!("adopt runtime helper pipe: {error}")))
 }
 
+#[cfg(target_os = "linux")]
 struct RuntimeHelperProcess {
     result: Arc<std::sync::Mutex<Option<BoundaryExitStatus>>>,
     exited: Arc<tokio::sync::Notify>,
@@ -458,6 +464,7 @@ struct RuntimeHelperProcess {
     cancel_sockets: Vec<StdUnixStream>,
 }
 
+#[cfg(target_os = "linux")]
 impl RuntimeHelperProcess {
     fn new(
         worker: tokio::task::JoinHandle<Result<(), String>>,
@@ -486,6 +493,7 @@ impl RuntimeHelperProcess {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[async_trait]
 impl BoundaryProcess for RuntimeHelperProcess {
     async fn wait(&self) -> Result<BoundaryExitStatus, BackendError> {
