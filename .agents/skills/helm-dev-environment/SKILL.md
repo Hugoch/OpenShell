@@ -34,7 +34,7 @@ Also applies the upstream agent-sandbox CRDs/controller (pinned via `AGENT_SANDB
 in `tasks/scripts/helm-k3s-local.sh`, fetched from `github.com/kubernetes-sigs/agent-sandbox`
 releases), enables its OTLP tracing on v0.5 and later, installs an OTLP trace
 collector and UI in the `observability` namespace,
-and preloads the default community sandbox image into k3d so the first sandbox create
+and preloads the default sandbox image into k3d so the first sandbox create
 does not wait on a large registry pull. Traefik is disabled at cluster creation time.
 
 **Multi-worktree support:** the cluster name is derived from the last component of the
@@ -52,7 +52,7 @@ Port mappings created at cluster time (cannot be changed without recreating):
 Override with env vars before running `helm:k3s:create`:
 - `HELM_K3S_LB_HOST_PORT` (default: `8080`)
 - `HELM_K3S_PRELOAD_SANDBOX_IMAGE` (default:
-  `ghcr.io/nvidia/openshell-community/sandboxes/base:latest`; set to an empty value to skip)
+  `nvcr.io/nvidia/base/ubuntu:24.04`; set to an empty value to skip)
 - `HELM_K3S_COLLECTOR_IMAGE` (default:
   `mcr.microsoft.com/dotnet/aspire-dashboard:latest`)
 - `HELM_K3S_COLLECTOR_HEALTH_TIMEOUT` (default: `120` seconds)

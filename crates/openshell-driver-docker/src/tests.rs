@@ -59,7 +59,7 @@ fn test_sandbox() -> DriverSandbox {
             log_level: "debug".to_string(),
             environment: HashMap::from([("SPEC_ENV".to_string(), "spec".to_string())]),
             template: Some(DriverSandboxTemplate {
-                image: "ghcr.io/nvidia/openshell-community/sandboxes/base:latest".to_string(),
+                image: "nvcr.io/nvidia/base/ubuntu:24.04".to_string(),
                 agent_socket_path: String::new(),
                 labels: HashMap::new(),
                 environment: HashMap::from([("TEMPLATE_ENV".to_string(), "template".to_string())]),
@@ -1331,6 +1331,33 @@ fn docker_identity_resolution_uses_pinned_image_accounts_and_exact_groups() {
     assert_eq!(resolved.gid, 10002);
     assert_eq!(resolved.supplementary_gids, vec![10003]);
     assert_eq!(resolved.source, "image");
+    assert_eq!(resolved.resource_digest, "sha256:image");
+}
+
+#[test]
+fn docker_identity_resolution_uses_numeric_default_for_userless_image() {
+    let image = DockerImageMetadata {
+        id: "sha256:image".to_string(),
+        user: String::new(),
+        working_dir: "/".to_string(),
+        volumes: Vec::new(),
+    };
+    let resolved = resolve_docker_identity_from_accounts(
+        &test_sandbox(),
+        &image,
+        b"root:x:0:0:root:/root:/bin/sh\n",
+        b"root:x:0:\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (resolved.uid, resolved.gid),
+        (
+            openshell_core::sandbox_env::DEFAULT_SANDBOX_UID,
+            openshell_core::sandbox_env::DEFAULT_SANDBOX_GID,
+        )
+    );
+    assert_eq!(resolved.source, "default");
     assert_eq!(resolved.resource_digest, "sha256:image");
 }
 
