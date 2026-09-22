@@ -1441,13 +1441,13 @@ pub fn build_isolation_specs(
         .iter()
         .filter_map(|entry| entry.split_once('=').map(|(key, _)| key.to_string()))
         .collect();
-    if input.rootless {
-        // Podman's archive endpoint writes named-volume contents with the
-        // rootless gateway user's host ownership. In a remapped user namespace,
-        // that is container root rather than the resolved workload UID. Start
-        // the trusted runtime as namespace root only long enough to chown the
-        // empty workspace and irreversibly drop to the resolved identity before
-        // it reads bootstrap material or accepts a control connection.
+    if input.rootless || input.identity.source == "default" {
+        // Podman's archive endpoint leaves named-volume contents owned by
+        // container root for rootless services and for a rootful USER-less
+        // image's newly-created workspace. Start the trusted runtime as root
+        // only long enough to chown the workspace, then irreversibly drop to
+        // the resolved workload identity before reading bootstrap material or
+        // accepting a control connection.
         workload.command = vec![
             "launch-capability-free".into(),
             input.identity.uid.to_string(),
@@ -1808,6 +1808,42 @@ mod tests {
             Some("openshell-sandbox")
         );
         assert_eq!(specs.supervisor.apparmor_profile, None);
+
+        let default_identity =
+            openshell_isolation_interface::contract::ResolvedWorkloadIdentity::new(
+                1000,
+                1000,
+                Vec::new(),
+                "default".into(),
+                "sha256:image".into(),
+            )
+            .unwrap();
+        let rootful_specs = build_isolation_specs(IsolationSpecInput {
+            sandbox: &sandbox,
+            config: &config,
+            token_secret: Some("jwt"),
+            gpu_devices: None,
+            requested_image: "image:latest",
+            image_id: "sha256:image",
+            image_user: "",
+            image_env: &env,
+            supervisor_bin: None,
+            tls_secrets: None,
+            identity: &default_identity,
+            rootless: false,
+        })
+        .unwrap();
+        assert_eq!(rootful_specs.workload.user, "0:0");
+        assert_eq!(
+            rootful_specs.workload.command,
+            vec![
+                "launch-capability-free",
+                "1000",
+                "1000",
+                crate::isolation::BOOTSTRAP_PATH,
+                driver_mounts::DEFAULT_WORKSPACE_ROOT,
+            ]
+        );
         let workload_json = serde_json::to_string(&specs.workload).unwrap();
         assert!(workload_json.contains("\"apparmor_profile\":\"openshell-sandbox\""));
         assert_eq!(specs.supervisor.healthconfig.test, vec!["NONE"]);
