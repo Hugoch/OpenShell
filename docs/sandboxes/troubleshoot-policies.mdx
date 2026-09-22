@@ -207,14 +207,19 @@ regardless of their event severity.
 
 ## Restore an Earlier Base Revision
 
-Export a compatible historical base without metadata or provider entries and
-submit it as a new revision:
+Inspect the compatible historical base you want to restore. For example, to
+retrieve revision 2:
 
 ```shell
-set -o pipefail
-openshell policy get demo --rev 2 --base --output json \
-  | jq -e '.policy' > previous-base.json
-openshell policy set demo --policy previous-base.json --wait
+openshell policy get demo --rev 2 --base
+```
+
+Copy the YAML below the `---` separator into `previous-base.yaml`, excluding
+the status metadata above it. Review the complete policy, then submit it as a
+new revision:
+
+```shell
+openshell policy set demo --policy previous-base.yaml --wait
 openshell policy list demo
 ```
 

@@ -8,27 +8,20 @@ keywords: "Generative AI, Cybersecurity, Policy, Network Policy, Sandbox, Securi
 position: 6
 ---
 
-Use a sandbox policy to control which files a program can access and which
-services it can contact. This guide shows how to let curl read the GitHub API
-while keeping POST requests blocked.
-
-## Prerequisites
-
-Install `jq`, then complete [Prepare the Tutorial
-Sandbox](/get-started/tutorials/first-network-policy#prepare-the-tutorial-sandbox).
-Keep the resulting Docker-backed sandbox named `demo` running. Use an isolated
-gateway without a gateway-global policy for this exercise.
-
-The base policy is the policy configured for this sandbox. The effective policy
-includes rules contributed by attached providers, unless a gateway-global
-policy replaces normal sandbox and provider selection. Inspect the effective
-policy to understand the network permissions selected for the sandbox. A
-selected policy still must activate in the runtime before the workload uses it.
+Use sandbox policies to control which files programs can access, which network
+destinations they can reach, and which application requests they can make. This
+guide explains how to inspect, change, and verify those permissions.
 
 ## Policy Structure
 
+A policy has sections for filesystem access, process settings, and network
+permissions. Filesystem, Landlock, and process settings are startup-time controls.
+Network rules and middleware attachments can change after creation, subject to
+the lifecycle limits in [Understand Reloads](#understand-reloads).
+
 A network rule controls which executable can connect to a destination. An
-inspected endpoint can also limit application requests. This excerpt already
+inspected endpoint can also limit application requests. For example, this rule
+allows curl to read the GitHub API while blocking POST requests. The excerpt
 includes the `network_policies` wrapper; place it beside `version: 1` and the
 other top-level policy sections:
 
@@ -51,79 +44,52 @@ the REST methods in the `read-only` preset. `enforcement: enforce` is necessary
 for blocking. The default enforcement mode is `audit`, which logs an applicable
 request-rule violation but forwards the request.
 
-Filesystem, Landlock, and process settings are startup-time controls. Network
-rules and middleware attachments can change after creation, subject to the
-lifecycle limits in [Understand Reloads](#understand-reloads). Refer to the
-[Policy Schema Reference](/reference/policy-schema) for every accepted field.
+Refer to the [Policy Schema Reference](/reference/policy-schema) for every
+accepted field.
 
 ## Choose How to Change a Policy
 
-Choose the narrowest operation that represents your intent.
+Choose the narrowest operation that represents your intent. The base policy is
+the policy configured for the sandbox. The effective policy includes rules
+contributed by attached providers, unless a gateway-global policy replaces
+normal sandbox and provider selection.
 
 | Operation | Use it when | Important behavior |
 |---|---|---|
 | `sandbox create --policy` | You know the complete policy before creation. | The file supplies the initial authored policy and can set startup-time controls. |
 | `policy update` | You need to add or remove network permissions. | It changes only `network_policies` and preserves every other section. |
-| `policy set` | You need to replace the complete policy, including middleware or startup settings. | Export the base first so you do not drop required static fields or submit provider-owned rules. |
+| `policy set` | You need to replace the complete policy, including middleware or startup settings. | Start from the current base so you preserve required startup settings and exclude provider-owned rules. |
 
 ## Allow an API Request
 
-First confirm that the sandbox has no effective network grants:
+To allow an API request, select the program, destination, and permitted request
+types. Use `policy update` to add the permission without replacing the rest of
+the policy. For example, the following command adds the rule from
+[Policy Structure](#policy-structure) to an existing sandbox. Replace
+`my-sandbox` with your sandbox name; the executable path must match the program
+inside that sandbox:
 
 ```shell
-openshell policy get demo --full --output json \
-  | jq '.policy.network_policies // {}'
-```
-
-An empty object establishes the expected starting point. `--no-auto-providers`
-does not suppress an active global policy or an embedded image policy, so inspect
-the effective result instead of assuming default-deny.
-
-Confirm that the initial GET is denied by OpenShell:
-
-```shell
-openshell sandbox exec -n demo --no-login-shell -- \
-  /usr/bin/curl --silent --show-error --fail --max-time 10 \
-  https://api.github.com/zen
-openshell logs demo --since 5m --source sandbox
-```
-
-Curl can surface the first denial as `Could not resolve host` because policy DNS
-refuses names with no eligible rule. Look for a matching `NET:REFUSE` event for
-`api.github.com:53` with reason `policy_dns_ineligible`. That event distinguishes
-the policy denial from an unrelated DNS failure, missing tool, or TLS trust
-failure.
-
-Add the enforced REST rule without replacing the rest of the policy:
-
-```shell
-openshell policy update demo \
+openshell policy update my-sandbox \
   --rule-name github_readonly \
   --binary /usr/bin/curl \
   --add-endpoint api.github.com:443:read-only:rest:enforce \
   --wait
 ```
 
-Verify both sides of the boundary:
-
-```shell
-openshell sandbox exec -n demo --no-login-shell -- \
-  /usr/bin/curl --silent --show-error --fail --max-time 15 \
-  https://api.github.com/zen
-openshell sandbox exec -n demo --no-login-shell -- \
-  /usr/bin/curl --silent --show-error --max-time 15 \
-  --request POST https://api.github.com/zen
-```
-
-The GET succeeds. The POST returns an OpenShell HTTP 403 response containing
-`policy_denied`. An upstream error is not evidence of enforcement. The preset
-controls HTTP methods; the API determines what those methods do.
-
-Rules are not an ordered firewall list. Compatible rules that match the same
-request can contribute permissions, and an applicable request deny takes
+Review the effective policy before adding a grant because other rules can also
+permit the requests you intend to block. Rules are not an ordered firewall list.
+Compatible rules that match the same request can contribute permissions, and an
+applicable request deny takes
 precedence over an allow. OpenShell selects request-processing metadata from the
 most-specific compatible endpoint separately from deciding whether to allow the
 request.
+
+After activation, verify both an allowed request and a request that should remain
+blocked. Confirm the denial comes from OpenShell rather than the upstream
+service. For a complete exercise with setup, commands, and expected responses,
+see [Write Your First Sandbox Network
+Policy](/get-started/tutorials/first-network-policy).
 
 ## Incremental Policy Updates
 
@@ -132,11 +98,11 @@ an existing rule, identify the existing binaries, ports, and endpoint path that
 the change applies to. This prevents the update from authorizing undeclared
 binary-to-endpoint pairs.
 
-For example, preview a deny that blocks `GET /zen` while the rule's other
-read-only requests remain allowed:
+For a sandbox with the `github_readonly` rule shown above, this command previews
+a deny for `GET /zen` while leaving the rule's other read-only requests allowed:
 
 ```shell
-openshell policy update demo \
+openshell policy update my-sandbox \
   --add-deny 'api.github.com:443:GET:/zen' \
   --rule-name github_readonly \
   --binary /usr/bin/curl \
@@ -151,28 +117,27 @@ grammar, scope rules, and status behavior.
 
 ## Inspect and Replace a Policy
 
-Inspect the base and effective views before making a broad change:
+Use the base view as your editable starting point and the effective view to
+review permissions from all selected sources. Replace `my-sandbox` with your
+sandbox name:
 
 ```shell
-openshell policy get demo --base
-openshell policy get demo --full
+openshell policy get my-sandbox --base
+openshell policy get my-sandbox --full
 ```
 
-For an editable file, use JSON output and `jq`. JSON is accepted by the same
-authored-policy parser as YAML:
+The base view prints status metadata followed by a `---` separator and the policy
+in YAML. Copy only the YAML below the separator into `policy.yaml`. Keep the
+complete policy, including its filesystem, Landlock, process, and unrelated
+network settings, then edit the sections you intend to change. Do not redirect
+the entire output into a policy file, because the metadata is not part of the
+policy.
+
+Apply the complete file and inspect the revision:
 
 ```shell
-set -o pipefail
-openshell policy get demo --base --output json \
-  | jq -e '.policy' > demo-base.json
-```
-
-This removes display metadata and reserved provider-owned `_provider_*` entries.
-Edit `demo-base.json`, then replace the policy:
-
-```shell
-openshell policy set demo --policy demo-base.json --wait
-openshell policy list demo
+openshell policy set my-sandbox --policy policy.yaml --wait
+openshell policy list my-sandbox
 ```
 
 `--wait` can finish successfully for a loaded, unchanged, or superseded result.
@@ -182,25 +147,30 @@ success means only that submission succeeded.
 Export the current effective policy for review or an optional containment check:
 
 ```shell
-openshell sandbox get demo --policy-only > demo-effective.yaml
+openshell sandbox get my-sandbox --policy-only > effective-policy.yaml
 ```
 
 Do not submit that effective export as the sandbox base. It can contain
 provider-owned entries.
 
-To restore an earlier compatible base revision, export it without metadata and
-submit it as a new revision:
+To restore an earlier compatible base revision, follow [Restore an Earlier Base
+Revision](/sandboxes/troubleshoot-policies#restore-an-earlier-base-revision).
+
+### Export JSON for Automation
+
+If you use `jq` for scripting, you can extract an editable policy without copying
+the YAML manually. This optional workflow requires `jq` on your host. JSON is
+accepted by the same policy parser as YAML:
 
 ```shell
 set -o pipefail
-openshell policy get demo --rev 2 --base --output json \
-  | jq -e '.policy' > previous-base.json
-openshell policy set demo --policy previous-base.json --wait
+openshell policy get my-sandbox --base --output json \
+  | jq -e '.policy' > base-policy.json
 ```
 
-This restores the sandbox-authored policy only. It does not roll back provider
-profiles, attachments, credentials, or gateway-global configuration that changed
-independently.
+`--base` excludes provider-owned entries, and `jq` extracts the policy from the
+JSON metadata wrapper. Edit `base-policy.json`, then pass it to `policy set`
+instead of `policy.yaml`.
 
 ## Understand Policy Sources
 

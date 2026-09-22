@@ -18,7 +18,7 @@ Before you begin, make sure you have:
 
 - A current OpenShell CLI connected to a matching local gateway that uses the
   Docker compute driver.
-- Docker and `jq` on the host.
+- Docker on the host.
 - An isolated tutorial gateway with no gateway-global policy.
 
 The tutorial creates the sandbox without providers and inspects its effective
@@ -28,7 +28,7 @@ operator may change the sandbox during the exercise.
 <Tip>
 The repository includes an optional automated version of this tutorial in
 [`examples/sandbox-policy-quickstart`](https://github.com/NVIDIA/OpenShell/tree/main/examples/sandbox-policy-quickstart).
-From a source checkout, run
+The automated script also requires `jq` on the host. From a source checkout, run
 `bash examples/sandbox-policy-quickstart/demo.sh`. The script builds the image,
 creates one sandbox, exercises deny, allow, and deny again, and removes only the
 sandbox and temporary policy export it created. It leaves the local image in
@@ -80,13 +80,13 @@ openshell sandbox create \
 Inspect the effective policy before treating the sandbox as default-deny:
 
 ```shell
-openshell policy get demo --full --output json \
-  | jq '.policy.network_policies // {}'
+openshell policy get demo --full
 ```
 
-Continue only when the result is an empty object. `--no-auto-providers` avoids
-provider attachment, but it does not override a gateway-global policy or an
-embedded image policy.
+In the displayed YAML, check that `network_policies` is absent or empty before
+continuing. OpenShell omits the section when there are no network rules.
+`--no-auto-providers` avoids provider attachment, but it does not override a
+gateway-global policy or an embedded image policy.
 
 Confirm the image contains the expected executable and trust store:
 

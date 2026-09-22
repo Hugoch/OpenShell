@@ -35,39 +35,35 @@ uninspected traffic unless you explicitly set
 
 ## Apply a Recipe
 
-Apply each recipe before running its verification steps. The commands use a
-running sandbox named `demo`, `jq`, and Mike Farah `yq` v4. The sandbox must
+Each recipe illustrates a permission and how to verify it. The commands use
+`my-sandbox` as a placeholder for your running sandbox's name. The sandbox must
 contain the binary named by the recipe, and its container engine must be able to
 use the sandbox image. Recipes with example domains also require a service you
 control at the replacement hostname and path.
 
-Export the editable base policy. This preserves startup settings and excludes
+Start with the current base policy so you preserve startup settings and exclude
 provider-owned rules:
 
 ```shell
-set -o pipefail
-openshell policy get demo --base --output json \
-  | jq -e '.policy' > demo-base.json
+openshell policy get my-sandbox --base
 ```
 
-Save one recipe block as `recipe.yaml`. Convert it to JSON, merge the rule under
-`network_policies`, and inspect the result:
+Copy the YAML below the `---` separator into `policy.yaml`, leaving out the
+status metadata above it. Keep all existing sections. Insert the recipe under
+the top-level `network_policies` map, with its rule name indented two spaces.
+Add that map if it is absent. If it is empty (`network_policies: {}`), replace
+`{}` with the indented recipe on the following lines. Replace example hosts,
+paths, and binaries with your own values. Each recipe is a rule entry, not a
+complete policy file.
+
+Keep unrelated rules, and replace an existing rule with the same key only when
+that is your intent. Review the complete file, then apply it and confirm which
+revision is active:
 
 ```shell
-yq --output-format json '.' recipe.yaml > recipe.json
-jq --slurpfile recipe recipe.json \
-  '.network_policies = ((.network_policies // {}) + $recipe[0])' \
-  demo-base.json > demo-policy.json
-jq '.network_policies' demo-policy.json
-```
-
-The merge replaces an existing rule with the same map key. After reviewing the
-result, apply the complete policy and confirm which revision is active:
-
-```shell
-openshell policy set demo --policy demo-policy.json --wait
-openshell policy list demo
-openshell policy get demo --full
+openshell policy set my-sandbox --policy policy.yaml --wait
+openshell policy list my-sandbox
+openshell policy get my-sandbox --full
 ```
 
 Use [Incremental Policy Updates](/reference/policy-updates) instead when its
@@ -116,13 +112,13 @@ github_readonly:
 ```
 
 [Apply this rule](#apply-a-recipe), then verify an allowed GET and a denied
-POST with the tutorial sandbox's `/usr/bin/curl`:
+POST from a sandbox with `/usr/bin/curl` installed:
 
 ```shell
-openshell sandbox exec -n demo --no-login-shell -- \
+openshell sandbox exec -n my-sandbox --no-login-shell -- \
   /usr/bin/curl --silent --show-error --fail \
   https://api.github.com/zen
-openshell sandbox exec -n demo --no-login-shell -- \
+openshell sandbox exec -n my-sandbox --no-login-shell -- \
   /usr/bin/curl --silent --show-error \
   --request POST https://api.github.com/zen
 ```
@@ -145,7 +141,7 @@ the operation semantically.
 Inspect the policy event without a WARN filter:
 
 ```shell
-openshell logs demo --since 5m --source sandbox
+openshell logs my-sandbox --since 5m --source sandbox
 ```
 
 The event must identify the request-policy violation even though the request
@@ -426,10 +422,10 @@ exceptions close enough to review together. After applying both rules with the
 shared procedure, test the overlap explicitly:
 
 ```shell
-openshell sandbox exec -n demo --no-login-shell -- \
+openshell sandbox exec -n my-sandbox --no-login-shell -- \
   /usr/bin/curl --silent --show-error --fail \
   https://api.example.com/repos/public/project
-openshell sandbox exec -n demo --no-login-shell -- \
+openshell sandbox exec -n my-sandbox --no-login-shell -- \
   /usr/bin/curl --silent --show-error \
   https://api.example.com/repos/private/project
 ```

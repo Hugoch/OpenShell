@@ -265,16 +265,27 @@ before resubmitting, because an automatic retry can race with a late result.
 ## Full Replacement
 
 Use `policy set` for middleware changes, advanced protocol shapes, or complete
-replacement. Export the base without display metadata or provider-owned rules:
+replacement. Start from the current base and preserve sections you do not intend
+to change. Follow [Inspect and Replace a
+Policy](/sandboxes/policies#inspect-and-replace-a-policy) to prepare an editable
+YAML file using the CLI's readable output.
+
+For automation, the following alternative uses `jq` on the host to extract the
+base policy without display metadata or provider-owned rules:
 
 ```shell
 set -o pipefail
 openshell policy get demo --base --output json \
   | jq -e '.policy' > demo-base.json
+```
+
+Edit `demo-base.json`, then submit the complete policy:
+
+```shell
 openshell policy set demo --policy demo-base.json --wait
 ```
 
 Refer to [Customize Sandbox Policies](/sandboxes/policies#inspect-and-replace-a-policy)
-for effective export and revision restoration, and use
+for effective export, and use
 [Troubleshoot Sandbox Policies](/sandboxes/troubleshoot-policies) when submission
 and activation results differ.
