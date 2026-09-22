@@ -2883,6 +2883,7 @@ fn authorize_egress_intent_procfs(
             binary_pid,
             ancestors,
             cmdline_paths,
+            binary_match_paths: Vec::new(),
         }
     };
 
@@ -2953,6 +2954,7 @@ fn authorize_egress_intent_procfs(
             binary_pid: Some(binary_pid),
             ancestors,
             cmdline_paths,
+            binary_match_paths: authorization.binary_match_paths.clone(),
         },
         Err(e) => deny(
             format!("policy evaluation error: {e}"),
@@ -3010,6 +3012,7 @@ fn evaluate_endpoint_only_opa(engine: &OpaEngine, intent: EgressIntent) -> Egres
             binary_pid: None,
             ancestors: vec![],
             cmdline_paths: vec![],
+            binary_match_paths: authorization.binary_match_paths.clone(),
         },
         Err(e) => EgressDecision {
             intent,
@@ -3025,6 +3028,7 @@ fn evaluate_endpoint_only_opa(engine: &OpaEngine, intent: EgressIntent) -> Egres
             binary_pid: None,
             ancestors: vec![],
             cmdline_paths: vec![],
+            binary_match_paths: Vec::new(),
         },
     }
 }
@@ -3079,6 +3083,7 @@ fn authorize_egress_intent(
                     binary_pid: None,
                     ancestors: Vec::new(),
                     cmdline_paths: Vec::new(),
+                    binary_match_paths: authorization.binary_match_paths.clone(),
                 },
                 Err(error) => EgressDecision {
                     intent,
@@ -3092,6 +3097,7 @@ fn authorize_egress_intent(
                     binary_pid: None,
                     ancestors: Vec::new(),
                     cmdline_paths: Vec::new(),
+                    binary_match_paths: Vec::new(),
                 },
             }
         }
@@ -4971,7 +4977,7 @@ async fn handle_forward_proxy(
             .await?;
             return Ok(());
         }
-        let tunnel_engine = match relay::pin_l7_evaluator(&opa_engine, route.l7_policy_generation) {
+        let tunnel_engine = match relay::pin_l7_evaluator(&opa_engine, &decision) {
             Ok(engine) => engine,
             Err(e) => {
                 warn!(
@@ -8614,6 +8620,7 @@ network_policies:
             binary_pid: None,
             ancestors: vec![],
             cmdline_paths: vec![],
+            binary_match_paths: authorization.binary_match_paths.clone(),
         };
         let route = query_l7_route_snapshot(&decision, host, port).expect("L7 route should match");
         let config = select_l7_config_for_path(&route.configs, path)
@@ -12673,6 +12680,7 @@ network_policies:
                 binary_pid: Some(1),
                 ancestors: vec![],
                 cmdline_paths: vec![],
+                binary_match_paths: authorization.binary_match_paths.clone(),
             };
             query_tls_mode(&decision, "203.0.113.10", 443)
         };
