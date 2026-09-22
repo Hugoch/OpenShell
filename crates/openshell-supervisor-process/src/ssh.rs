@@ -635,10 +635,17 @@ impl russh::server::Handler for SshHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         if name == "openshell-main" {
-            if !self.channels.contains_key(&channel) {
+            let Some(state) = self.channels.get(&channel) else {
                 session.channel_failure(channel)?;
                 return Ok(());
-            }
+            };
+            // Supervisor diagnostics bypass the PTY's output processing. SSH
+            // puts terminal clients in raw mode, so send the carriage return too.
+            let line_ending = if state.pty_request.is_some() {
+                "\r\n"
+            } else {
+                "\n"
+            };
             let main_session = self
                 .main_session
                 .clone()
@@ -657,7 +664,7 @@ impl russh::server::Handler for SshHandler {
                         channel,
                         1,
                         format!(
-                            "openshell: cannot connect to the canonical main process: {error}\n"
+                            "openshell: cannot connect to the canonical main process: {error}{line_ending}"
                         )
                         .into_bytes(),
                     )?;
@@ -1408,9 +1415,23 @@ mod tests {
             .expect("main attachment channel closed before expected event")
     }
 
-    async fn assert_main_rejection(main_session: Option<Arc<MainSession>>, message: &str) {
+    async fn assert_main_rejection(
+        main_session: Option<Arc<MainSession>>,
+        terminal: bool,
+        message: &str,
+    ) {
         let client = main_test_client(main_session).await;
         let mut channel = client.channel_open_session().await.unwrap();
+        if terminal {
+            channel
+                .request_pty(true, "xterm", 80, 24, 0, 0, &[])
+                .await
+                .unwrap();
+            assert!(matches!(
+                next_main_event(&mut channel).await,
+                russh::ChannelMsg::Success
+            ));
+        }
         channel
             .request_subsystem(true, "openshell-main")
             .await
@@ -1441,14 +1462,22 @@ mod tests {
 
     #[tokio::test]
     async fn main_attachment_missing_session_reports_terminal_error() {
-        assert_main_rejection(None, "openshell: cannot connect to the canonical main process: no main session is available\n").await;
+        assert_main_rejection(None, false, "openshell: cannot connect to the canonical main process: no main session is available\n").await;
     }
 
     #[tokio::test]
     async fn main_attachment_finished_session_reports_terminal_error() {
         let main_session = MainSession::inert();
         assert!(!main_session.finish(130, false).await);
-        assert_main_rejection(Some(main_session), "openshell: cannot connect to the canonical main process: canonical main process already finished\n").await;
+        assert_main_rejection(Some(main_session), false, "openshell: cannot connect to the canonical main process: canonical main process already finished\n").await;
+    }
+
+    #[tokio::test]
+    async fn main_attachment_pty_rejections_return_cursor_to_start_of_line() {
+        assert_main_rejection(None, true, "openshell: cannot connect to the canonical main process: no main session is available\r\n").await;
+        let main_session = MainSession::inert();
+        assert!(!main_session.finish(130, false).await);
+        assert_main_rejection(Some(main_session), true, "openshell: cannot connect to the canonical main process: canonical main process already finished\r\n").await;
     }
 
     #[tokio::test]
