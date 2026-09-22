@@ -23,7 +23,7 @@ OpenShell builds these main artifacts:
 | VM driver/runtime assets | `crates/openshell-driver-vm` |
 | Published docs site | `docs/` rendered by Fern config in `fern/` |
 
-Sandbox community images are built outside this repository.
+Workload images are standard OCI images supplied by operators or users.
 
 ## Build Features
 

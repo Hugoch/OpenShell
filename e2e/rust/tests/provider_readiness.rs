@@ -20,7 +20,7 @@ use std::time::Duration;
 use openshell_e2e::harness::binary::openshell_cmd;
 use openshell_e2e::harness::container::{ContainerEngine, e2e_network_name};
 use openshell_e2e::harness::gateway::ManagedGateway;
-use openshell_e2e::harness::sandbox::SandboxGuard;
+use openshell_e2e::harness::sandbox::{E2E_WORKLOAD_IMAGE, SandboxGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -1313,7 +1313,7 @@ async fn acknowledged_provider_changes_apply_to_fresh_clients_and_revoke_retaine
     let backend_tls = directory.path().join("backend-tls");
     std::fs::create_dir(&backend_tls).map_err(|_| "could not allocate backend TLS directory")?;
     let base = std::env::var("OPENSHELL_E2E_DOCKER_SANDBOX_IMAGE")
-        .unwrap_or_else(|_| "ghcr.io/nvidia/openshell-community/sandboxes/base:latest".to_string());
+        .unwrap_or_else(|_| E2E_WORKLOAD_IMAGE.to_string());
     if base.chars().any(char::is_whitespace) {
         return Err("fixture image reference contains whitespace".to_string());
     }

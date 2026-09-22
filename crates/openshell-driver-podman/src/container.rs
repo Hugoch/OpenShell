@@ -594,7 +594,7 @@ fn build_env(
     // and intercept the sandbox JWT.
     env.remove(openshell_core::sandbox_env::GATEWAY_TLS_SERVER_NAME);
     if oci_user.is_empty() {
-        // The image declares no OCI USER (e.g. a plain Alpine base). Assign a
+        // The image declares no OCI USER (for example, a minimal base image). Assign a
         // numeric non-root identity like the Kubernetes and VM drivers so the
         // supervisor synthesizes the account instead of rejecting the image.
         env.insert(
@@ -1147,7 +1147,7 @@ fn build_base_spec(
         image_volumes,
         hostname: format!("sandbox-{}", sandbox.name),
         // Override the image's ENTRYPOINT so the supervisor binary runs
-        // directly. Sandbox images (e.g. the community base image) set
+        // directly. Workload images can set
         // ENTRYPOINT ["/bin/bash"], and Podman's `command` field only
         // overrides CMD — which gets appended as args to the entrypoint.
         // Without this, the container would run the entrypoint binary with

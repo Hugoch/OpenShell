@@ -244,7 +244,7 @@ pub const SANDBOX_UID: &str = "OPENSHELL_SANDBOX_UID";
 pub const SANDBOX_GID: &str = "OPENSHELL_SANDBOX_GID";
 
 /// Default numeric UID assigned to a sandbox when the image declares no OCI
-/// `USER` (e.g. a plain Alpine base).
+/// `USER` (for example, a minimal base image).
 ///
 /// Local container drivers (Docker, Podman) supply this in place of an empty
 /// OCI declaration so the supervisor runs the sandbox as a synthesized non-root

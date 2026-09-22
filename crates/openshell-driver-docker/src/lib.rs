@@ -629,7 +629,7 @@ fn resolve_docker_identity_from_accounts(
         requested_user
     };
     if user_selector.is_empty() {
-        // The image declares no USER (e.g. a plain Alpine base) and the policy
+        // The image declares no USER (for example, a minimal base image) and the policy
         // requested none. Synthesize a numeric non-root identity instead of
         // rejecting, matching the Podman driver's USER-less default and the
         // numeric-identity behavior of the Kubernetes and VM drivers.

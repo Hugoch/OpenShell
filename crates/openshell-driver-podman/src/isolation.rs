@@ -124,7 +124,7 @@ pub fn resolve_identity(
         requested_group
     };
     if user.is_empty() && group.is_empty() {
-        // The image declares no OCI USER (e.g. a plain Alpine base) and the
+        // The image declares no OCI USER (for example, a minimal base image) and the
         // policy requested no identity. Synthesize a numeric non-root identity
         // instead of rejecting the image, matching Docker, Kubernetes, and VM.
         return ResolvedWorkloadIdentity::new(

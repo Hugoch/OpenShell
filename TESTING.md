@@ -207,7 +207,7 @@ the current checkout.
 The phase-1 scenario verifies the complete CLI-to-gateway-to-driver path without
 depending on how the gateway was installed or which driver is configured. It
 requires machine-readable gRPC status, creates a uniquely named detached
-sandbox with `--from base`, verifies the sandbox is `Ready` by finding its
+sandbox with the configured default image, verifies the sandbox is `Ready` by finding its
 unique name in paginated JSON list output, executes `echo` with a run-specific
 marker, deletes the sandbox, and verifies that its name no longer appears.
 Driver suites enable the same profile

@@ -34,7 +34,7 @@ const client = await OpenShellClient.connect({
 })
 
 const sandbox = await client.sandbox.create({
-  image: 'ghcr.io/nvidia/openshell-community/sandboxes/python:latest',
+  image: 'registry.example.com/agents/python:latest',
   serviceExposures: [{ targetPort: 8080 }],
 })
 console.log(sandbox.serviceUrls[''])
@@ -188,7 +188,7 @@ const template: SandboxWorkloadTemplate = await client.sandboxTemplates.create(
     metadata: { name: 'python', labels: { team: 'runtime' } },
     spec: {
       workload: {
-        image: 'ghcr.io/nvidia/openshell-community/sandboxes/python:latest',
+        image: 'registry.example.com/agents/python:latest',
         environment: { FEATURE_FLAG: 'on' },
         resources: { cpu: '1', memory: '512Mi' },
       },

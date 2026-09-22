@@ -17,7 +17,7 @@ A sandbox is the OpenShell data plane: a safe, private execution environment whe
 Create a sandbox with a single command. For example, to create a sandbox with Claude, run:
 
 ```shell
-openshell sandbox create -- claude
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest -- claude
 ```
 
 The trailing command is the sandbox's canonical main process. OpenShell starts
@@ -80,7 +80,7 @@ openshell gateway select local
 Set per-sandbox CPU and memory amounts with `--cpu` and `--memory`:
 
 ```shell
-openshell sandbox create --cpu 2 --memory 4Gi -- claude
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest --cpu 2 --memory 4Gi -- claude
 ```
 
 CPU values use Kubernetes-style quantities such as `500m`, `1`, or `2.5`.
@@ -115,13 +115,13 @@ the same behavior.
 To request GPU resources, add `--gpu`:
 
 ```shell
-openshell sandbox create --gpu -- claude
+openshell sandbox create --gpu --from registry.example.com/your-org/gpu-agent:latest -- claude
 ```
 
 Request a specific number of GPUs by passing a count to `--gpu`:
 
 ```shell
-openshell sandbox create --gpu 2 -- claude
+openshell sandbox create --gpu 2 --from registry.example.com/your-org/gpu-agent:latest -- claude
 ```
 
 When you omit the count, OpenShell treats the request as `--gpu 1`.
@@ -153,22 +153,22 @@ openshell sandbox create \
   -- claude
 ```
 
-### Custom Containers
+### Sandbox Images
 
-Use `--from` to create a sandbox from the base image, another pre-built sandbox name, a rootfs tar archive, or a container image:
+Without `--from`, the gateway uses its configured default workload image. The
+built-in default is `nvcr.io/nvidia/base/ubuntu:24.04`.
+
+Use `--from` with an explicit OCI image reference or a rootfs tar archive:
 
 ```shell
-openshell sandbox create --from base
-openshell sandbox create --from ollama
-openshell sandbox create --from ./rootfs.tar
+openshell sandbox create --from nvcr.io/nvidia/base/ubuntu:24.04
 openshell sandbox create --from my-registry.example.com/my-image:latest
+openshell sandbox create --from ./rootfs.tar
 ```
 
-Bare names such as `base` and `ollama` resolve to images under `ghcr.io/nvidia/openshell-community/sandboxes`. Set `OPENSHELL_COMMUNITY_REGISTRY` when you need to use an internal mirror.
-
-`--from` does not build local Dockerfiles or directories. Build and tag the
-image with the container engine used by your local gateway, then pass the
-resulting image reference:
+`--from` does not expand catalog aliases and does not build local Dockerfiles or
+directories. Build and tag the image with the container engine used by your
+local gateway, then pass the resulting image reference:
 
 ```shell
 # Docker gateway
@@ -185,8 +185,8 @@ from and use that registry image reference.
 
 <Warning>
 **Pre-0.1.0 breaking change:** `openshell sandbox create --from ./Dockerfile`
-and directory sources no longer build images. Build and tag the image before
-you create the sandbox.
+and directory sources no longer build images. Bare catalog names are no longer
+expanded. Build or select an image and pass its explicit reference.
 </Warning>
 
 #### Rootfs Tar Archives
@@ -277,17 +277,27 @@ For JSON or YAML, template list output contains `templates` and
 `next_page_token` fields. Pass the returned token to `--page-token` to
 continue.
 
-## Base Sandbox Container
+## Default Workload Image
 
-The `base` sandbox container is the default runtime image for standard OpenShell sandboxes unless the gateway overrides its default sandbox image. It is published as `ghcr.io/nvidia/openshell-community/sandboxes/base:latest` and maintained in the [OpenShell Community](https://github.com/NVIDIA/OpenShell-Community/tree/main/sandboxes/base) repository.
+OpenShell defaults to `nvcr.io/nvidia/base/ubuntu:24.04` unless the gateway
+operator configures another image. The image provides a minimal Ubuntu Noble
+userspace. It does not include agent CLIs or an image-baked OpenShell policy.
+OpenShell applies its built-in restrictive policy when no explicit policy is
+provided.
 
-The base container includes common development tooling, supported agent CLIs, and the default sandbox policy. Use it when you want a general-purpose agent environment without a workflow-specific image:
+Create a sandbox with the default image:
 
 ```shell
-openshell sandbox create --from base
+openshell sandbox create
 ```
 
-For default policy coverage by agent, refer to [Default Policy](/reference/default-policy). For the supported agent list, refer to [Supported Agents](/about/supported-agents).
+Override it with any image visible to the active compute driver:
+
+```shell
+openshell sandbox create --from registry.example.com/agents/my-agent:1.0
+```
+
+Refer to [Default Policy](/reference/default-policy), [Supported Agents](/about/supported-agents), and the [BYOC example](https://github.com/NVIDIA/OpenShell/tree/main/examples/bring-your-own-container).
 
 ## Connect to a Sandbox
 
@@ -390,7 +400,7 @@ Environment variable names starting with `OPENSHELL_` are reserved. Keys must ma
 Attach labels when you create a sandbox to track ownership, environment, or workflow grouping:
 
 ```shell
-openshell sandbox create --label env=dev --label team=platform -- claude
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest --label env=dev --label team=platform -- claude
 ```
 
 List only the sandboxes that match a label selector:
@@ -431,7 +441,7 @@ with SandboxClient.from_active_cluster() as client:
     templates.create(
         workspace="default",
         name="python",
-        image="ghcr.io/nvidia/openshell-community/sandboxes/python:latest",
+        image="registry.example.com/agents/python:latest",
     )
 
     sandbox = client.create_from_template(workspace="default", workload_template="python")
@@ -711,7 +721,7 @@ The default table colorizes the `STATUS` column only when both standard output a
 You can also forward a port at creation time with `--forward`:
 
 ```shell
-openshell sandbox create --forward 8000 -- claude
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest --forward 8000 -- claude
 ```
 
 </Tip>
@@ -763,7 +773,7 @@ You can also upload files at creation time with the `--upload` flag on
 several paths in a single command:
 
 ```shell
-openshell sandbox create --upload ./src:/workspace/src --upload ./config:/workspace/config -- claude
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest --upload ./src:/workspace/src --upload ./config:/workspace/config -- claude
 ```
 
 </Note>
@@ -895,4 +905,4 @@ For Docker, Podman, MicroVM, and Kubernetes behavior, refer to [Sandbox Compute 
 - To select a workspace or understand access roles, refer to [Manage Workspaces and Access](/sandboxes/manage-workspaces).
 - To supply API keys or tokens, refer to [Manage Providers](/sandboxes/manage-providers).
 - To control what the agent can access, refer to [Policies](/sandboxes/policies).
-- To use the default runtime image, refer to [Base Sandbox Container](#base-sandbox-container).
+- To use the default runtime image, refer to [Default Workload Image](#default-workload-image).
