@@ -31,8 +31,8 @@ use openshell_core::proto::{
 };
 use openshell_isolation_interface::contract::{BoundaryLoopbackConnector, LoopbackTarget};
 use openshell_ocsf::{
-    ActivityId, ConnectionInfo, Endpoint, EventContext, NetworkActivityBuilder, OcsfEvent,
-    SeverityId, StatusId, ocsf_emit,
+    ActivityId, BaseEventBuilder, ConnectionInfo, Endpoint, EventContext, NetworkActivityBuilder,
+    OcsfEvent, SeverityId, StatusId, ocsf_emit,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
@@ -263,17 +263,23 @@ fn relay_open_event(
     open: &RelayOpen,
     ssh_socket_path: &std::path::Path,
 ) -> OcsfEvent {
-    let mut builder = NetworkActivityBuilder::new(ctx)
+    let message = relay_target_message(open, "open", ssh_socket_path);
+    let Some(endpoint) = relay_target_endpoint(open) else {
+        return BaseEventBuilder::new(ctx)
+            .activity_name("Relay open")
+            .severity(SeverityId::Informational)
+            .status(StatusId::Success)
+            .message(message)
+            .build();
+    };
+    NetworkActivityBuilder::new(ctx)
         .activity(ActivityId::Open)
         .severity(SeverityId::Informational)
         .status(StatusId::Success)
-        .message(relay_target_message(open, "open", ssh_socket_path));
-    if let Some(endpoint) = relay_target_endpoint(open) {
-        builder = builder
-            .dst_endpoint(endpoint)
-            .connection_info(ConnectionInfo::new("tcp"));
-    }
-    builder.build()
+        .message(message)
+        .dst_endpoint(endpoint)
+        .connection_info(ConnectionInfo::new("tcp"))
+        .build()
 }
 
 fn relay_closed_event(
@@ -281,17 +287,23 @@ fn relay_closed_event(
     open: &RelayOpen,
     ssh_socket_path: &std::path::Path,
 ) -> OcsfEvent {
-    let mut builder = NetworkActivityBuilder::new(ctx)
+    let message = relay_target_message(open, "closed", ssh_socket_path);
+    let Some(endpoint) = relay_target_endpoint(open) else {
+        return BaseEventBuilder::new(ctx)
+            .activity_name("Relay closed")
+            .severity(SeverityId::Informational)
+            .status(StatusId::Success)
+            .message(message)
+            .build();
+    };
+    NetworkActivityBuilder::new(ctx)
         .activity(ActivityId::Close)
         .severity(SeverityId::Informational)
         .status(StatusId::Success)
-        .message(relay_target_message(open, "closed", ssh_socket_path));
-    if let Some(endpoint) = relay_target_endpoint(open) {
-        builder = builder
-            .dst_endpoint(endpoint)
-            .connection_info(ConnectionInfo::new("tcp"));
-    }
-    builder.build()
+        .message(message)
+        .dst_endpoint(endpoint)
+        .connection_info(ConnectionInfo::new("tcp"))
+        .build()
 }
 
 fn relay_failed_event(
@@ -300,25 +312,31 @@ fn relay_failed_event(
     ssh_socket_path: &std::path::Path,
     error: &str,
 ) -> OcsfEvent {
-    let mut builder = NetworkActivityBuilder::new(ctx)
+    let message = format!(
+        "{}: {error}",
+        relay_target_message(open, "bridge failed", ssh_socket_path)
+    );
+    let Some(endpoint) = relay_target_endpoint(open) else {
+        return BaseEventBuilder::new(ctx)
+            .activity_name("Relay failed")
+            .severity(SeverityId::Low)
+            .status(StatusId::Failure)
+            .message(message)
+            .build();
+    };
+    NetworkActivityBuilder::new(ctx)
         .activity(ActivityId::Fail)
         .severity(SeverityId::Low)
         .status(StatusId::Failure)
-        .message(format!(
-            "{}: {error}",
-            relay_target_message(open, "bridge failed", ssh_socket_path)
-        ));
-    if let Some(endpoint) = relay_target_endpoint(open) {
-        builder = builder
-            .dst_endpoint(endpoint)
-            .connection_info(ConnectionInfo::new("tcp"));
-    }
-    builder.build()
+        .message(message)
+        .dst_endpoint(endpoint)
+        .connection_info(ConnectionInfo::new("tcp"))
+        .build()
 }
 
 fn relay_close_from_gateway_event(ctx: &EventContext, channel_id: &str, reason: &str) -> OcsfEvent {
-    NetworkActivityBuilder::new(ctx)
-        .activity(ActivityId::Close)
+    BaseEventBuilder::new(ctx)
+        .activity_name("Relay close from gateway")
         .severity(SeverityId::Informational)
         .message(format!(
             "relay close from gateway (channel_id={channel_id}, reason={reason})"
@@ -454,6 +472,7 @@ pub async fn prepare(
             endpoint,
             sandbox_id,
             instance_id,
+            1,
             Some(image_policy_discovery),
             Some(Box::new(prepare_policy)),
         ),
@@ -532,7 +551,7 @@ async fn run_session_loop(
         let result = if let Some((session, bootstrap_result)) = prepared.take() {
             run_prepared_session(&config, session, bootstrap_result).await
         } else {
-            run_single_session(&config).await
+            run_single_session(&config, attempt).await
         };
         if let Some(updates) = &config.session_id_updates {
             updates.send_replace(None);
@@ -566,11 +585,13 @@ async fn run_session_loop(
 
 async fn run_single_session(
     config: &SessionConfig,
+    connection_epoch: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let prepared = open_session(
         config.endpoint.clone(),
         config.sandbox_id.clone(),
         config.instance_id.clone(),
+        connection_epoch,
         None,
         None,
     )
@@ -582,6 +603,7 @@ async fn open_session(
     endpoint: String,
     sandbox_id: String,
     instance_id: String,
+    connection_epoch: u64,
     image_policy_discovery: Option<ImagePolicyDiscovery>,
     mut prepare_policy: Option<StartupPolicyPreparer>,
 ) -> Result<PreparedSupervisorSession, Box<dyn std::error::Error + Send + Sync>> {
@@ -610,6 +632,7 @@ async fn open_session(
             sandbox_id: sandbox_id.clone(),
             instance_id: instance_id.clone(),
             protocol_revision: SUPERVISOR_PROTOCOL_REVISION,
+            connection_epoch,
             image_policy,
             image_policy_discovery,
             supports_provider_readiness: true,
@@ -1509,6 +1532,13 @@ mod ocsf_event_tests {
         }
     }
 
+    fn base_event(event: &OcsfEvent) -> &openshell_ocsf::BaseEvent {
+        match event {
+            OcsfEvent::Base(event) => event,
+            other => panic!("expected Base Event, got {other:?}"),
+        }
+    }
+
     fn ssh_relay_open(channel_id: &str) -> RelayOpen {
         RelayOpen {
             channel_id: channel_id.to_string(),
@@ -1572,12 +1602,13 @@ mod ocsf_event_tests {
     }
 
     #[test]
-    fn relay_open_emits_network_open_success() {
+    fn relay_open_emits_base_event() {
         let event = relay_open_event(&ctx(), &ssh_relay_open("ch-42"), ssh_socket_path());
-        let na = network_activity(&event);
-        assert_eq!(na.base.activity_id, ActivityId::Open.as_u8());
-        assert_eq!(na.base.severity, SeverityId::Informational);
-        let msg = na.base.message.as_deref().unwrap_or_default();
+        let event = base_event(&event);
+        assert_eq!(event.base.activity_name, "Relay open");
+        assert_eq!(event.base.severity, SeverityId::Informational);
+        assert_eq!(event.base.status, Some(StatusId::Success));
+        let msg = event.base.message.as_deref().unwrap_or_default();
         assert!(msg.contains("ch-42"), "message: {msg}");
         assert!(
             msg.contains("target=unix:/run/openshell/ssh.sock"),
@@ -1608,37 +1639,37 @@ mod ocsf_event_tests {
     }
 
     #[test]
-    fn relay_closed_emits_network_close_success() {
+    fn relay_closed_emits_base_event() {
         let event = relay_closed_event(&ctx(), &ssh_relay_open("ch-42"), ssh_socket_path());
-        let na = network_activity(&event);
-        assert_eq!(na.base.activity_id, ActivityId::Close.as_u8());
-        assert_eq!(na.base.status, Some(StatusId::Success));
+        let event = base_event(&event);
+        assert_eq!(event.base.activity_name, "Relay closed");
+        assert_eq!(event.base.status, Some(StatusId::Success));
     }
 
     #[test]
-    fn relay_failed_emits_network_fail_low() {
+    fn relay_failed_emits_base_event() {
         let event = relay_failed_event(
             &ctx(),
             &ssh_relay_open("ch-42"),
             ssh_socket_path(),
             "write to ssh failed",
         );
-        let na = network_activity(&event);
-        assert_eq!(na.base.activity_id, ActivityId::Fail.as_u8());
-        assert_eq!(na.base.severity, SeverityId::Low);
-        assert_eq!(na.base.status, Some(StatusId::Failure));
-        let msg = na.base.message.as_deref().unwrap_or_default();
+        let event = base_event(&event);
+        assert_eq!(event.base.activity_name, "Relay failed");
+        assert_eq!(event.base.severity, SeverityId::Low);
+        assert_eq!(event.base.status, Some(StatusId::Failure));
+        let msg = event.base.message.as_deref().unwrap_or_default();
         assert!(msg.contains("ch-42"), "message: {msg}");
         assert!(msg.contains("write to ssh failed"), "message: {msg}");
     }
 
     #[test]
-    fn relay_close_from_gateway_is_network_close_informational() {
+    fn relay_close_from_gateway_is_base_event() {
         let event = relay_close_from_gateway_event(&ctx(), "ch-42", "sandbox deleted");
-        let na = network_activity(&event);
-        assert_eq!(na.base.activity_id, ActivityId::Close.as_u8());
-        assert_eq!(na.base.severity, SeverityId::Informational);
-        let msg = na.base.message.as_deref().unwrap_or_default();
+        let event = base_event(&event);
+        assert_eq!(event.base.activity_name, "Relay close from gateway");
+        assert_eq!(event.base.severity, SeverityId::Informational);
+        let msg = event.base.message.as_deref().unwrap_or_default();
         assert!(msg.contains("sandbox deleted"), "message: {msg}");
     }
 

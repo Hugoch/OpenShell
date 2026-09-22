@@ -14,7 +14,9 @@ mod endpoint_status;
 mod provisioning_clock;
 pub use provisioning_clock::configuration_change;
 
-pub(super) use endpoint_status::handle_report_endpoint_status;
+pub(super) use endpoint_status::{
+    handle_peer_report_endpoint_status, handle_report_endpoint_status,
+};
 pub use endpoint_status::{
     invalidate_endpoint_status_on_startup, reset_endpoint_status_for_supervisor_session,
     retry_endpoint_status_after_supervisor_disconnect,
@@ -2538,6 +2540,9 @@ async fn resolve_sandbox_by_name_for_principal(
             Ok(sandbox)
         }
         Principal::User(_) => sandbox.ok_or_else(|| Status::not_found("sandbox not found")),
+        Principal::Peer(_) => Err(Status::permission_denied(
+            "gateway peer principals may not resolve sandbox configuration",
+        )),
         Principal::Anonymous => Err(Status::unauthenticated(
             "sandbox-scoped methods require an authenticated caller",
         )),
@@ -3812,7 +3817,9 @@ async fn handle_update_config_inner(
             ));
         }
         let _settings_guard = state.settings_mutex.lock().await;
-        let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await;
+        let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await.map_err(|error| {
+            super::persistence_error_to_status(error, "acquire policy mutation lock")
+        })?;
 
         if has_merge_ops {
             return Err(Status::invalid_argument(
@@ -4013,7 +4020,9 @@ async fn handle_update_config_inner(
 
     if has_setting {
         let _settings_guard = state.settings_mutex.lock().await;
-        let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await;
+        let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await.map_err(|error| {
+            super::persistence_error_to_status(error, "acquire policy mutation lock")
+        })?;
 
         if key == POLICY_SETTING_KEY {
             return Err(Status::invalid_argument(
@@ -4118,7 +4127,9 @@ async fn handle_update_config_inner(
         ));
     }
 
-    let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await;
+    let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await.map_err(|error| {
+        super::persistence_error_to_status(error, "acquire policy mutation lock")
+    })?;
     if has_merge_ops {
         let global_settings = load_global_settings(state.store.as_ref()).await?;
         if global_settings.settings.contains_key(POLICY_SETTING_KEY) {
@@ -4665,7 +4676,9 @@ pub(super) async fn handle_report_sandbox_configuration(
     if reported == ConfigurationAdmissionState::Unspecified {
         return Err(Status::invalid_argument("admission state is required"));
     }
-    let _guard = state.compute.sandbox_sync_guard().await;
+    let _guard = state.compute.sandbox_sync_guard().await.map_err(|error| {
+        super::persistence_error_to_status(error, "acquire configuration admission lock")
+    })?;
     let mut sandbox = state
         .store
         .get_message::<Sandbox>(&sandbox_id)
@@ -4899,7 +4912,10 @@ pub async fn record_policy_apply_result(
             .store
             .supersede_older_policies(sandbox_id, version_i64)
             .await;
-        let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await;
+
+        let _sandbox_sync_guard = state.compute.sandbox_sync_guard().await.map_err(|error| {
+            super::persistence_error_to_status(error, "acquire policy mutation lock")
+        })?;
         let sandbox = state
             .store
             .get_message::<Sandbox>(sandbox_id)
