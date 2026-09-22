@@ -638,7 +638,12 @@ sandbox workload directly. The relay supports:
 
 - Attachment to the canonical main process through the `openshell-main` SSH
   subsystem. The supervisor owns its retained PTY or pipes, a 1 MiB replay
-  buffer, and a single stdin lease across client disconnects.
+  buffer, and a single stdin lease across client disconnects. If the main
+  session is unavailable or has exited without a pending attachment, the
+  supervisor accepts the subsystem request and sends an explanatory stderr
+  message, exit status 1, EOF, and channel close. Unsupported subsystem names
+  still receive an SSH request failure. Pending post-exit attachments continue
+  to receive retained output and the main process's exit status.
 - Independent interactive shell sessions.
 - Command execution. Commands run through a login shell (`bash -lc`) by default,
   so the first of the user's `.bash_profile`, `.bash_login`, or `.profile` is

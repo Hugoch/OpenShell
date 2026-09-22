@@ -361,6 +361,11 @@ VS Code Remote-SSH with:
 openshell sandbox ssh-config my-sandbox >> ~/.ssh/config
 ```
 
+If `connect` reports `canonical main process already finished`, inspect the
+result with `sandbox get`. A pending
+foreground attachment can still retrieve retained output in `Completed` or
+`Error`; phase alone does not determine whether attachment is available.
+
 ### Upload and download files
 
 ```bash
