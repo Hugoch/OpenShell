@@ -132,9 +132,10 @@ pub fn ensure_parent_dir_restricted(path: &Path) -> Result<()> {
 /// Check whether a file has permissions that are too open.
 ///
 /// On Unix, returns `true` if the file has group or other read/write/execute
-/// bits set. On Windows, returns `true` if the file's DACL grants access to
-/// any trustee other than the current user. Returns `false` if the file's
-/// permissions/ACL cannot be read.
+/// bits set, and `false` if the file's metadata cannot be read. On Windows,
+/// returns `true` if the file's DACL grants access to any trustee other than
+/// the current user, and also `true` (fails closed) if the ACL cannot be
+/// inspected at all -- see the Windows doc comment below.
 #[cfg(unix)]
 pub fn is_file_permissions_too_open(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -143,10 +144,14 @@ pub fn is_file_permissions_too_open(path: &Path) -> bool {
 
 /// Check whether a file has permissions that are too open.
 ///
-/// See the Unix doc comment above for the cross-platform contract.
+/// See the Unix doc comment above for the cross-platform contract. A Win32
+/// inspection failure (missing `READ_CONTROL`, an invalid ACL, a token-query
+/// failure, etc.) is treated as too open rather than safe: `unwrap_or(false)`
+/// would turn every such failure into a security false negative, so this
+/// fails closed instead.
 #[cfg(windows)]
 pub fn is_file_permissions_too_open(path: &Path) -> bool {
-    windows_acl::has_foreign_trustee(path).unwrap_or(false)
+    windows_acl::has_foreign_trustee(path).unwrap_or(true)
 }
 
 /// Windows ACL/DACL implementation of the owner-only permission helpers
@@ -167,11 +172,15 @@ mod windows_acl {
     use windows::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
         DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation, GetTokenInformation,
-        IsValidAcl, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-        PSID, SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        IsValidAcl, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_QUERY, TOKEN_USER, TokenUser,
     };
     use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
-    use windows::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+    use windows::Win32::System::SystemServices::{
+        ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE,
+        ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_ALLOWED_OBJECT_ACE_TYPE,
+    };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows::core::{HSTRING, PWSTR};
 
@@ -282,14 +291,28 @@ mod windows_acl {
         let path_hstring = HSTRING::from(path.as_os_str());
         // SAFETY: `path_hstring` is a valid, NUL-terminated wide string for
         // the lifetime of this call; `new_acl` is a valid ACL just built
-        // above. `PROTECTED_DACL_SECURITY_INFORMATION` is the flag that
-        // strips inherited ACEs, which is the entire point of this call.
+        // above; `sid` borrows from `token_info`, kept alive for this call.
+        // `PROTECTED_DACL_SECURITY_INFORMATION` is the flag that strips
+        // inherited ACEs, which is the entire point of this call.
+        //
+        // Setting the owner (not just the DACL) matters for a pre-existing or
+        // migrated sensitive path owned by another SID: a DACL-only update
+        // can succeed with WRITE_DAC while a foreign owner retains their
+        // implicit WRITE_DAC right and can later replace this DACL (see
+        // https://learn.microsoft.com/en-us/windows/win32/secauthz/owner-of-a-new-object).
+        // Setting the owner to a SID already present in the caller's own
+        // token needs only WRITE_OWNER on the object, not
+        // SeTakeOwnershipPrivilege; if the caller can't take ownership (a
+        // genuinely foreign-owned object), this call fails and the error
+        // propagates below instead of silently leaving the object insecure.
         unsafe {
             SetNamedSecurityInfoW(
                 PWSTR::from_raw(path_hstring.as_ptr().cast_mut()),
                 SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                None,
+                OWNER_SECURITY_INFORMATION
+                    | DACL_SECURITY_INFORMATION
+                    | PROTECTED_DACL_SECURITY_INFORMATION,
+                Some(sid),
                 None,
                 Some(new_acl),
                 None,
@@ -297,7 +320,12 @@ mod windows_acl {
         }
         .ok()
         .into_diagnostic()
-        .wrap_err_with(|| format!("failed to set owner-only ACL on {}", path.display()))?;
+        .wrap_err_with(|| {
+            format!(
+                "failed to set owner-only ACL and take ownership of {}",
+                path.display()
+            )
+        })?;
 
         Ok(())
     }
@@ -326,6 +354,75 @@ mod windows_acl {
         .ok()
         .into_diagnostic()
         .wrap_err_with(|| format!("failed to set a NULL DACL on {}", path.display()))
+    }
+
+    /// Test-only: set a DACL containing a single `ACCESS_ALLOWED_OBJECT_ACE`
+    /// (rather than the plain `ACCESS_ALLOWED_ACE` [`restrict_to_current_user`]
+    /// writes) granting the current user access. Used to regression-test that
+    /// [`has_foreign_trustee`] conservatively flags the non-basic
+    /// access-allow ACE layouts (object/callback/callback-object) it doesn't
+    /// parse, instead of silently skipping them as if they were a
+    /// non-granting type like deny/audit.
+    #[cfg(test)]
+    pub(super) fn set_object_ace_dacl_for_test(path: &Path) -> Result<()> {
+        use windows::Win32::Security::{
+            ACE_FLAGS, ACL_REVISION, AddAccessAllowedObjectAce, InitializeAcl,
+        };
+
+        let token_info = current_user_token_info()?;
+        let sid = sid_from_token_info(&token_info);
+
+        // Oversized fixed buffer: plenty of room for an ACL header plus one
+        // object ACE (which is wider than a plain ACE but still well under
+        // 1 KiB even with a SID). Backed by `Vec<u64>` purely for its 8-byte
+        // alignment guarantee, matching `TokenUserBuf` above -- `ACL` has a
+        // stricter alignment than a `Vec<u8>` buffer provides.
+        let mut acl_buf = vec![0u64; 128];
+        let acl_len_bytes = size_of_val(acl_buf.as_slice());
+        let acl_ptr = acl_buf.as_mut_ptr().cast::<ACL>();
+        let acl_len = u32::try_from(acl_len_bytes).expect("test buffer size fits in u32");
+        // SAFETY: `acl_ptr` points at `acl_len` bytes of writable memory
+        // that outlives this call (owned by `acl_buf`, alive until this
+        // function returns).
+        unsafe { InitializeAcl(acl_ptr, acl_len, ACL_REVISION) }
+            .into_diagnostic()
+            .wrap_err("failed to initialize test ACL")?;
+        // SAFETY: `acl_ptr` was just initialized above and has room for one
+        // more ACE; `sid` borrows from `token_info`, kept alive for this
+        // call. Passing `None` for both GUIDs still produces an ACE typed
+        // `ACCESS_ALLOWED_OBJECT_ACE_TYPE` per the documented Win32 contract,
+        // which is exactly the non-basic layout under test.
+        unsafe {
+            AddAccessAllowedObjectAce(
+                acl_ptr,
+                ACL_REVISION,
+                ACE_FLAGS(0),
+                FILE_ALL_ACCESS.0,
+                None,
+                None,
+                sid,
+            )
+        }
+        .into_diagnostic()
+        .wrap_err("failed to add object ACE to test ACL")?;
+
+        let path_hstring = HSTRING::from(path.as_os_str());
+        // SAFETY: `path_hstring` is valid for the duration of this call;
+        // `acl_ptr` is a valid, fully-built ACL from the calls above.
+        unsafe {
+            SetNamedSecurityInfoW(
+                PWSTR::from_raw(path_hstring.as_ptr().cast_mut()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                Some(acl_ptr),
+                None,
+            )
+        }
+        .ok()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("failed to set an object-ACE DACL on {}", path.display()))
     }
 
     /// Returns `true` if `path`'s DACL grants access to any trustee other
@@ -387,9 +484,25 @@ mod windows_acl {
             }
             // SAFETY: `GetAce` returned a pointer to a valid ACE header.
             let header = unsafe { &*ace_ptr.cast::<ACE_HEADER>() };
-            if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE {
-                // Deny/other ACE types don't grant access; skip them for
-                // this "is anyone but me granted access" check.
+            let ace_type = u32::from(header.AceType);
+            if ace_type == ACCESS_ALLOWED_OBJECT_ACE_TYPE
+                || ace_type == ACCESS_ALLOWED_CALLBACK_ACE_TYPE
+                || ace_type == ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE
+            {
+                // Windows also defines access-allowed object, callback, and
+                // callback-object ACE variants (each with a different, wider
+                // layout than plain ACCESS_ALLOWED_ACE), any of which may
+                // grant rights to a foreign trustee. This audit doesn't parse
+                // their layouts, so treat their mere presence as too open
+                // rather than silently skip them -- a false positive here is
+                // an unnecessary re-tightening, but a false negative is a
+                // security hole. See the ACE type table:
+                // https://learn.microsoft.com/en-us/windows/win32/secauthz/ace-strings
+                return Some(true);
+            }
+            if ace_type != ACCESS_ALLOWED_ACE_TYPE {
+                // Deny/audit/alarm ACE types don't grant access; skip them
+                // for this "is anyone but me granted access" check.
                 continue;
             }
             // SAFETY: header.AceType confirms this is an ACCESS_ALLOWED_ACE.
@@ -403,6 +516,45 @@ mod windows_acl {
             }
         }
         Some(false)
+    }
+
+    /// Test-only: returns `true` if `path`'s current owner SID equals the
+    /// current process's user SID. Used to regression-test that
+    /// [`restrict_to_current_user`] actually takes ownership of the object,
+    /// not just its DACL.
+    #[cfg(test)]
+    pub(super) fn owner_is_current_user_for_test(path: &Path) -> Result<bool> {
+        let token_info = current_user_token_info()?;
+        let expected_sid = sid_from_token_info(&token_info);
+
+        let path_hstring = HSTRING::from(path.as_os_str());
+        let mut owner = PSID::default();
+        let mut security_descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `path_hstring` is valid for the call; the out-params are
+        // simple pointers filled in by the API on success. The security
+        // descriptor `owner` points into is LocalAlloc-owned and freed below.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                PWSTR::from_raw(path_hstring.as_ptr().cast_mut()),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                Some(&raw mut owner),
+                None,
+                None,
+                None,
+                &raw mut security_descriptor,
+            )
+        };
+        status
+            .ok()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("failed to query owner of {}", path.display()))?;
+        let _sd_guard = LocalFreeGuard(security_descriptor.0);
+
+        // SAFETY: both SIDs come from Windows APIs (`GetTokenInformation` and
+        // `GetNamedSecurityInfoW`) and are valid for the duration of this
+        // call.
+        Ok(unsafe { EqualSid(expected_sid, owner) }.is_ok())
     }
 }
 
@@ -590,6 +742,56 @@ mod tests {
         assert!(
             is_file_permissions_too_open(&file),
             "a NULL DACL grants everyone full access and must be flagged as too open"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restrict_to_current_user_also_takes_ownership() {
+        // A DACL-only update leaves a foreign owner's implicit WRITE_DAC
+        // right intact, letting them later replace the DACL we just set.
+        // Regression test for a review comment on the owner-only ACL PR.
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("owned-file");
+        std::fs::write(&file, "data").unwrap();
+
+        set_file_owner_only(&file).unwrap();
+
+        assert!(
+            windows_acl::owner_is_current_user_for_test(&file).unwrap(),
+            "restrict_to_current_user must take ownership, not just set the DACL"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn is_file_permissions_too_open_fails_closed_on_inspection_error() {
+        // A nonexistent path can't have its ACL read, so GetNamedSecurityInfoW
+        // fails. `unwrap_or(false)` would turn that failure into "safe";
+        // fail closed instead -- an inspection failure is a security false
+        // negative risk, not a green light.
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        assert!(is_file_permissions_too_open(&missing));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn is_file_permissions_too_open_detects_object_ace_type() {
+        // Windows also defines access-allowed object/callback/callback-object
+        // ACE types, each wider than the plain ACCESS_ALLOWED_ACE this audit
+        // parses. Any of them may grant rights to a foreign trustee, so their
+        // mere presence must be flagged conservatively rather than silently
+        // skipped as a non-granting (deny/audit) type would be.
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("object-ace-file");
+        std::fs::write(&file, "data").unwrap();
+
+        windows_acl::set_object_ace_dacl_for_test(&file).unwrap();
+
+        assert!(
+            is_file_permissions_too_open(&file),
+            "an unparsed access-allow ACE layout must be conservatively flagged as too open"
         );
     }
 
