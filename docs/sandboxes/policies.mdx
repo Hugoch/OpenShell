@@ -14,9 +14,15 @@ guide explains how to inspect, change, and verify those permissions.
 
 ## Policy Structure
 
-Policies are declarative YAML configurations. You specify access rules and
-processing settings, and OpenShell enforces them. The following outline shows
-the policy sections with their contents omitted:
+A sandbox policy expresses access rules and runtime settings in declarative
+YAML. Filesystem settings define where programs can read and write, and process
+settings select the user and group they run as. Network rules define which
+services each program can reach and which requests it can send. Optional
+middleware can inspect or transform allowed traffic, for example to redact
+sensitive content from a request.
+
+The following outline shows how these controls are organized, with individual
+settings omitted:
 
 ```yaml
 version: 1
@@ -27,11 +33,6 @@ network_policies: { ... }    # Network destinations and permitted requests.
 network_middlewares: { ... } # Additional traffic processing.
 ```
 
-`network_policies` controls which programs can connect to a destination and which
-application requests they can make. `network_middlewares` selects additional
-processing, such as redaction or filtering, for traffic the network rules allow.
-Middleware does not grant network access.
-
 Filesystem enforcement and process identity are set when the workload starts.
 Network rules and policy settings for built-in or already registered middleware
 can change while it runs, subject to the lifecycle limits given in
@@ -41,12 +42,14 @@ service or changing its gateway registration requires a gateway restart.
 Refer to the [Policy Schema Reference](/reference/policy-schema) for every
 accepted field.
 
-## Choose How to Change a Policy
+## Apply Policy Changes
 
-Choose the narrowest operation that represents your intent. The base policy is
-the policy configured for the sandbox. The effective policy includes rules
-contributed by attached providers, unless a gateway-global policy replaces
-normal sandbox and provider selection.
+You can supply a policy when creating a sandbox, update its network rules, or
+replace the full policy.
+
+The base policy is the policy configured for the sandbox. The effective policy
+includes rules contributed by attached providers, unless a gateway-global policy
+replaces normal sandbox and provider selection.
 
 | Operation | Use it when | Important behavior |
 |---|---|---|
