@@ -693,6 +693,25 @@ fn stage_tls_ca_files(
     Ok(Some((staged_ca, staged_bundle)))
 }
 
+/// Resolve the CA paths to hand the sandboxed agent for TLS trust.
+///
+/// A curated `ProcessContainer` cannot read the host proxy's private temp
+/// folder, regardless of env tier -- stage only the public CA material
+/// beneath `share_dir`, whose `AppContainer` DACL is already granted by the
+/// policy, so HTTPS clients can authenticate the `OpenShell` inspection proxy
+/// without broadening filesystem access. Staging must happen whenever a
+/// host proxy CA exists at all, independent of `pc_minimal_env`.
+fn resolve_agent_proxy_ca_paths(
+    host_proxy_ca_paths: Option<&(PathBuf, PathBuf)>,
+    share_dir: &str,
+    sandbox_id: &str,
+) -> std::io::Result<Option<(PathBuf, PathBuf)>> {
+    if host_proxy_ca_paths.is_none() {
+        return Ok(None);
+    }
+    stage_tls_ca_files(host_proxy_ca_paths, share_dir, sandbox_id)
+}
+
 /// PROTOTYPE (2026-09-10): env-var-based governed egress, as an alternative
 /// to MXC's own `network.proxy`/`runtimeConfig.networkProxy` transparent
 /// redirect (both confirmed broken for this driver's use case -- see
@@ -850,25 +869,6 @@ fn quote_windows_argument(arg: &str) -> String {
     quoted.push('"');
     quoted
 }
-fn append_tls_readwrite_grant(
-    readwrite_paths: &mut Vec<String>,
-    ca_paths: Option<&(PathBuf, PathBuf)>,
-) {
-    let Some((ca_cert_path, _)) = ca_paths else {
-        return;
-    };
-    let Some(dir) = ca_cert_path.parent() else {
-        return;
-    };
-    let dir = dir.display().to_string();
-    if !readwrite_paths
-        .iter()
-        .any(|existing| existing.eq_ignore_ascii_case(&dir))
-    {
-        readwrite_paths.push(dir);
-    }
-}
-
 impl MxcComputeBackend {
     pub fn new(config: MxcComputeConfig) -> Self {
         let invoker = WxcExecInvoker::new(&config.wxc_exec_path, config.debug);
@@ -1608,31 +1608,23 @@ async fn run_lifecycle(
     let host_proxy_ca_paths = host_proxy
         .as_ref()
         .and_then(openshell_supervisor_network::host::HostProxyHandle::ca_file_paths);
-    // A curated ProcessContainer cannot read the host's private temp folder.
-    // Stage only the public CA material beneath the per-sandbox working directory,
-    // DACL is already granted by the policy, so HTTPS clients can authenticate
-    // the OpenShell inspection proxy without broadening filesystem access.
-    let agent_proxy_ca_paths = if config.pc_minimal_env && host_proxy_ca_paths.is_some() {
-        match stage_tls_ca_files(
-            host_proxy_ca_paths.as_ref(),
-            &sandbox_config.cwd,
-            &sandbox_id,
-        ) {
-            Ok(paths) => paths,
-            Err(error) => {
-                set_failed(
-                    &registry,
-                    &watch_tx,
-                    &sandbox,
-                    &sandbox_id,
-                    &format!("failed to stage MXC egress proxy CA files: {error}"),
-                )
-                .await;
-                return;
-            }
+    let agent_proxy_ca_paths = match resolve_agent_proxy_ca_paths(
+        host_proxy_ca_paths.as_ref(),
+        &sandbox_config.cwd,
+        &sandbox_id,
+    ) {
+        Ok(paths) => paths,
+        Err(error) => {
+            set_failed(
+                &registry,
+                &watch_tx,
+                &sandbox,
+                &sandbox_id,
+                &format!("failed to stage MXC egress proxy CA files: {error}"),
+            )
+            .await;
+            return;
         }
-    } else {
-        host_proxy_ca_paths.clone()
     };
     if let Some(addr) = proxy_addr {
         {
@@ -1650,10 +1642,7 @@ async fn run_lifecycle(
         ));
     }
 
-    let mut readwrite_paths = mapped.readwrite_paths;
-    if !config.pc_minimal_env {
-        append_tls_readwrite_grant(&mut readwrite_paths, host_proxy_ca_paths.as_ref());
-    }
+    let readwrite_paths = mapped.readwrite_paths;
     let readonly_paths = mapped.readonly_paths;
     let ui = mapped.ui;
     let filesystem = MxcFilesystem {
@@ -1689,8 +1678,8 @@ async fn run_lifecycle(
         .map(|(k, v)| format!("{k}={v}"))
         .collect();
     append_provider_child_env(&mut env, provider_credentials.as_ref());
-    // Layer proxy configuration for every env tier. Curated ProcessContainers
-    // use the staged CA copies above; other tiers use the original paths.
+    // Layer proxy configuration for every env tier using the staged CA copies
+    // above. The host proxy's private temporary directory is never shared.
     append_tls_env_vars(&mut env, agent_proxy_ca_paths.as_ref());
     append_proxy_env_vars(&mut env, proxy_addr, proxy_auth.as_ref());
     env.sort(); // deterministic order for logging / debugging
@@ -2951,6 +2940,8 @@ mod lifecycle_tests {
 
         let shell =
             std::env::var("COMSPEC").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string());
+        let workload = tempfile::tempdir().expect("temporary workload directory");
+        let workload_dir = workload.path().to_string_lossy().into_owned();
         let mut policy = fs_policy(&[]);
         policy.network_policies.insert(
             "github".to_string(),
@@ -2965,10 +2956,19 @@ mod lifecycle_tests {
                     provider_credentialed: true,
                     ..Default::default()
                 }],
-                binaries: vec![NetworkBinary { path: shell }],
+                binaries: vec![NetworkBinary {
+                    path: shell.clone(),
+                }],
             },
         );
-        let mut sandbox = with_policy(driver_sandbox("sb-provider-env"), policy);
+        let mut sandbox = with_policy(
+            driver_sandbox_with_command(
+                "sb-provider-env",
+                &workload_dir,
+                vec![shell, "/c".into(), "exit 0".into()],
+            ),
+            policy,
+        );
         sandbox
             .spec
             .as_mut()
@@ -3118,6 +3118,49 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn resolve_agent_proxy_ca_paths_stages_regardless_of_env_tier() {
+        // Regression test for the bug where CA staging was gated behind
+        // `config.pc_minimal_env`, so the default env tier (`pc_minimal_env
+        // == false`) left the agent pointed at the host proxy's private,
+        // AppContainer-unreadable temp directory instead of a staged copy.
+        // `resolve_agent_proxy_ca_paths` takes no env-tier argument at all,
+        // so this can't regress silently.
+        let source = tempfile::tempdir().unwrap();
+        let share = tempfile::tempdir().unwrap();
+        let ca = source.path().join("source-ca.pem");
+        let bundle = source.path().join("source-bundle.pem");
+        std::fs::write(&ca, b"ca").unwrap();
+        std::fs::write(&bundle, b"bundle").unwrap();
+        let host_proxy_ca_paths = (ca, bundle);
+
+        let resolved = resolve_agent_proxy_ca_paths(
+            Some(&host_proxy_ca_paths),
+            share.path().to_str().expect("UTF-8 test path"),
+            "sandbox-default-env-tier",
+        )
+        .unwrap()
+        .expect("resolved paths");
+
+        assert_eq!(
+            resolved.0.parent().unwrap(),
+            share
+                .path()
+                .join(".openshell-proxy")
+                .join("sandbox-default-env-tier")
+        );
+        assert_ne!(resolved.0, host_proxy_ca_paths.0);
+        assert_ne!(resolved.1, host_proxy_ca_paths.1);
+    }
+
+    #[test]
+    fn resolve_agent_proxy_ca_paths_is_none_without_a_host_proxy() {
+        assert_eq!(
+            resolve_agent_proxy_ca_paths(None, "unused-share", "sandbox-a").unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn proxy_env_replaces_inherited_values_and_clears_bypass_rules() {
         let mut env = vec![
             "PATH=C:\\Windows".to_owned(),
@@ -3206,19 +3249,6 @@ mod lifecycle_tests {
         assert!(env.contains(&format!("REQUESTS_CA_BUNDLE={bundle_path}")));
         assert!(env.contains(&format!("CURL_CA_BUNDLE={bundle_path}")));
         assert!(env.contains(&format!("GIT_SSL_CAINFO={bundle_path}")));
-    }
-
-    #[test]
-    fn tls_readwrite_grant_adds_ca_directory_once() {
-        let tls_dir = std::env::temp_dir().join("openshell-mxc-tls-test");
-        let ca_cert = tls_dir.join("openshell-ca.pem");
-        let bundle = tls_dir.join("ca-bundle.pem");
-        let existing = tls_dir.display().to_string().to_ascii_lowercase();
-        let mut readwrite = vec![existing.clone()];
-
-        append_tls_readwrite_grant(&mut readwrite, Some(&(ca_cert, bundle)));
-
-        assert_eq!(readwrite, vec![existing]);
     }
 
     #[test]
@@ -3415,18 +3445,22 @@ mod lifecycle_tests {
             );
             assert!(recorded["network"].get("proxy").is_none());
 
-            let proxy_addr = {
+            let (proxy_addr, host_proxy_ca_paths) = {
                 let registry = backend.registry.lock().await;
                 let entry = registry.get(sandbox_id).expect("registry entry");
-                assert!(
-                    entry.host_proxy.is_some(),
-                    "{sandbox_id}: governed egress must hold a live host proxy"
-                );
+                let host_proxy = entry.host_proxy.as_ref().unwrap_or_else(|| {
+                    panic!("{sandbox_id}: governed egress must hold a live host proxy")
+                });
                 assert_eq!(
                     entry.trimmed_policy.as_ref().unwrap().network_policies,
                     policy.network_policies
                 );
-                entry.proxy_addr.expect("proxy address")
+                (
+                    entry.proxy_addr.expect("proxy address"),
+                    host_proxy
+                        .ca_file_paths()
+                        .expect("governed egress proxy must expose public CA paths"),
+                )
             };
             tokio::time::timeout(
                 Duration::from_secs(2),
@@ -3437,6 +3471,46 @@ mod lifecycle_tests {
             .expect("proxy listener must accept connections");
 
             let child_env = recorded["process"]["env"].as_array().expect("child env");
+            let tls_env = child_env
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(|entry| entry.split_once('='))
+                .filter(|(key, _)| TLS_ENV_KEYS.contains(key))
+                .collect::<HashMap<_, _>>();
+            assert_eq!(
+                tls_env.len(),
+                TLS_ENV_KEYS.len(),
+                "{sandbox_id}: every TLS trust variable must be replaced"
+            );
+            let staged_ca_dir = PathBuf::from(&share)
+                .join(".openshell-proxy")
+                .join(sandbox_id);
+            for key in TLS_ENV_KEYS {
+                let path = PathBuf::from(
+                    tls_env
+                        .get(key)
+                        .unwrap_or_else(|| panic!("{sandbox_id}: missing {key}")),
+                );
+                assert_eq!(
+                    path.parent(),
+                    Some(staged_ca_dir.as_path()),
+                    "{sandbox_id}: {key} must use the staged CA directory"
+                );
+                assert!(path.is_file(), "{sandbox_id}: staged {key} path must exist");
+            }
+            let host_ca_dir = host_proxy_ca_paths
+                .0
+                .parent()
+                .expect("host CA path must have a parent");
+            assert!(
+                recorded["filesystem"]["readwritePaths"]
+                    .as_array()
+                    .expect("read-write paths")
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .all(|path| Path::new(path) != host_ca_dir),
+                "{sandbox_id}: the host proxy CA directory must not be writable"
+            );
             let proxy_env = child_env
                 .iter()
                 .filter_map(serde_json::Value::as_str)
