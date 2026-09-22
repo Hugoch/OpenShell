@@ -255,6 +255,11 @@ pub enum Store {
     Sqlite(SqliteStore),
 }
 
+/// RAII guard for the database-backed cross-object mutation lock.
+pub struct DistributedMutationGuard {
+    _postgres: Option<postgres::PostgresAdvisoryLockGuard>,
+}
+
 /// Trait for inferring an object type string from a message type.
 pub trait ObjectType {
     fn object_type() -> &'static str;
@@ -340,6 +345,23 @@ impl Store {
         match self {
             Self::Postgres(store) => store.max_connections(),
             Self::Sqlite(store) => store.max_connections(),
+        }
+    }
+
+    /// Serialize mutations whose invariants span multiple persisted objects.
+    ///
+    /// `SQLite` deployments are single-replica and use only the caller's local
+    /// mutex. `PostgreSQL` deployments additionally hold a session-level
+    /// advisory lock so concurrent gateway replicas cannot validate and write
+    /// the same cross-object invariant independently.
+    pub async fn acquire_distributed_mutation_guard(
+        &self,
+    ) -> PersistenceResult<DistributedMutationGuard> {
+        match self {
+            Self::Postgres(store) => Ok(DistributedMutationGuard {
+                _postgres: Some(store.acquire_cross_object_lock().await?),
+            }),
+            Self::Sqlite(_) => Ok(DistributedMutationGuard { _postgres: None }),
         }
     }
 
