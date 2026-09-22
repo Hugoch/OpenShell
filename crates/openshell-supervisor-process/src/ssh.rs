@@ -719,17 +719,18 @@ impl russh::server::Handler for SshHandler {
             }
         } else if name == "sftp" {
             session.channel_success(channel)?;
-            // sftp-server speaks the SFTP binary protocol over stdin/stdout,
-            // which the boundary executor preserves as separate pipes. This enables
-            // modern scp (SFTP-based, OpenSSH 9.0+) and SFTP clients to
-            // transfer files into and out of the sandbox.
+            // The sandbox runtime implements SFTP over the boundary streams so
+            // the workload image does not need an sftp-server executable.
             self.start_exec_spec(
                 channel,
                 session.handle(),
                 openshell_isolation_interface::contract::ExecSpec {
-                    program: "/usr/lib/openssh/sftp-server".to_string(),
-                    args: vec![],
+                    program: String::new(),
+                    args: Vec::new(),
                     shell: None,
+                    runtime_helper: Some(
+                        openshell_isolation_interface::contract::RuntimeHelper::Sftp,
+                    ),
                     env: vec![],
                     workdir: None,
                     pty: false,
@@ -907,6 +908,7 @@ impl SshHandler {
                     command,
                     login: !no_login_shell,
                 }),
+                runtime_helper: None,
                 env,
                 workdir: None,
                 pty: pty_requested,

@@ -4,7 +4,10 @@
 //! Workload-side implementation of RFC 0012 sandbox exec.
 
 use std::collections::HashMap;
+use std::io::Write as _;
+use std::net::Shutdown;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
@@ -57,6 +60,61 @@ impl LocalBoundaryExec {
             #[cfg(target_os = "linux")]
             launcher,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn runtime_helper(&self, spec: ExecSpec) -> Result<ExecSession, BackendError> {
+        self.runtime.ensure_active()?;
+        if spec.pty
+            || spec.runtime_helper
+                != Some(openshell_isolation_interface::contract::RuntimeHelper::Sftp)
+        {
+            return Err(BackendError::Process(
+                "unsupported sandbox runtime helper request".to_string(),
+            ));
+        }
+        let root = spec
+            .workdir
+            .as_deref()
+            .or(self.base_workdir.as_deref())
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| {
+                BackendError::Process("SFTP requires a workload directory".to_string())
+            })?;
+
+        let (stdin_client, stdin_helper) = helper_socket_pair()?;
+        let (stdout_client, stdout_helper) = helper_socket_pair()?;
+        let (stderr_client, mut stderr_helper) = helper_socket_pair()?;
+        let cancel_sockets = vec![
+            stdin_helper.try_clone().map_err(|error| {
+                BackendError::Process(format!("clone runtime helper input: {error}"))
+            })?,
+            stdout_helper.try_clone().map_err(|error| {
+                BackendError::Process(format!("clone runtime helper output: {error}"))
+            })?,
+        ];
+        let stdin = async_socket(stdin_client)?.into_split().1;
+        let stdout = async_socket(stdout_client)?.into_split().0;
+        let stderr = async_socket(stderr_client)?.into_split().0;
+        let input = async_socket(stdin_helper)?;
+        let output = async_socket(stdout_helper)?;
+        let worker = tokio::spawn(async move {
+            crate::sftp::serve(tokio::io::join(input, output), root)
+                .await
+                .map_err(|error| {
+                    let message = format!("{error:?}");
+                    let _ = writeln!(stderr_helper, "{message}");
+                    message
+                })
+        });
+        let process = RuntimeHelperProcess::new(worker, cancel_sockets);
+        Ok(ExecSession {
+            process,
+            stdin: Some(Box::new(stdin)),
+            stdout: Box::new(stdout),
+            stderr: Some(Box::new(stderr)),
+            terminal: None,
+        })
     }
 
     fn command(&self, spec: &ExecSpec) -> Result<Command, BackendError> {
@@ -356,6 +414,10 @@ impl Drop for SpawnedExec {
 #[async_trait]
 impl BoundaryExec for LocalBoundaryExec {
     async fn exec(&self, spec: ExecSpec) -> Result<ExecSession, BackendError> {
+        #[cfg(target_os = "linux")]
+        if spec.runtime_helper.is_some() {
+            return self.runtime_helper(spec);
+        }
         let executor = self.clone();
         let (send, receive) = tokio::sync::oneshot::channel();
         tokio::task::spawn_blocking(move || {
@@ -373,6 +435,83 @@ impl BoundaryExec for LocalBoundaryExec {
             .await
             .map_err(|_| BackendError::Process("exec spawn task failed".to_string()))?
             .map(SpawnedExec::into_session)
+    }
+}
+
+fn helper_socket_pair() -> Result<(StdUnixStream, StdUnixStream), BackendError> {
+    StdUnixStream::pair()
+        .map_err(|error| BackendError::Process(format!("create runtime helper pipe: {error}")))
+}
+
+fn async_socket(socket: StdUnixStream) -> Result<tokio::net::UnixStream, BackendError> {
+    socket.set_nonblocking(true).map_err(|error| {
+        BackendError::Process(format!("configure runtime helper pipe: {error}"))
+    })?;
+    tokio::net::UnixStream::from_std(socket)
+        .map_err(|error| BackendError::Process(format!("adopt runtime helper pipe: {error}")))
+}
+
+struct RuntimeHelperProcess {
+    result: Arc<std::sync::Mutex<Option<BoundaryExitStatus>>>,
+    exited: Arc<tokio::sync::Notify>,
+    abort: tokio::task::AbortHandle,
+    cancel_sockets: Vec<StdUnixStream>,
+}
+
+impl RuntimeHelperProcess {
+    fn new(
+        worker: tokio::task::JoinHandle<Result<(), String>>,
+        cancel_sockets: Vec<StdUnixStream>,
+    ) -> Arc<Self> {
+        let result = Arc::new(std::sync::Mutex::new(None));
+        let exited = Arc::new(tokio::sync::Notify::new());
+        let process = Arc::new(Self {
+            result: result.clone(),
+            exited: exited.clone(),
+            abort: worker.abort_handle(),
+            cancel_sockets,
+        });
+        tokio::spawn(async move {
+            let status = match worker.await {
+                Ok(Ok(())) => BoundaryExitStatus::Exited(0),
+                Err(error) if error.is_cancelled() => BoundaryExitStatus::Signaled(9),
+                Ok(Err(_)) | Err(_) => BoundaryExitStatus::Exited(1),
+            };
+            if let Ok(mut slot) = result.lock() {
+                *slot = Some(status);
+            }
+            exited.notify_waiters();
+        });
+        process
+    }
+}
+
+#[async_trait]
+impl BoundaryProcess for RuntimeHelperProcess {
+    async fn wait(&self) -> Result<BoundaryExitStatus, BackendError> {
+        loop {
+            let notified = self.exited.notified();
+            let status = *self
+                .result
+                .lock()
+                .map_err(|_| BackendError::Process("runtime helper result lock poisoned".into()))?;
+            if let Some(status) = status {
+                return Ok(status);
+            }
+            notified.await;
+        }
+    }
+
+    async fn signal(&self, _signal: BoundarySignal) -> Result<(), BackendError> {
+        for socket in &self.cancel_sockets {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
+        self.abort.abort();
+        Ok(())
+    }
+
+    async fn terminate(&self) -> Result<(), BackendError> {
+        self.signal(BoundarySignal::Kill).await
     }
 }
 
@@ -574,6 +713,7 @@ mod tests {
                     command: Some("printf ready".to_string()),
                     login: true,
                 }),
+                runtime_helper: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -603,6 +743,7 @@ mod tests {
                     command: None,
                     login: true,
                 }),
+                runtime_helper: None,
                 env: vec![],
                 workdir: None,
                 pty: true,
@@ -623,6 +764,7 @@ mod tests {
                         .to_string(),
                 ],
                 shell: None,
+                runtime_helper: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -655,6 +797,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trusted_sftp_helper_round_trips_through_boundary_streams() {
+        let root = tempfile::tempdir().unwrap();
+        let mut executor = executor();
+        executor.base_workdir = Some(root.path().to_string_lossy().into_owned());
+        let mut session = executor
+            .exec(ExecSpec {
+                program: String::new(),
+                args: Vec::new(),
+                shell: None,
+                runtime_helper: Some(openshell_isolation_interface::contract::RuntimeHelper::Sftp),
+                env: Vec::new(),
+                workdir: None,
+                pty: false,
+            })
+            .await
+            .expect("start SFTP helper");
+        let process = session.process.clone();
+        let stream = tokio::io::join(
+            session.stdout,
+            session.stdin.take().expect("SFTP input stream"),
+        );
+        let client = russh_sftp::client::SftpSession::new(stream)
+            .await
+            .expect("start SFTP client");
+        let mut file = client.create("boundary.txt").await.expect("create file");
+        file.write_all(b"through boundary")
+            .await
+            .expect("write file");
+        drop(file);
+        drop(client);
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), process.wait())
+                .await
+                .expect("SFTP helper exits")
+                .expect("SFTP helper status"),
+            BoundaryExitStatus::Exited(0)
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("boundary.txt")).unwrap(),
+            b"through boundary"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_sftp_helper_closes_protocol_stream() {
+        let root = tempfile::tempdir().unwrap();
+        let mut executor = executor();
+        executor.base_workdir = Some(root.path().to_string_lossy().into_owned());
+        let mut session = executor
+            .exec(ExecSpec {
+                program: String::new(),
+                args: Vec::new(),
+                shell: None,
+                runtime_helper: Some(openshell_isolation_interface::contract::RuntimeHelper::Sftp),
+                env: Vec::new(),
+                workdir: None,
+                pty: false,
+            })
+            .await
+            .expect("start SFTP helper");
+        let process = session.process.clone();
+        let stream = tokio::io::join(
+            session.stdout,
+            session.stdin.take().expect("SFTP input stream"),
+        );
+        let client = russh_sftp::client::SftpSession::new(stream)
+            .await
+            .expect("start SFTP client");
+
+        process.terminate().await.expect("cancel SFTP helper");
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), process.wait())
+                .await
+                .expect("SFTP helper exits")
+                .expect("SFTP helper status"),
+            BoundaryExitStatus::Signaled(9)
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), client.metadata("."))
+                .await
+                .expect("SFTP client observes cancellation")
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn exec_rejects_after_boundary_end() {
         let executor = executor();
         executor.runtime.deactivate();
@@ -663,6 +891,7 @@ mod tests {
                 program: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), "exit 0".to_string()],
                 shell: None,
+                runtime_helper: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -680,6 +909,7 @@ mod tests {
                 program: "/definitely/missing/openshell-exec".to_string(),
                 args: vec![],
                 shell: None,
+                runtime_helper: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -700,6 +930,7 @@ mod tests {
                     program: "/bin/sleep".to_string(),
                     args: vec!["30".to_string()],
                     shell: None,
+                    runtime_helper: None,
                     env: vec![],
                     workdir: None,
                     pty: false,
@@ -732,6 +963,7 @@ mod tests {
                 program: "/bin/sleep".to_string(),
                 args: vec!["30".to_string()],
                 shell: None,
+                runtime_helper: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -764,6 +996,7 @@ mod tests {
                 program: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), "exit 0".to_string()],
                 shell: None,
+                runtime_helper: None,
                 env: vec![],
                 workdir: None,
                 pty: false,
@@ -784,6 +1017,7 @@ mod tests {
                 program: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), "exit 7".to_string()],
                 shell: None,
+                runtime_helper: None,
                 env: vec![],
                 workdir: None,
                 pty: true,

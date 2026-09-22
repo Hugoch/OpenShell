@@ -1008,9 +1008,17 @@ pub struct ExecSpecWire {
     pub args: Vec<String>,
     #[serde(default)]
     pub shell: Option<ShellSpecWire>,
+    #[serde(default)]
+    pub runtime_helper: Option<RuntimeHelperWire>,
     pub env: Vec<(String, String)>,
     pub workdir: Option<String>,
     pub pty: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeHelperWire {
+    Sftp,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1043,6 +1051,11 @@ impl From<ExecSpec> for ExecSpecWire {
             program: spec.program,
             args: spec.args,
             shell: spec.shell.map(ShellSpecWire::from),
+            runtime_helper: spec.runtime_helper.map(|helper| match helper {
+                openshell_isolation_interface::contract::RuntimeHelper::Sftp => {
+                    RuntimeHelperWire::Sftp
+                }
+            }),
             env: spec.env,
             workdir: spec.workdir,
             pty: spec.pty,
@@ -1056,6 +1069,11 @@ impl From<ExecSpecWire> for ExecSpec {
             program: spec.program,
             args: spec.args,
             shell: spec.shell.map(ShellSpec::from),
+            runtime_helper: spec.runtime_helper.map(|helper| match helper {
+                RuntimeHelperWire::Sftp => {
+                    openshell_isolation_interface::contract::RuntimeHelper::Sftp
+                }
+            }),
             env: spec.env,
             workdir: spec.workdir,
             pty: spec.pty,
@@ -1628,5 +1646,25 @@ mod tests {
         .expect("decode legacy exec spec");
 
         assert_eq!(wire.shell, None);
+        assert_eq!(wire.runtime_helper, None);
+    }
+
+    #[test]
+    fn exec_wire_preserves_trusted_runtime_helper_intent() {
+        let spec = ExecSpec {
+            program: String::new(),
+            args: Vec::new(),
+            shell: None,
+            runtime_helper: Some(openshell_isolation_interface::contract::RuntimeHelper::Sftp),
+            env: Vec::new(),
+            workdir: None,
+            pty: false,
+        };
+
+        let decoded = ExecSpec::from(ExecSpecWire::from(spec));
+        assert_eq!(
+            decoded.runtime_helper,
+            Some(openshell_isolation_interface::contract::RuntimeHelper::Sftp)
+        );
     }
 }

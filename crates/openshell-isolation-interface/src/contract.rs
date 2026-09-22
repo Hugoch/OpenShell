@@ -728,12 +728,20 @@ pub struct ExecSpec {
     /// Workload-local shell request. When present, the boundary resolves the
     /// concrete shell and ignores `program` and `args`.
     pub shell: Option<ShellSpec>,
+    /// Trusted helper implemented by the sandbox runtime. This intent is set
+    /// only by supervisor-owned protocol adapters, never by public exec APIs.
+    pub runtime_helper: Option<RuntimeHelper>,
     /// Extra environment over the boundary's base.
     pub env: Vec<(String, String)>,
     /// Working directory, if any.
     pub workdir: Option<String>,
     /// Whether to allocate a PTY.
     pub pty: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeHelper {
+    Sftp,
 }
 
 /// A shell invocation whose executable must be resolved inside the workload.
