@@ -12,11 +12,11 @@ Examples organized by detail tier — from minimal (just host + intent) to full 
 
 ## Minimal Tier Examples (host + intent, no API docs)
 
-### Example M1: L4 Pass-Through
+### Example M1: Explicit Proxy Without Request Rules
 
 **User**: "Let claude talk to api.anthropic.com and statsig.anthropic.com, just let everything through."
 
-No API docs needed. No L7 inspection.
+No API docs needed. No method or path rules.
 
 ```yaml
 network_policies:
@@ -29,7 +29,10 @@ network_policies:
       - { path: /usr/local/bin/claude }
 ```
 
-No `protocol`, `rules`, or `access` — this is pure L4 (host:port + binary identity check).
+No `protocol`, `rules`, or `access` means there are no protocol-specific request
+rules. The explicit proxy still performs its default TLS handling and HTTP
+destination checks. Add `tls: skip` only when the client requires a deliberately
+raw stream.
 
 ---
 
@@ -543,15 +546,16 @@ network_policies:
 
 ---
 
-## Example 5: Mixed L4 and L7 Policy
+## Example 5: Mixed Endpoint and Request Policy
 
 ### Input: User Intent
 
-> "I need claude to access Anthropic APIs (just let everything through, no inspection needed), and also access our internal docs API at docs.internal:8080 but only for reading. The docs API is HTTP so no TLS."
+> "I need claude to access Anthropic APIs without method or path rules, and also access our internal docs API at docs.internal:8080 but only for reading. The docs API is HTTP so no TLS."
 
 ### Analysis
 
-- Anthropic API: L4-only (no inspection), standard claude binary
+- Anthropic API: explicit proxy without request rules, standard claude binary;
+  default TLS handling and HTTP destination checks still apply
 - Internal docs: L7 with read-only, HTTP so no TLS config needed
 - Two separate policies because different binaries
 
@@ -579,7 +583,10 @@ network_policies:
       - { path: /usr/local/bin/claude }
 ```
 
-**Note**: The first policy has no `protocol` field — this means L4-only (host:port check, no HTTP inspection). The second policy has `protocol: rest` so every HTTP request is inspected.
+**Note**: The first policy has no `protocol` field, so it has no method or path
+rules; default proxy TLS handling and HTTP destination checks still apply. The
+second policy has `protocol: rest`, so every HTTP request is checked against its
+request policy.
 
 ---
 
@@ -806,29 +813,13 @@ After:
 
 **Agent workflow**:
 
-1. No existing file — generate the full scaffolding with defaults
+1. No existing file — generate a complete `version: 1` file and omit startup
+   fields that the user did not request
 2. Populate `network_policies` with the two requested policies
 3. Write the complete file:
 
 ```yaml
 version: 1
-
-filesystem_policy:
-  include_workdir: true
-  read_only:
-    - /usr
-    - /lib
-    - /proc
-    - /dev/urandom
-    - /app
-    - /etc
-    - /var/log
-  read_write:
-    - /tmp
-    - /dev/null
-
-landlock:
-  compatibility: best_effort
 
 network_policies:
   github_readonly:

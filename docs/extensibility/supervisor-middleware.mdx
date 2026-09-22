@@ -3,13 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 title: "Supervisor Middleware"
 sidebar-title: "Supervisor Middleware"
-description: "Configure and operate built-in and operator-run middleware for sandbox HTTP requests and WebSocket messages."
+description: "Configure and operate built-in and operator-run middleware for sandbox HTTP requests, HTTP responses, and WebSocket messages."
 keywords: "Generative AI, Cybersecurity, AI Agents, Supervisor Middleware, Extensibility, Request Filtering"
 ---
 
-Supervisor middleware adds ordered processing stages to allowed HTTP and WebSocket egress. Middleware runs after network and L7 policy admit traffic and before OpenShell injects provider credentials. A stage can allow or deny an HTTP request or client WebSocket text message, replace its payload, add approved HTTP headers, and report audit-safe findings.
+Supervisor middleware adds ordered processing stages to allowed HTTP and
+WebSocket egress. Request stages run after network and L7 policy admit traffic
+and before OpenShell injects provider credentials. Response stages run on the
+final upstream HTTP response before return. A stage can allow, deny, transform
+supported payloads, mutate permitted request headers, and report audit-safe
+findings according to the operation it advertises.
 
-Middleware selection is independent of the network policy rule that admitted the request. OpenShell matches middleware by destination host, so the same middleware applies consistently across broad, specific, user-authored, and provider-derived network policies.
+Middleware selection is independent of the network policy rule that admitted the
+request. OpenShell first matches attachments by destination host, then selects
+only operations advertised by each implementation. A host match therefore does
+not mean that every request, response, or WebSocket message is inspected. Refer
+to the [conceptual inspected HTTP flow](/sandboxes/network-policy-recipes#understand-inspected-http-flow)
+for the relationship between policy, middleware, credentials, and upstream
+responses.
 
 ## Request Flow
 

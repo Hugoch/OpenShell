@@ -1,238 +1,52 @@
 # Sandbox Policy Quickstart
 
-See how OpenShell's network policy system works in under five minutes.
-You'll create a sandbox, watch a request get blocked by the default-deny
-policy, apply a fine-grained L7 rule, and verify that reads are allowed
-while writes are blocked — all without restarting anything.
+This example demonstrates a deny-allow-deny network policy workflow against a
+local Docker gateway. It builds a versioned Ubuntu 24.04 image with `curl` and
+CA certificates, keeps the sandbox main process running, and checks both the
+allowed and denied outcomes.
 
 ## Prerequisites
 
-- A running OpenShell gateway (`mise run gateway:docker` for local development)
-- Docker daemon running
+- A current OpenShell CLI connected to a matching local gateway with the Docker
+  compute driver.
+- Docker.
+- `jq`.
+- No active gateway-global policy. The script also creates the sandbox with no
+  providers and checks that its effective policy starts without network rules.
 
-## What's in this example
+## Run the Demo
 
-| File          | Description                                                          |
-| ------------- | -------------------------------------------------------------------- |
-| `policy.yaml` | L7 read-only policy for the GitHub REST API, scoped to `curl`        |
-| `demo.sh`     | Automated script that runs the full walkthrough non-interactively    |
+Run the script from the repository root:
 
-## Walkthrough
-
-### 1. Create a sandbox
-
-```bash
-openshell sandbox create --name demo --no-auto-providers
+```shell
+bash examples/sandbox-policy-quickstart/demo.sh
 ```
 
-`--no-auto-providers` skips the provider setup prompt since this
-demo doesn't use an AI agent.
+Pass a unique sandbox name when `policy-demo` is already in use:
 
-You'll land in an interactive shell inside the sandbox:
-
-```text
-sandbox@demo:~$
+```shell
+bash examples/sandbox-policy-quickstart/demo.sh policy-demo-2
 ```
 
-### 2. Try to reach the GitHub API — blocked
+The script cleans up only the sandbox that it successfully creates. It stops if
+the selected sandbox name already exists.
 
-```bash
-curl -s https://api.github.com/zen
-```
+## What the Demo Verifies
 
-The request fails. By default, **all outbound network traffic is denied**.
-The sandbox proxy intercepted the HTTPS CONNECT request to
-`api.github.com:443` and rejected it because no network policy authorizes
-`curl` to reach that host.
+The script performs these checks:
 
-```text
-curl: (56) Received HTTP code 403 from proxy after CONNECT
-```
+1. `/usr/bin/curl` and the CA certificate bundle exist in the image.
+2. A request to `https://api.github.com/zen` fails before a network rule exists.
+3. Sandbox logs show the connection denial without a WARN-level filter.
+4. An incremental update adds an enforced REST rule for `/usr/bin/curl`.
+5. A GET request succeeds and a POST request returns `policy_denied`.
+6. A structured base-policy export excludes display and provider metadata,
+   retains startup fields, and round-trips through full replacement.
+7. Removing the named rule restores default-deny behavior.
 
-Exit the sandbox (sandboxes are kept running by default; pass `--no-keep` at creation time to delete on exit):
+[`policy.yaml`](policy.yaml) is a complete create-time file showing the same
+network rule. The demo uses `openshell policy update` instead so it does not
+replace the sandbox's startup-time filesystem or process settings.
 
-```bash
-exit
-```
-
-### 3. Check the deny log
-
-```bash
-openshell logs demo --since 5m
-```
-
-You'll see a line like:
-
-```text
-action=deny dst_host=api.github.com dst_port=443 binary=/usr/bin/curl deny_reason="no matching network policy"
-```
-
-Every denied connection is logged with the destination, the binary that
-attempted it, and the reason. Nothing gets out silently.
-
-### 4. Apply the read-only GitHub API policy
-
-Review the policy:
-
-```bash
-cat examples/sandbox-policy-quickstart/policy.yaml
-```
-
-```yaml
-version: 1
-
-# Default sandbox filesystem settings.
-# These filesystem fields are required when using `openshell policy set`
-# because it replaces the entire policy.
-filesystem_policy:
-  include_workdir: true
-  read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
-  read_write: [/sandbox, /tmp, /dev/null]
-landlock:
-  compatibility: best_effort
-
-network_policies:
-  github_api:
-    name: github-api-readonly
-    endpoints:
-      - host: api.github.com
-        port: 443
-        protocol: rest
-        enforcement: enforce
-        access: read-only
-    binaries:
-      - { path: /usr/bin/curl }
-```
-
-The top section preserves the default sandbox filesystem and Landlock
-settings while omitting process identity so the active compute driver can
-select it. These settings are required because `policy set` replaces the
-entire policy.
-The `network_policies` section is the interesting part: **curl may make
-GET, HEAD, and OPTIONS requests to `api.github.com` over HTTPS.
-Everything else is denied.** The proxy auto-detects and terminates TLS
-to inspect each HTTP request and enforce the `read-only` access preset
-at the method level.
-
-Apply it:
-
-```bash
-openshell policy set demo \
-  --policy examples/sandbox-policy-quickstart/policy.yaml \
-  --wait
-```
-
-`--wait` blocks until the sandbox confirms the new policy is loaded.
-No restart required — policies are hot-reloaded.
-
-### 5. Connect and verify: GET works
-
-```bash
-openshell sandbox connect demo
-```
-
-```bash
-curl -s https://api.github.com/zen
-```
-
-```text
-Anything added dilutes everything else.
-```
-
-It works. Try a more visual endpoint:
-
-```bash
-curl -s https://api.github.com/octocat
-```
-
-```text
-               MMM.           .MMM
-               MMMMMMMMMMMMMMMMMMM
-               MMMMMMMMMMMMMMMMMMM      ____________________________
-              MMMMMMMMMMMMMMMMMMMMM    |                            |
-             MMMMMMMMMMMMMMMMMMMMMMM   | Speak like a human.       |
-            MMMMMMMMMMMMMMMMMMMMMMMM   |_   ________________________|
-            MMMM::- -:::::::- -::MMMM    |/
-             MM~:~ 00~:::::~ 00~:~MM
-        .. MMMMM::.00:::+:::.00teleMMM ..
-              .MM::::: ._. :::::MM.
-                 MMMM;:::::;MMMM
-          -MM        MMMMMMM
-          ^  M+     MMMMMMMMM
-              MMMMMMM MM MM MM
-                   MM MM MM MM
-                   MM MM MM MM
-                .~~MM~MM~MM~MM~~.
-             ~~~~MM:~MM~~~MM~:MM~~~~
-            ~~~~~~==googler======~~~~~~
-             ~~~~~~==googler======
-                 :MMMMMMMMMMM:
-                 '=googler=='
-```
-
-### 6. Try a write — blocked by L7
-
-```bash
-curl -s -X POST https://api.github.com/repos/octocat/hello-world/issues \
-  -H "Content-Type: application/json" \
-  -d '{"title":"oops"}'
-```
-
-```json
-{"error":"policy_denied","policy":"github-api-readonly","detail":"POST /repos/octocat/hello-world/issues not permitted by policy"}
-```
-
-The CONNECT request succeeded (api.github.com is allowed), but the L7
-proxy inspected the HTTP method and returned **403**. `POST` is not in
-the `read-only` preset. Your agent can read code from GitHub but cannot
-create issues, push commits, or modify anything.
-
-Exit the sandbox:
-
-```bash
-exit
-```
-
-### 7. Check the L7 deny log
-
-```bash
-openshell logs demo --level warn --since 5m
-```
-
-```text
-l7_decision=deny dst_host=api.github.com l7_action=POST l7_target=/repos/octocat/hello-world/issues l7_deny_reason="POST /repos/octocat/hello-world/issues not permitted by policy"
-```
-
-The log captures the exact HTTP method, path, and deny reason. In
-production, pipe these logs to your SIEM for a complete audit trail of
-every request your agent makes.
-
-### 8. Clean up
-
-```bash
-openshell sandbox delete demo
-```
-
-## What you just saw
-
-| State              | What happens                                    |
-| ------------------ | ----------------------------------------------- |
-| **Default deny**   | All outbound traffic blocked — nothing gets out  |
-| **L7 read-only**   | GET to `api.github.com` allowed, POST blocked    |
-| **Audit trail**    | Every request logged with method, path, decision |
-
-The policy hot-reloads in seconds and gives
-you verifiable, fine-grained control over what your agent can access —
-without `--dangerously-skip-permissions`.
-
-## Next steps
-
-- **Customize the policy**: Change `access: read-only` to `read-write`
-  or add explicit `rules` for specific paths. See the
-  [security policy reference](../../architecture/security-policy.md).
-- **Scope to an agent**: Replace the `binaries` section with your
-  agent's binary (e.g., `/usr/local/bin/claude`) instead of `curl`.
-- **Add more endpoints**: Stack multiple policies in the same file
-  to allow PyPI, npm, or your internal APIs.
-- **Try audit mode**: Set `enforcement: audit` to log violations
-  without blocking, useful for building a policy iteratively.
+For the guided version, refer to
+[Write Your First Sandbox Network Policy](https://docs.nvidia.com/openshell/latest/get-started/tutorials/first-network-policy).

@@ -257,7 +257,9 @@ publishes the expiring name, endpoint, ports, policy generation, and validated
 real addresses as one correlation. A connection to that synthetic address is
 captured before the bypass fence, mapped back to its workload process, authorized
 through the same egress pipeline, and dialed only through the pinned addresses.
-Omitted protocol endpoints retain explicit-proxy behavior.
+Omitted protocol endpoints retain explicit-proxy behavior without
+protocol-specific request rules. The shared relay still performs default TLS
+handling and HTTP destination checks.
 
 Provider credential placeholders are resolved through the live provider state
 for each HTTP request, after destination and L7 policy admission. A static

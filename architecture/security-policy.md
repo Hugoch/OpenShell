@@ -18,8 +18,13 @@ For the field-by-field YAML reference, use
 | Provider access | Attached provider profiles contribute endpoint and binary rules; credentials remain bound to profile-authorized endpoints. |
 | Runtime settings | Typed settings are delivered with policy and can be global or sandbox scoped. |
 
-Filesystem and process policy are startup-time controls. Network policy is
-dynamic and can be hot-reloaded when the new policy validates successfully.
+Filesystem, Landlock, and process policy are startup-time controls. Network and
+middleware policy can activate dynamically when the complete effective
+configuration validates. Stored startup fields and restrictions installed on a
+running child are distinct: additive filesystem paths may be accepted for a
+later launch, while removals and identity changes are rejected after activation.
+Before first activation, qualifying configuration admission can accept a
+complete static repair.
 
 ### Authored policy boundary
 
@@ -41,12 +46,15 @@ before any consumer-specific projection runs. There is no permissive parsing
 profile: unsupported policy fields always invalidate the document. Middleware `config`, query and persisted-query names, and recursive MCP
 parameter names are open user-data maps rather than schema extensions.
 
-Before applying Landlock, the supervisor enriches baseline filesystem paths that
-the runtime needs. Missing baseline paths are skipped so one absent runtime path
-does not weaken the whole ruleset. When GPU devices are present, GPU baseline
-enrichment adds existing GPU device nodes as read-write paths and promotes
-`/proc` to read-write because CUDA workloads write thread metadata under
-`/proc/<pid>/task/<tid>/comm`.
+Before applying user Landlock policy, the supervisor enriches baseline
+filesystem paths that the runtime needs. Missing user-policy paths can be
+skipped according to the selected compatibility mode so one absent path does
+not discard the remaining rules. Current capability-free Linux launch paths
+also install a mandatory ABI v3 baseline that omits the private `/.openshell`
+hierarchy. User `best_effort` policy cannot disable that baseline. When GPU
+devices are present, runtime enrichment adds existing GPU device nodes as
+read-write paths and promotes `/proc` to read-write because CUDA workloads write
+thread metadata under `/proc/<pid>/task/<tid>/comm`.
 
 Landlock rules are tailored to the inode type reported by the already-opened
 path descriptor. Directories retain the requested directory and file rights;
@@ -154,8 +162,9 @@ whose binding was removed — loses its marker in the same pass. This must remai
 a full recomputation: a delta-based derivation would let a series of
 individually valid edits reach a state no single edit would have admitted.
 
-Credentialed L4-only and `tls: skip` endpoints fail policy validation unless the
-public `allow_uninspected_credentials` escape hatch is explicitly enabled. The
+Credentialed endpoints without a protocol-specific request policy and
+credentialed `tls: skip` endpoints fail policy validation unless the public
+`allow_uninspected_credentials` escape hatch is explicitly enabled. The
 flag defaults to `false` and is security-flagged in policy approval flows.
 Incremental merges only ever add the flag to a matching endpoint; clearing it
 requires removing the endpoint or replacing the policy.
@@ -181,7 +190,8 @@ Header rewriting scans only headers. Body bytes received in the initial proxy
 read follow the same body classifier or explicit rewriter as later reads.
 Candidates are limited to 4096 wire bytes, including percent encoding. Malformed
 or oversized candidates fail closed; HTTP trailers retain prefix-based rejection. Explicitly opted-in
-endpoints retain raw passthrough behavior.
+endpoints retain access to traffic paths without protocol-specific inspection,
+including deliberately raw streams.
 
 Body denials return `credential_placeholder_in_request_body` in a local HTTP 403
 response and discard any partially written upstream request. Safe preceding bytes
@@ -224,6 +234,14 @@ gateway-global policy overrides and provider-profile policy layers. The
 supervisor polls for config revisions and attempts to load new dynamic policy
 into the in-process OPA engine; CLI reads of the latest sandbox policy use the
 same effective configuration path.
+
+At creation, an explicit CLI policy takes precedence over
+`OPENSHELL_SANDBOX_POLICY`. When no sandbox policy is stored, the supervisor
+discovers a valid embedded image policy or initializes the restrictive fallback
+when the image policy is missing. An invalid embedded policy blocks first
+activation for repair. Provider network layers compose only when the selected
+source is sandbox-scoped. A gateway-global source replaces the sandbox policy
+and suppresses provider-added network grants; it is not an intersection ceiling.
 
 The OPA loader checks the object and list shapes of raw policy data before injecting runtime fields, normalizing values, or expanding access presets. It rejects the first malformed container with a fixed structural error that excludes authored keys and values. This check preserves valid versionless OPA data and runtime-only fields. A rejected OPA engine reload leaves that engine's installed policy, generation, and decisions unchanged; the supervisor separately applies its configured runtime rejection mode.
 
@@ -270,12 +288,16 @@ previous valid generation, the effective mode remains `fail_closed` regardless
 of the configured mode. The gateway distributes this startup configuration to
 sandbox supervisors with each effective policy snapshot. OCSF configuration and finding events state the
 candidate version, validation rationale, configured and effective modes, active
-generation, and whether the previous policy is active. Static controls,
-such as filesystem allowlists and process identity, require a new sandbox
-because they are applied before the child process starts.
+generation, and whether the previous policy is active. Static controls are
+applied before the child process starts. A stored additive filesystem change
+does not alter the current child. Recreate for an assured new startup
+configuration; qualifying pre-activation admission can accept a full repair.
 
 Gateway-global policy can override sandbox-scoped policy. Use it sparingly
-because it changes the effective access model for every sandbox on the gateway.
+because it replaces the effective network access model for every sandbox on the
+gateway, blocks sandbox-scoped policy mutation, and suppresses provider-added
+network grants. Deleting the override restores normal selection and composition
+only after the restored effective configurations validate.
 
 ## Policy Advisor
 

@@ -39,6 +39,9 @@ Use `openshell --help` and nested `--help` output as the authority for the insta
 - [Manage providers](https://docs.nvidia.com/openshell/latest/sandboxes/manage-providers.md)
 - [Profiles](https://docs.nvidia.com/openshell/latest/providers/profiles.md)
 - [Sandbox policies](https://docs.nvidia.com/openshell/latest/sandboxes/policies.md)
+- [Network policy recipes](https://docs.nvidia.com/openshell/latest/sandboxes/network-policy-recipes.md)
+- [Policy update reference](https://docs.nvidia.com/openshell/latest/reference/policy-updates.md)
+- [Policy troubleshooting](https://docs.nvidia.com/openshell/latest/sandboxes/troubleshoot-policies.md)
 - [Inference routing](https://docs.nvidia.com/openshell/latest/sandboxes/inference-routing.md)
 
 ---
@@ -417,6 +420,10 @@ openshell logs my-sandbox --tail --source sandbox --level warn
 openshell logs my-sandbox --since 5m
 ```
 
+Do not use `--level warn` when looking for policy OCSF events. Log filtering
+treats OCSF entries as INFO even when the event's own severity describes a
+denial.
+
 ### Delete sandboxes
 
 ```bash
@@ -454,7 +461,15 @@ the operation that removes retained state.
 
 This is the most important multi-step workflow. It enables a tight feedback cycle where sandbox policy is refined based on observed activity.
 
-**Key concept**: Policies have static fields (immutable after activation: `filesystem_policy`, `landlock`, `process`) and two dynamic fields: `network_policies` and `network_middlewares`. Both dynamic fields can be updated without recreating the sandbox when the selected compute driver supports live policy updates. Drivers without the standard supervisor fetch revisions through the sandbox configuration API and report whether they loaded them.
+**Key concept**: Policies have startup-time fields (`filesystem_policy`,
+`landlock`, `process`) and two dynamic fields: `network_policies` and
+`network_middlewares`. After activation, static-field validation rejects
+removals and identity changes. Additive filesystem paths can be accepted into
+stored configuration but do not change the current child. Both dynamic fields
+can be updated without recreating the sandbox when the selected compute driver
+supports live policy updates. Drivers without the standard supervisor fetch
+revisions through the sandbox configuration API and report whether they loaded
+them.
 
 If startup reports `ConfigurationInvalid`, inspect `openshell sandbox get` and
 repair the complete policy or provider set through the gateway. The workload
@@ -467,13 +482,16 @@ first failed load reset that window; repeated failures do not. After
 `ProvisioningTimedOut`, inspect the retained record and cleanup status, repair
 configuration, and explicitly run `sandbox start` once cleanup completes. A CLI
 wait timeout is separate from this gateway deadline. Follow the
-published [policy repair guidance](https://docs.nvidia.com/openshell/latest/sandboxes/policies.md)
+published [policy repair guidance](https://docs.nvidia.com/openshell/latest/sandboxes/troubleshoot-policies.md)
 and confirm current replacement/detach syntax with installed CLI help.
 
-An endpoint with omitted `protocol` retains explicit-proxy behavior. Explicit
+An endpoint with omitted `protocol` retains explicit-proxy behavior without
+protocol-specific request rules. The proxy still auto-detects and terminates
+TLS and checks HTTP destination authority. Use `tls: skip` for a deliberately
+raw proxy stream. Explicit
 `protocol: tcp` requests policy DNS and transparent TCP and currently requires
-the Docker or Podman runtime; unsupported runtimes reject the policy before starting the
-workload rather than activating only part of the network contract.
+the Docker or Podman runtime; unsupported runtimes reject the policy before
+starting the workload rather than activating only part of the network contract.
 
 ```
 Create sandbox with initial policy
@@ -522,25 +540,32 @@ Look for log lines with `action: deny` -- these indicate blocked network request
 
 ### Step 3: Pull the current policy
 
+Use `jq` to export only the editable base policy object. JSON is accepted by
+the authored-policy parser:
+
 ```bash
-openshell policy get dev --full > current-policy.yaml
+set -o pipefail
+openshell policy get dev --base --output json \
+  | jq -e '.policy' > current-policy.json
 ```
 
-The `--full` flag includes the effective policy, including provider-composed entries. Use `--base` instead when the editable base policy is needed without provider-composed entries. Before resubmitting a `--full` result, review composed entries and prefer incremental updates or the base policy when appropriate.
+The base excludes provider-composed entries and display metadata. Use
+`openshell policy get dev --full` to inspect effective gateway composition, but
+do not round-trip that view as the sandbox-authored base.
 
 ### Step 4: Modify the policy
 
-Edit `current-policy.yaml` to allow the blocked actions. **For policy content authoring, delegate to the `generate-sandbox-policy` skill.** That skill handles:
+Edit `current-policy.json` to allow the blocked actions. **For policy content authoring, delegate to the `generate-sandbox-policy` skill.** That skill handles:
 
 - Network endpoint rule structure
 - L4 vs REST, WebSocket, JSON-RPC, MCP, and SQL L7 policy decisions
 - Access presets (`read-only`, `read-write`, `full`)
-- TLS termination configuration
+- TLS inspection and explicit bypass configuration
 - Enforcement modes (`audit` vs `enforce`)
 - Binary matching patterns
 - Ordered `network_middlewares`, host selection, HTTP request/response and WebSocket bindings, and `fail_open` or `fail_closed` behavior
 
-`network_policies` and `network_middlewares` can be modified at runtime when the selected compute driver supports live policy updates. Use `--wait` to verify that the active runtime loaded the revision; do not infer enforcement from the gateway accepting the update. If `filesystem_policy`, `landlock`, or `process` need changes, the sandbox must be recreated. Built-in middleware such as `openshell/regex` needs no gateway registration. An operator-run middleware must already be registered under `[[openshell.supervisor.middleware]]`; changing that static registration requires a gateway restart.
+`network_policies` and `network_middlewares` can be modified at runtime when the selected compute driver supports live policy updates. Use `--wait` and inspect revision status; do not infer enforcement from gateway acceptance. Startup-time filesystem, Landlock, and process changes require recreation for an assured new running configuration. Additive filesystem paths may be accepted into stored configuration but do not change the current child, while qualifying pre-activation admission can accept a full static repair. Built-in middleware such as `openshell/regex` needs no gateway registration. An operator-run middleware must already be registered under `[[openshell.supervisor.middleware]]`; changing that static registration requires a gateway restart.
 
 Middleware can inspect HTTP requests, HTTP responses, or client WebSocket text
 messages when the implementation advertises the matching binding. The built-in
@@ -551,7 +576,7 @@ and `debug-openshell-cluster` to investigate middleware failures.
 ### Step 5: Push the updated policy
 
 ```bash
-openshell policy set dev --policy current-policy.yaml --wait
+openshell policy set dev --policy current-policy.json --wait
 ```
 
 The gateway validates the complete effective candidate—including attached
@@ -564,11 +589,13 @@ does not have an attached AWS profile whose credential boundary covers the
 endpoint, or an explicit binding to an endpointless AWS profile. Fix the
 conflicting endpoint selectors or credential source and submit again.
 
-The `--wait` flag blocks until the sandbox confirms the policy is loaded (polls every second). Exit codes:
+The `--wait` flag polls for a terminal revision result. Exit codes:
 
-- **0**: Policy loaded successfully
+- **0**: The revision loaded, the policy was unchanged, or the submitted
+  revision was superseded. Inspect current status before relying on it.
 - **1**: Policy load failed
-- **124**: Timeout (default 60 seconds)
+- **124**: Timeout (default 60 seconds). A timeout does not establish the later
+  runtime result.
 
 ### Step 6: Verify the update
 
@@ -606,7 +633,9 @@ openshell policy list --global
 openshell policy delete --global
 ```
 
-Avoid `--yes` during interactive work. A global policy locks policy control for all sandboxes on the gateway.
+Avoid `--yes` during interactive work. A global policy replaces sandbox policy,
+locks sandbox-scoped mutation, and suppresses provider-added network grants. It
+is not an intersection ceiling. Credential authorization remains separate.
 
 ### Review agent-authored rule proposals
 
@@ -710,7 +739,7 @@ openshell sandbox connect work-session --editor vscode
 Monitor denied activity:
 
 ```bash
-openshell logs work-session --tail --source sandbox --level warn
+openshell logs work-session --tail --source sandbox
 ```
 
 When denied actions appear:
@@ -729,11 +758,13 @@ When denied actions appear:
    one.
 
    `--add-allow` and `--add-deny` require `--rule-name` and the complete binary scope through repeated `--binary` or explicit `--any-binary`. Declare every port on the endpoint in the operation, for example `api.example.com:443,8443:POST:/admin`. Use `--endpoint-path` to disambiguate endpoints within the selected rule; an explicitly empty path selects an endpoint without a path selector. The gateway rejects missing or mismatched scope before persistence. Inspect the current policy and confirm the intended affected scope; do not automatically fill declarations from current policy just to make a rejection pass.
-2. Use full YAML replacement for broad changes or non-network fields, including
-   any change that would otherwise require restating a large existing scope:
-   `openshell policy get work-session --full > policy.yaml`
+2. Use full replacement for broad changes or non-network fields, including any
+   change that would otherwise require restating a large existing scope. With
+   `jq` installed, export the editable base without display metadata or
+   provider-owned entries:
+   `set -o pipefail; openshell policy get work-session --base --output json | jq -e '.policy' > policy.json`
    Modify the policy with the `generate-sandbox-policy` skill.
-   `openshell policy set work-session --policy policy.yaml --wait`
+   `openshell policy set work-session --policy policy.json --wait`
 3. Verify with `openshell policy list work-session`.
 
 The user does not need to disconnect. Policy updates are hot-reloaded; `--wait` blocks until the sandbox confirms the revision or the timeout expires. Delete the sandbox when the session ends:

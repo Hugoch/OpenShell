@@ -21,7 +21,7 @@ The user's input falls into one of three tiers. Work with whatever the user prov
 
 | Tier | User provides | What you can generate |
 |------|--------------|----------------------|
-| **Minimal** | Host(s) and plain-language intent | L4-only policies, or L7 with access presets (`read-only`, `read-write`, `full`) |
+| **Minimal** | Host(s) and plain-language intent | Explicit proxy without request rules, native TCP, or L7 with an access preset |
 | **Moderate** | Host(s) + some known URL paths or resources | L7 with targeted glob rules for known paths, presets for the rest |
 | **Full** | Complete API docs (OpenAPI, Swagger, markdown, URL) | Fine-grained per-endpoint L7 rules with specific method+path combinations |
 
@@ -35,18 +35,21 @@ Examples:
 - "Let /usr/bin/myapp talk to internal-svc:8080 but only for reading"
 
 This is sufficient for:
-- **L4-only** policies (allow all traffic to host:port, no HTTP inspection)
+- Explicit-proxy policies without protocol-specific request rules
+- Native TCP policies for clients that require direct DNS and sockets
 - **Preset-based L7** policies (`read-only`, `read-write`, `full` on all paths)
 
 For this tier, default to:
 - `access: read-only` when the user says "read", "browse", "view", "query", "fetch"
 - `access: read-write` when the user says "read-write", "create", "update" (but not "delete")
 - `access: full` when the user says "full access", "everything", "unrestricted"
-- L4-only when the user says "just allow it", "pass through", or "no
-  inspection". Omit `protocol` for explicit-proxy clients. Use
+- No request rules when the user says "just allow it" or does not need
+  method/path enforcement. Omit `protocol` for explicit-proxy clients; default
+  TLS handling and HTTP destination checks still apply. Use `tls: skip` when a
+  deliberately raw explicit-proxy stream is required. Use
   `protocol: tcp` only when the workload must use native DNS and direct socket
   calls, the endpoint has a valid DNS hostname, and the selected runtime
-  support (currently Docker and Podman).
+  supports it (currently Docker and Podman).
 
 ### Moderate Tier (host + partial path knowledge)
 
@@ -109,7 +112,7 @@ Ask these when the user's intent is broad and more specificity is possible:
 |-----------|--------------|
 | "Full access" / "allow everything" | "Do you actually need DELETE access, or would read-write (everything except DELETE) be enough?" |
 | "Allow access to api.example.com" (no method/path detail) | "Do you know which specific API paths or operations you need? If so, I can lock the policy down to just those. Otherwise I'll use a broad preset." |
-| L4-only / "just pass it through" | "L4-only means the proxy won't inspect HTTP traffic at all — any method and path will be allowed. Are you sure you don't want at least read-only or read-write restriction?" |
+| No request rules / "just pass it through" | "Without a protocol-specific request policy, methods and paths are not restricted. The explicit proxy still applies default TLS handling and HTTP destination checks. Do you want a read-only or read-write request policy instead?" |
 | Wildcard binary (`/usr/bin/*`) | "A wildcard binary pattern means any binary in that directory can use this policy. Can you narrow it to specific binaries?" |
 | Multiple hosts in one policy | "Do all of these hosts need the same access level? If some need tighter restrictions, I can split them into separate policies." |
 | `access: full` with `enforcement: audit` | "Full access in audit mode means nothing is actually restricted — all traffic flows through and violations are only logged. Is that intentional, or did you want to enforce restrictions?" |
@@ -184,9 +187,10 @@ selection using the published policy workflow; do not add
 Follow this decision tree based on the detail tier and user intent:
 
 ```
-Is L7 inspection needed?
-├─ No (user wants pass-through / "just allow it")
-│   ├─ Explicit-proxy client → omit protocol
+Are protocol-specific request rules needed?
+├─ No
+│   ├─ Explicit-proxy client with default TLS and HTTP checks → omit protocol
+│   ├─ Deliberately raw explicit-proxy stream → tls: skip
 │   └─ Native DNS/socket client with a DNS hostname on a supported runtime → protocol: tcp
 │
 └─ Yes (user wants method/path control)
@@ -205,9 +209,17 @@ Is L7 inspection needed?
 
 ### TLS Decision
 
-Omit `tls` on every endpoint, regardless of port: the proxy auto-detects TLS and terminates it for inspection. `skip` is the only accepted non-empty value, reserved for upstreams requiring client-certificate mTLS or a non-HTTP protocol.
+| API host port | TLS setting |
+|--------------|-------------|
+| HTTPS with L7 rules or a preset | Omit `tls`; OpenShell detects and terminates TLS automatically for inspected traffic. |
+| Explicit proxy without request rules | Omit `tls`; default TLS handling and HTTP destination checks still apply. |
+| Native TCP | Use `protocol: tcp`; `tls` does not apply. |
+| Client-certificate mTLS or another edge case that must remain uninspected | Set `tls: skip` only after the user accepts the weaker boundary. |
 
-Do not "fix" a rejected value — including the removed `terminate` and `passthrough` spellings — by changing it to `skip`; remove the field instead. `skip` stops inspection, credential injection, and L7 rule enforcement for that endpoint, so it silently widens what the endpoint allows.
+`skip` is the only accepted non-empty TLS value. The removed `terminate` and
+`passthrough` spellings fail policy validation. Remove the field to use automatic
+TLS handling; do not replace those values with `skip`, which disables inspection,
+credential injection, and L7 rule enforcement.
 
 ### Middleware Decision
 
@@ -381,11 +393,14 @@ Before presenting the policy to the user, verify correctness **and** flag breadt
 - [ ] No fail-closed middleware selector can cover a `tls: skip` endpoint
 - [ ] Any required WebSocket control advertises `WEBSOCKET_MESSAGE/PRE_CREDENTIALS`, and the user understands that V1 does not inspect binary messages
 - [ ] Any required response control advertises `HTTP_RESPONSE/PRE_RETURN`
-- [ ] Endpoints contributed by a credentialed provider are not L4-only or `tls: skip` unless `allow_uninspected_credentials: true` explicitly records the exception
+- [ ] Endpoints contributed by a credentialed provider do not omit a protocol-specific request policy or use `tls: skip` unless `allow_uninspected_credentials: true` explicitly records the exception
 
 ### Schema Warnings (log-only, but should be fixed)
 
 - [ ] `tls: skip` is not combined with L7 rules on port 443; inspection cannot work on encrypted traffic
+- [ ] Every inspected application-request example that promises blocking sets
+      `enforcement: enforce`; intentional audit examples state that matching
+      violations are logged and forwarded
 - [ ] HTTP methods are standard: GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS, or `*`
 - [ ] Credentialed destinations are also covered by the attached provider
       profile endpoint; policy admission alone does not authorize credential
@@ -405,7 +420,9 @@ Evaluate the generated policy for overly broad access and **include warnings in 
 
 | Condition | Warning to show |
 |-----------|----------------|
-| **L4-only** (no `protocol`, or `protocol: tcp`) | "This policy allows all application methods and paths without inspection. An omitted protocol uses explicit-proxy behavior. `protocol: tcp` enables policy DNS and transparent TCP only on a runtime that advertises the complete substrate (currently Docker and Podman); its hostname constrains connection routing, not application authority, so compatible shared infrastructure may expose other tenants or services. Consider `protocol: rest` with a preset if you want HTTP method-level or authority control." |
+| **No protocol-specific request rules** (no `protocol`) | "This explicit-proxy policy does not restrict application methods or paths. Default TLS handling and HTTP destination checks still apply. Consider `protocol: rest` with a preset if you want method- or path-level control." |
+| **Native TCP** (`protocol: tcp`) | "This policy enables policy DNS and transparent TCP only on a runtime that advertises the complete substrate (currently Docker and Podman). It does not inspect application traffic, and its hostname constrains connection routing rather than application authority, so compatible shared infrastructure may expose other tenants or services." |
+| **Raw proxy stream** (`tls: skip`) | "This explicit-proxy endpoint disables default TLS handling and protocol inspection. Use it only when the client protocol requires a deliberately raw stream." |
 | **`access: full`** | "This policy allows all HTTP methods (including DELETE) on all paths. If you don't need DELETE, `read-write` is safer. If you only need to read, `read-only` is the most restrictive option." |
 | **`access: full` + `enforcement: audit`** | "Full access in audit mode provides no actual restriction — all traffic flows through. This is effectively a monitoring-only policy." |
 | **`access: read-write`** when user hasn't confirmed write need | "This policy allows POST, PUT, and PATCH on all paths. If you only need to read data, `read-only` is more restrictive." |
@@ -460,46 +477,30 @@ The policy needs to go somewhere. Determine which mode applies:
 
 3. **Apply the change**:
    - **Adding a new policy**: Insert the new policy block under `network_policies`, maintaining the file's existing indentation and style.
-   - **Modifying an existing policy**: Edit the specific policy in place — add/remove endpoints, change access presets, update rules, add binaries, etc. A rule authorizes every binary it lists to reach every endpoint and port it lists, so adding one binary grants it all of that rule's endpoints, and adding one endpoint grants it to all of that rule's binaries. State the resulting pairs to the user before writing them. When the user wants a binary to reach only part of a rule's endpoints, put that binary and those endpoints in a separate rule instead of extending the existing one. An empty `binaries` list means any binary, so leaving it off widens the rule to every process.
+   - **Modifying an existing policy**: Edit the specific policy in place — add/remove endpoints, change access presets, update rules, add binaries, etc. A rule authorizes every binary it lists to reach every endpoint and port it lists, so adding one binary grants it all of that rule's endpoints, and adding one endpoint grants it to all of that rule's binaries. State the resulting pairs to the user before writing them. When the user wants a binary to reach only part of a rule's endpoints, put that binary and those endpoints in a separate rule instead of extending the existing one. Do not recommend an empty `binaries` list as a portable any-process grant; runtime behavior depends on trusted process-identity configuration.
    - **Removing a policy**: Delete the policy block if the user asks.
 
 4. **Preserve everything else**: Do not modify `filesystem_policy`, `landlock`, `process`, or other policies unless the user explicitly asks.
 
 ### Mode B: Create a New Policy File
 
-Generate a complete, standalone policy file. Use the full schema scaffolding:
+Generate a complete, standalone policy file. Include `version: 1` and the
+requested fields. Do not copy a supposed universal filesystem baseline into a
+new file; omission lets policy selection and the runtime apply their current
+defaults.
 
 ```yaml
 version: 1
-
-filesystem_policy:
-  include_workdir: true
-  read_only:
-    - /usr
-    - /lib
-    - /proc
-    - /dev/urandom
-    - /app
-    - /etc
-    - /var/log
-  read_write:
-    - /tmp
-    - /dev/null
-
-landlock:
-  compatibility: best_effort
 
 network_policies:
   # <generated policies go here>
 ```
 
-The `filesystem_policy` and `landlock` sections above are sensible defaults.
-Process identity is omitted so the selected compute driver can choose it. For
-Docker and Podman, each omitted identity field falls back to the image's OCI
-`USER`. Tell the user these are defaults and may need adjustment for their
-environment. Gateway inference is configured separately through `openshell
-inference set/get`. The generated `network_policies` block is the primary
-output.
+Add `filesystem_policy`, `landlock`, or `process` only when the user requests
+those startup controls and their image/runtime requirements are known. For
+Docker and Podman, omitted process identity fields fall back to the image's OCI
+`USER`. Native model endpoints are configured through provider profiles and
+attachments, not retired `openshell inference` commands.
 
 When the user explicitly requests `process.run_as_user` or
 `process.run_as_group`, accept `sandbox` or a numeric UID/GID from `1` through
@@ -532,7 +533,7 @@ After presenting or applying the policy, ask if the user wants to:
 
 ## Quick Reference: Common Patterns
 
-### L4-Only (no HTTP inspection)
+### Explicit Proxy Without Request Rules
 
 ```yaml
 my_api:
@@ -542,6 +543,10 @@ my_api:
   binaries:
     - { path: /usr/bin/curl }
 ```
+
+Default TLS handling and HTTP destination checks still apply. Use
+`protocol: tcp` for native DNS and direct sockets, or `tls: skip` when an
+explicit-proxy client requires a deliberately raw stream.
 
 ### HTTPS API with Read-Only Preset
 

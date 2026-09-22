@@ -5,7 +5,7 @@ title: "Gateway Configuration File"
 sidebar-title: "Gateway Config"
 description: "Reference for the OpenShell gateway TOML configuration file (RFC 0003)."
 keywords: "Generative AI, Cybersecurity, AI Agents, Sandboxing, Gateway, Configuration, TOML, Reference"
-position: 5
+position: 6
 ---
 
 The OpenShell gateway reads its configuration from a TOML file when `--config` or `OPENSHELL_GATEWAY_CONFIG` is set. When neither is set, the gateway reads `$XDG_CONFIG_HOME/openshell/gateway.toml` if that file exists. If no config file exists, the gateway starts from built-in defaults. Gateway process flags and gateway `OPENSHELL_*` environment variables override the file. Compute driver settings live in the driver TOML tables. See [RFC 0003](https://github.com/NVIDIA/OpenShell/blob/main/rfc/0003-gateway-configuration/README.md) for the full schema.
