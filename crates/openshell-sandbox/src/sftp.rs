@@ -16,8 +16,9 @@ use russh_sftp::protocol::{
     Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Status, StatusCode,
 };
 use rustix::fs::{
-    AtFlags, Dir, Gid, Mode, OFlags, ResolveFlags, Timestamps, Uid, fchmod, fchown, fstat,
-    futimens, mkdirat, openat, openat2, readlinkat, renameat, statat, symlinkat, unlinkat,
+    AtFlags, Dir, FileType, Gid, Mode, OFlags, RenameFlags, ResolveFlags, Timestamps, Uid, fchmod,
+    fchown, fstat, futimens, mkdirat, openat, openat2, readlinkat, renameat_with, statat,
+    symlinkat, unlinkat,
 };
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
 
@@ -173,7 +174,7 @@ fn attributes(stat: &rustix::fs::Stat) -> FileAttributes {
 }
 
 fn open_flags(flags: OpenFlags) -> OFlags {
-    let mut result = OFlags::CLOEXEC;
+    let mut result = OFlags::CLOEXEC | OFlags::NONBLOCK;
     result |= if flags.contains(OpenFlags::READ) && flags.contains(OpenFlags::WRITE) {
         OFlags::RDWR
     } else if flags.contains(OpenFlags::WRITE) {
@@ -194,6 +195,25 @@ fn open_flags(flags: OpenFlags) -> OFlags {
         result |= OFlags::EXCL;
     }
     result
+}
+
+fn ensure_regular_file(fd: impl AsFd) -> Result<(), StatusCode> {
+    let stat = fstat(fd).map_err(status_code)?;
+    if FileType::from_raw_mode(stat.st_mode).is_file() {
+        Ok(())
+    } else {
+        Err(StatusCode::OpUnsupported)
+    }
+}
+
+fn ensure_setstat_target(fd: impl AsFd, changes_size: bool) -> Result<(), StatusCode> {
+    let stat = fstat(fd).map_err(status_code)?;
+    let file_type = FileType::from_raw_mode(stat.st_mode);
+    if file_type.is_file() || (!changes_size && file_type.is_dir()) {
+        Ok(())
+    } else {
+        Err(StatusCode::OpUnsupported)
+    }
 }
 
 fn set_attributes(fd: impl AsFd, attrs: &FileAttributes) -> Result<(), StatusCode> {
@@ -251,6 +271,7 @@ impl russh_sftp::server::Handler for SftpHandler {
             Mode::empty()
         };
         let fd = self.open_path(&path, flags, mode)?;
+        ensure_regular_file(&fd)?;
         let handle = Self::handle();
         self.files
             .insert(handle.clone(), tokio::fs::File::from_std(StdFile::from(fd)));
@@ -454,7 +475,14 @@ impl russh_sftp::server::Handler for SftpHandler {
     ) -> Result<Status, Self::Error> {
         let (old_parent, old_leaf) = self.parent(&oldpath)?;
         let (new_parent, new_leaf) = self.parent(&newpath)?;
-        renameat(old_parent, old_leaf, new_parent, new_leaf).map_err(status_code)?;
+        renameat_with(
+            old_parent,
+            old_leaf,
+            new_parent,
+            new_leaf,
+            RenameFlags::NOREPLACE,
+        )
+        .map_err(status_code)?;
         Ok(ok(id))
     }
 
@@ -487,11 +515,12 @@ impl russh_sftp::server::Handler for SftpHandler {
     ) -> Result<Status, Self::Error> {
         let path = self.path(&path)?;
         let flags = if attrs.size.is_some() {
-            OFlags::WRONLY | OFlags::CLOEXEC
+            OFlags::WRONLY | OFlags::CLOEXEC | OFlags::NONBLOCK
         } else {
-            OFlags::RDONLY | OFlags::CLOEXEC
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK
         };
         let fd = self.open_path(&path, flags, Mode::empty())?;
+        ensure_setstat_target(&fd, attrs.size.is_some())?;
         if let Some(size) = attrs.size {
             StdFile::from(fd.try_clone().map_err(io_status)?)
                 .set_len(size)
@@ -524,6 +553,8 @@ where
 mod tests {
     use super::*;
     use russh_sftp::client::SftpSession;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::time::Duration;
 
     async fn client(root: &Path) -> SftpSession {
         let (done_tx, _done_rx) = tokio::sync::oneshot::channel();
@@ -597,5 +628,93 @@ mod tests {
         assert!(client.metadata("../outside").await.is_err());
         assert!(client.metadata("escape").await.is_err());
         assert!(client.open("escape").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn standard_rename_preserves_an_existing_destination() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("source"), b"source contents").unwrap();
+        std::fs::write(root.path().join("destination"), b"destination contents").unwrap();
+        let client = client(root.path()).await;
+
+        assert!(client.rename("source", "destination").await.is_err());
+        assert_eq!(
+            std::fs::read(root.path().join("source")).unwrap(),
+            b"source contents"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("destination")).unwrap(),
+            b"destination contents"
+        );
+
+        client.rename("source", "renamed").await.unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join("renamed")).unwrap(),
+            b"source contents"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fifo_open_fails_without_blocking() {
+        let root = tempfile::tempdir().unwrap();
+        let fifo = root.path().join("fifo");
+        rustix::fs::mkfifoat(rustix::fs::CWD, &fifo, Mode::from_bits_truncate(0o600)).unwrap();
+        let client = client(root.path()).await;
+
+        let result = tokio::time::timeout(Duration::from_secs(1), client.open("fifo")).await;
+        if result.is_err() {
+            let _ = openat(
+                rustix::fs::CWD,
+                &fifo,
+                OFlags::WRONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                Mode::empty(),
+            );
+        }
+
+        assert!(matches!(result, Ok(Err(_))));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fifo_setstat_fails_without_blocking() {
+        let root = tempfile::tempdir().unwrap();
+        let fifo = root.path().join("fifo");
+        rustix::fs::mkfifoat(rustix::fs::CWD, &fifo, Mode::from_bits_truncate(0o600)).unwrap();
+        let client = client(root.path()).await;
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.set_metadata("fifo", FileAttributes::default()),
+        )
+        .await;
+        if result.is_err() {
+            let _ = openat(
+                rustix::fs::CWD,
+                &fifo,
+                OFlags::WRONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                Mode::empty(),
+            );
+        }
+
+        assert!(matches!(result, Ok(Err(_))));
+    }
+
+    #[tokio::test]
+    async fn setstat_preserves_directory_metadata_support() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("directory")).unwrap();
+        let client = client(root.path()).await;
+        let attrs = FileAttributes {
+            permissions: Some(0o700),
+            ..FileAttributes::default()
+        };
+
+        client.set_metadata("directory", attrs).await.unwrap();
+
+        let mode = std::fs::metadata(root.path().join("directory"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & SAFE_MODE_MASK;
+        assert_eq!(mode, 0o700);
     }
 }
