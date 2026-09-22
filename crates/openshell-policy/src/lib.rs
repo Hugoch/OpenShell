@@ -1102,7 +1102,7 @@ pub use openshell_core::container_paths::CONTAINER_POLICY_PATH;
 
 /// Legacy path used before the navigator → openshell rename.
 ///
-/// Existing community sandbox images still ship their policy at this path.
+/// Older images may still ship their policy at this path.
 /// The sandbox supervisor tries [`CONTAINER_POLICY_PATH`] first, then falls
 /// back to this legacy path for backward compatibility.
 pub const LEGACY_CONTAINER_POLICY_PATH: &str = "/etc/navigator/policy.yaml";
@@ -1120,11 +1120,11 @@ pub fn restrictive_default_policy() -> SandboxPolicy {
         filesystem: Some(FilesystemPolicy {
             include_workdir: true,
             read_only: vec![
+                "/bin".into(),
                 "/usr".into(),
                 "/lib".into(),
                 "/proc".into(),
                 "/dev/urandom".into(),
-                "/app".into(),
                 "/etc".into(),
                 "/var/log".into(),
             ],
@@ -2276,6 +2276,10 @@ network_policies:
         let policy = restrictive_default_policy();
         let fs = policy.filesystem.expect("must have filesystem policy");
         assert!(fs.include_workdir);
+        assert!(
+            fs.read_only.iter().any(|p| p == "/bin"),
+            "read_only should contain /bin"
+        );
         assert!(
             fs.read_only.iter().any(|p| p == "/usr"),
             "read_only should contain /usr"

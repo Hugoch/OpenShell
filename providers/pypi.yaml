@@ -10,7 +10,7 @@
 # below, so it has to name the paths in *your* image.
 #
 # Client binaries:   python, python3, pip, uv.
-# Reference layout:  the paths below are OpenShell Community image paths — a
+# Reference layout:  the paths below assume a particular image layout — a
 #                    virtualenv at /sandbox/.venv or /app/.venv, uv at
 #                    /usr/local/bin/uv, uv-managed interpreters under
 #                    /sandbox/.uv/python. Almost every other image differs

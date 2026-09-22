@@ -178,7 +178,7 @@ The first TCP endpoint is a deliberate exception to ordinary dynamic network pol
 Pass a policy YAML file when creating the sandbox:
 
 ```shell
-openshell sandbox create --policy ./my-policy.yaml -- claude
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest --policy ./my-policy.yaml -- claude
 ```
 
 The trailing command is the sandbox's canonical main process. If it exits, the
@@ -189,7 +189,7 @@ To avoid passing `--policy` every time, set a default policy with an environment
 
 ```shell
 export OPENSHELL_SANDBOX_POLICY=./my-policy.yaml
-openshell sandbox create -- claude
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest -- claude
 ```
 
 The CLI uses the policy from `OPENSHELL_SANDBOX_POLICY` whenever `--policy` is not explicitly provided.

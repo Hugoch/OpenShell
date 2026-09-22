@@ -474,31 +474,6 @@ ensure_podman_supervisor_image() {
   exit 2
 }
 
-prepare_policy_document_community_image() {
-  local source_image=$1
-  local source_id source_digest fixture_image
-
-  source_id="$(podman_cmd image inspect --format '{{.Id}}' "${source_image}")"
-  source_digest="${source_id#sha256:}"
-  if ! [[ "${source_digest}" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "ERROR: could not resolve a stable image ID for ${source_image}." >&2
-    return 1
-  fi
-
-  fixture_image="openshell/e2e-community-base:policy-document-v1-${source_digest:0:12}"
-  if ! podman_cmd image exists "${fixture_image}" 2>/dev/null; then
-    echo "Preparing PolicyDocument E2E fixture from ${source_image}..." >&2
-    podman_cmd build \
-      --pull=never \
-      --build-arg "BASE_IMAGE=${source_image}" \
-      --file "${ROOT}/e2e/docker/Dockerfile.policy-document-community-base" \
-      --tag "${fixture_image}" \
-      "${ROOT}/e2e/docker" >&2
-  fi
-
-  printf '%s\n' "${fixture_image}"
-}
-
 ensure_podman_sandbox_runtime_image() {
   local image=$1
 
@@ -638,7 +613,7 @@ SANDBOX_BOUNDARY_IMAGE="$(resolve_podman_sandbox_runtime_image)"
 ensure_podman_sandbox_runtime_image "${SANDBOX_BOUNDARY_IMAGE}"
 echo "Using Podman sandbox runtime image: ${SANDBOX_BOUNDARY_IMAGE}"
 
-DEFAULT_SANDBOX_IMAGE="ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
+DEFAULT_SANDBOX_IMAGE="nvcr.io/nvidia/base/ubuntu:24.04"
 SANDBOX_IMAGE_REQUEST="${OPENSHELL_E2E_PODMAN_SANDBOX_IMAGE:-${OPENSHELL_SANDBOX_IMAGE:-${DEFAULT_SANDBOX_IMAGE}}}"
 if [ "${OPENSHELL_E2E_REQUIRE_DIGEST_PINNED_SANDBOX_IMAGE:-0}" = "1" ] \
    && ! [[ "${SANDBOX_IMAGE_REQUEST}" =~ ^[^@]+@sha256:[0-9a-f]{64}$ ]]; then
@@ -653,12 +628,6 @@ fi
 if ! podman_cmd image exists "${SANDBOX_IMAGE_REQUEST}" 2>/dev/null; then
   echo "Pulling ${SANDBOX_IMAGE_REQUEST}..."
   podman_cmd pull "${SANDBOX_IMAGE_REQUEST}"
-fi
-if [ "${SANDBOX_IMAGE_REQUEST}" = "${DEFAULT_SANDBOX_IMAGE}" ]; then
-  SANDBOX_IMAGE_REQUEST="$(prepare_policy_document_community_image "${SANDBOX_IMAGE_REQUEST}")"
-  export OPENSHELL_E2E_COMMUNITY_BASE_IMAGE="${SANDBOX_IMAGE_REQUEST}"
-  export OPENSHELL_COMMUNITY_REGISTRY="openshell/e2e-community-sandboxes"
-  podman_cmd tag "${SANDBOX_IMAGE_REQUEST}" "${OPENSHELL_COMMUNITY_REGISTRY}/base:latest"
 fi
 SANDBOX_IMAGE_ID="$(podman_cmd image inspect --format '{{.Id}}' "${SANDBOX_IMAGE_REQUEST}")"
 SANDBOX_IMAGE_ID="${SANDBOX_IMAGE_ID#sha256:}"

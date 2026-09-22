@@ -320,7 +320,7 @@ const SANDBOX_EXAMPLES: &str = "\x1b[1mALIAS\x1b[0m
 
 \x1b[1mEXAMPLES\x1b[0m
   $ openshell sandbox create
-  $ openshell sandbox create --from python
+  $ openshell sandbox create --from registry.example.com/agents/python:latest
   $ openshell sandbox connect my-sandbox
   $ openshell sandbox list
   $ openshell sandbox delete my-sandbox
@@ -1409,13 +1409,8 @@ enum SandboxCommands {
         #[arg(long, conflicts_with_all = ["from", "gpu", "cpu", "memory", "driver_config_json", "envs"])]
         template: Option<String>,
 
-        /// Sandbox source: a community sandbox name (e.g., `ollama`), a rootfs
-        /// tar archive (`.tar`, `.tar.gz`, or `.tgz`), or a full container
-        /// image reference (e.g., `myregistry.com/img:tag`).
-        ///
-        /// Community names are resolved to
-        /// `ghcr.io/nvidia/openshell-community/sandboxes/<name>:latest`
-        /// (override the prefix with `OPENSHELL_COMMUNITY_REGISTRY`).
+        /// Sandbox source: a rootfs tar archive (`.tar`, `.tar.gz`, or `.tgz`)
+        /// or a container image reference (e.g., `myregistry.com/img:tag`).
         ///
         /// To use a local Dockerfile, build and tag it with the container
         /// engine used by your local gateway, then pass the resulting image

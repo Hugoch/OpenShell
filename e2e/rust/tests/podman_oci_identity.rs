@@ -18,7 +18,7 @@ use openshell_e2e::harness::container::{ContainerEngine, is_e2e_driver};
 use openshell_e2e::harness::output::strip_ansi;
 use openshell_e2e::harness::sandbox::SandboxGuard;
 
-const BASE_IMAGE: &str = "ghcr.io/nvidia/openshell-community/sandboxes/base:latest";
+const BASE_IMAGE: &str = "nvcr.io/nvidia/base/ubuntu:24.04";
 const READY_MARKER: &str = "podman-oci-identity-ready";
 const OCI_UID: &str = "2345";
 const OCI_GID: &str = "2346";
@@ -182,7 +182,7 @@ async fn podman_uses_oci_identity_and_inspected_image_id() {
     }
 
     let image = ImageGuard::build().expect("build Podman OCI identity image");
-    // The community base image contains a baked default policy with an
+    // The fixture image contains a policy with an
     // explicit `sandbox` process identity. Supply a complete policy that
     // intentionally omits `process` so this test exercises OCI fallback.
     let policy = tempfile::NamedTempFile::new().expect("create OCI fallback policy");

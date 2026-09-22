@@ -11,7 +11,7 @@
 #
 # Client binaries:   python, python3, curl, aws, bash.
 # Reference layout:  the venv and uv paths below (/sandbox/.venv,
-#                    /sandbox/.uv/python) are OpenShell Community image paths,
+#                    /sandbox/.uv/python) come from one reference image layout,
 #                    and /usr/local/bin/aws assumes the AWS CLI v2 installer.
 #                    Edit `binaries` to match your image before importing.
 #                    `binaries` also matches a process's ancestors, so the
