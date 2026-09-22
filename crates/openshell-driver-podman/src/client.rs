@@ -115,6 +115,10 @@ pub struct ContainerState {
     pub started_at: Option<String>,
     #[serde(default)]
     pub finished_at: Option<String>,
+    /// A driver-local diagnostic derived from a narrowly allow-listed
+    /// container-log marker. It is never deserialized from Podman.
+    #[serde(skip)]
+    pub startup_diagnostic: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -641,6 +645,28 @@ impl PodmanClient {
             None,
         )
         .await
+    }
+
+    /// Read a bounded tail of a container's combined output.
+    ///
+    /// Callers must treat this as sensitive workload output. The Podman
+    /// watcher uses it only to recognize fixed, driver-owned startup markers;
+    /// it never forwards the raw output to the gateway.
+    pub async fn container_logs(&self, name: &str) -> Result<Bytes, PodmanApiError> {
+        validate_name(name)?;
+        let (status, bytes) = self
+            .request(
+                hyper::Method::GET,
+                &format!("/libpod/containers/{name}/logs?stdout=true&stderr=true&tail=200"),
+                None,
+                API_TIMEOUT,
+            )
+            .await?;
+        if status.is_success() {
+            Ok(bytes)
+        } else {
+            Err(error_from_response(status.as_u16(), &bytes))
+        }
     }
 
     /// List containers matching label filters (e.g. `&["openshell.managed=true"]`).

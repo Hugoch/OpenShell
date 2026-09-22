@@ -25,7 +25,7 @@ use openshell_isolation_interface::contract::Sha256Digest;
 use openshell_isolation_interface::contract::{
     BackendDescriptor, BackendError, BinaryIdentity, BoundaryConfirmation, BoundaryExitStatus,
     BoundaryProperties, BoundarySignal, EnforcedProperty, ExecSpec, OuterFenceGuarantees,
-    ResolveError,
+    ResolveError, ShellSpec,
 };
 use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose};
 use serde::de::DeserializeOwned;
@@ -1006,9 +1006,43 @@ impl BinaryIdentityWire {
 pub struct ExecSpecWire {
     pub program: String,
     pub args: Vec<String>,
+    #[serde(default)]
+    pub shell: Option<ShellSpecWire>,
+    #[serde(default)]
+    pub runtime_helper: Option<RuntimeHelperWire>,
     pub env: Vec<(String, String)>,
     pub workdir: Option<String>,
     pub pty: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeHelperWire {
+    Sftp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellSpecWire {
+    pub command: Option<String>,
+    pub login: bool,
+}
+
+impl From<ShellSpec> for ShellSpecWire {
+    fn from(spec: ShellSpec) -> Self {
+        Self {
+            command: spec.command,
+            login: spec.login,
+        }
+    }
+}
+
+impl From<ShellSpecWire> for ShellSpec {
+    fn from(spec: ShellSpecWire) -> Self {
+        Self {
+            command: spec.command,
+            login: spec.login,
+        }
+    }
 }
 
 impl From<ExecSpec> for ExecSpecWire {
@@ -1016,6 +1050,12 @@ impl From<ExecSpec> for ExecSpecWire {
         Self {
             program: spec.program,
             args: spec.args,
+            shell: spec.shell.map(ShellSpecWire::from),
+            runtime_helper: spec.runtime_helper.map(|helper| match helper {
+                openshell_isolation_interface::contract::RuntimeHelper::Sftp => {
+                    RuntimeHelperWire::Sftp
+                }
+            }),
             env: spec.env,
             workdir: spec.workdir,
             pty: spec.pty,
@@ -1028,6 +1068,12 @@ impl From<ExecSpecWire> for ExecSpec {
         Self {
             program: spec.program,
             args: spec.args,
+            shell: spec.shell.map(ShellSpec::from),
+            runtime_helper: spec.runtime_helper.map(|helper| match helper {
+                RuntimeHelperWire::Sftp => {
+                    openshell_isolation_interface::contract::RuntimeHelper::Sftp
+                }
+            }),
             env: spec.env,
             workdir: spec.workdir,
             pty: spec.pty,
@@ -1590,5 +1636,35 @@ mod tests {
         let encoded = serde_json::to_vec(&transport).expect("encode transport");
         let decoded: SandboxTransport = serde_json::from_slice(&encoded).expect("decode transport");
         assert_eq!(decoded, transport);
+    }
+
+    #[test]
+    fn exec_wire_accepts_legacy_direct_exec_without_shell_intent() {
+        let wire: ExecSpecWire = serde_json::from_str(
+            r#"{"program":"/bin/true","args":[],"env":[],"workdir":null,"pty":false}"#,
+        )
+        .expect("decode legacy exec spec");
+
+        assert_eq!(wire.shell, None);
+        assert_eq!(wire.runtime_helper, None);
+    }
+
+    #[test]
+    fn exec_wire_preserves_trusted_runtime_helper_intent() {
+        let spec = ExecSpec {
+            program: String::new(),
+            args: Vec::new(),
+            shell: None,
+            runtime_helper: Some(openshell_isolation_interface::contract::RuntimeHelper::Sftp),
+            env: Vec::new(),
+            workdir: None,
+            pty: false,
+        };
+
+        let decoded = ExecSpec::from(ExecSpecWire::from(spec));
+        assert_eq!(
+            decoded.runtime_helper,
+            Some(openshell_isolation_interface::contract::RuntimeHelper::Sftp)
+        );
     }
 }

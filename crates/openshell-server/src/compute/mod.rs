@@ -13364,7 +13364,7 @@ mod tests {
                 ..Default::default()
             }),
             template: Some(SandboxTemplate {
-                image: "ghcr.io/nvidia/openshell-community/sandboxes/base:latest".to_string(),
+                image: "nvcr.io/nvidia/base/ubuntu:24.04".to_string(),
                 driver_config: Some(prost_types::Struct {
                     fields: [
                         (

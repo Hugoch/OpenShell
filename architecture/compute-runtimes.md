@@ -403,9 +403,8 @@ readiness.
 
 ## Images
 
-The gateway image and Helm chart are built from this repository. Sandbox images
-are maintained separately in the OpenShell Community repository or supplied by
-users.
+The gateway image and Helm chart are built from this repository. Users supply
+workload images as standard OCI images.
 
 Custom sandbox images must include the agent runtime and any system
 dependencies, but they should not need to include the gateway. GPU-capable

@@ -97,8 +97,8 @@ exist but a profile with that ID is available, the CLI can create it from local
 credentials:
 
 ```bash
-openshell sandbox create --provider claude-code -- claude
-openshell sandbox create --provider codex -- codex
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest --provider claude-code -- claude
+openshell sandbox create --from registry.example.com/your-org/codex-agent:latest --provider codex -- codex
 ```
 
 The agent will be prompted interactively if credentials are missing.
@@ -292,7 +292,7 @@ image, environment, sizing, or driver-specific configuration:
 
 ```bash
 openshell sandbox template create gpu-kata \
-  --image ghcr.io/nvidia/openshell-community/sandboxes/python:latest \
+  --image registry.example.com/agents/python:latest \
   --cpu 2 \
   --memory 4Gi \
   --gpu 1 \
@@ -308,7 +308,7 @@ creates. Put driver config on a template only when it should be reused.
 
 ```bash
 openshell sandbox template create gpu-kata \
-  --image ghcr.io/nvidia/openshell-community/sandboxes/python:latest \
+  --image registry.example.com/agents/python:latest \
   --cpu 2 \
   --memory 4Gi \
   --gpu 1 \
@@ -501,7 +501,7 @@ Create sandbox with initial policy
 ### Step 1: Create sandbox with initial policy
 
 ```bash
-openshell sandbox create --name dev --policy ./initial-policy.yaml -- claude
+openshell sandbox create --name dev --from registry.example.com/your-org/claude-agent:latest --policy ./initial-policy.yaml -- claude
 ```
 
 Sandboxes stay alive by default for iteration. Add `--no-keep` only when the sandbox should be deleted automatically after the initial session.
@@ -634,15 +634,14 @@ docker build -t my-app:latest .
 openshell sandbox create --from my-app:latest --name my-app
 ```
 
-The `--from` flag accepts an existing full image reference such as `myregistry.com/img:tag`, or a community sandbox name such as `ollama`. Build local Dockerfiles first with the same container engine as the local gateway, then pass the image tag.
+The `--from` flag accepts an explicit OCI image reference such as `myregistry.com/img:tag`. It does not expand catalog aliases. Build local Dockerfiles first with the same container engine as the local gateway, then pass the image tag.
 
-Use `docker build -t my-app:latest` for Docker gateways. For Podman gateways, use `podman build -t localhost/my-app:latest` and pass `localhost/my-app:latest` to `--from`. For remote gateways, push the image to a registry reachable by the gateway. Bare community names resolve under `ghcr.io/nvidia/openshell-community/sandboxes` unless `OPENSHELL_COMMUNITY_REGISTRY` overrides the prefix.
+Use `docker build -t my-app:latest` for Docker gateways. For Podman gateways, use `podman build -t localhost/my-app:latest` and pass `localhost/my-app:latest` to `--from`. For remote gateways, push the image to a registry reachable by the gateway.
 
 For Docker and Podman gateways, custom images should declare a non-root OCI
-`USER`. Each explicit `process.run_as_user` or `process.run_as_group` policy
+`USER`. Images without one run as numeric UID and GID `1000`. Each explicit `process.run_as_user` or `process.run_as_group` policy
 field wins independently; omitted fields fall back to the image declaration.
-An image with no `USER` fails before readiness unless policy supplies both
-fields. Explicit numeric fields may use any UID/GID from `1` through
+Explicit numeric fields may use any UID/GID from `1` through
 `4294967294`; `0` is root and `4294967295` is the invalid identity sentinel.
 Warn users that low IDs can inherit permissions from matching accounts, image
 files, mounted volumes, or devices.
