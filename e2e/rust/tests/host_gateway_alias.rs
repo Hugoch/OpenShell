@@ -158,7 +158,7 @@ fn write_binding_profile(
         .tempfile()
         .map_err(|e| format!("create provider profile: {e}"))?;
     let profile = format!(
-        r#"id: {id}
+        r"id: {id}
 display_name: {display_name}
 category: other
 credentials:
@@ -174,8 +174,8 @@ endpoints:
     protocol: rest
     access: full
     enforcement: enforce
-binaries: [/usr/bin/curl]
-"#
+binaries: [/usr/bin/bash]
+"
     );
     file.write_all(profile.as_bytes())
         .map_err(|e| format!("write provider profile: {e}"))?;
@@ -187,11 +187,11 @@ binaries: [/usr/bin/curl]
 fn write_binding_policy(port: u16) -> Result<NamedTempFile, String> {
     let mut file = NamedTempFile::new().map_err(|e| format!("create binding policy: {e}"))?;
     let policy = format!(
-        r#"version: 1
+        r"version: 1
 
 filesystem_policy:
   include_workdir: true
-  read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
+  read_only: [/bin, /usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
   read_write: [/sandbox, /tmp, /dev/null]
 
 landlock:
@@ -218,8 +218,8 @@ network_policies:
         access: full
         enforcement: enforce
     binaries:
-      - path: /usr/bin/curl
-"#
+      - path: /usr/bin/bash
+"
     );
     file.write_all(policy.as_bytes())
         .map_err(|e| format!("write binding policy: {e}"))?;
@@ -255,6 +255,65 @@ async fn delete_provider_profile(id: &str) {
     let _ = cmd.status().await;
 }
 
+fn binding_probe_command(port: u16) -> String {
+    format!(
+        r#"
+http_request() {{
+  local host="$1" path="$2" status_line line
+  HTTP_STATUS= HTTP_BODY=
+  exec 3<>"/dev/tcp/$host/{port}" || return 1
+  printf 'GET %s HTTP/1.1\r\nHost: %s:{port}\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n' "$path" "$host" "$BOUND_TOKEN_A" >&3
+  IFS= read -r status_line <&3 || return 1
+  status_line="${{status_line%$'\r'}}"
+  HTTP_STATUS="${{status_line#* }}"
+  HTTP_STATUS="${{HTTP_STATUS%% *}}"
+  while IFS= read -r line <&3; do
+    line="${{line%$'\r'}}"
+    [[ -z "$line" ]] && break
+  done
+  while IFS= read -r line <&3 || [[ -n "$line" ]]; do HTTP_BODY+="$line"; done
+  exec 3>&- 3<&-
+}}
+http_request host.openshell.internal /allowed/check; allowed="$HTTP_BODY"
+http_request host.docker.internal /allowed/check; host_denied="$HTTP_STATUS"
+http_request host.openshell.internal /other/check; path_denied="$HTTP_STATUS"
+printf 'ALLOWED=%s HOST_DENIED=%s PATH_DENIED=%s\n' "$allowed" "$host_denied" "$path_denied"
+"#
+    )
+}
+
+fn assert_binding_results(guard: &SandboxGuard, logs: &str) {
+    assert!(
+        guard
+            .create_output
+            .contains(r#"ALLOWED={"authorized":true}"#),
+        "credential should resolve at the bound endpoint:\n{}\nlogs:\n{logs}",
+        guard.create_output,
+    );
+    assert!(
+        guard.create_output.contains("HOST_DENIED=403"),
+        "same placeholder must be denied at an unbound host:\n{}",
+        guard.create_output
+    );
+    assert!(
+        guard.create_output.contains("PATH_DENIED=403"),
+        "same placeholder must be denied at an unbound path on its bound host:\n{}",
+        guard.create_output
+    );
+    assert!(
+        logs.contains("openshell.provider_credential.endpoint_mismatch")
+            && logs.contains("credential_endpoint_mismatch"),
+        "OCSF logs should explain the endpoint-binding denial without secret material:\n{logs}"
+    );
+    assert!(
+        !logs.contains("e2e-bound-secret")
+            && !logs.contains("e2e-provider-b-secret")
+            && !logs.contains("BOUND_TOKEN_A")
+            && !logs.contains("BOUND_TOKEN_B"),
+        "OCSF logs must not contain credential values or environment keys:\n{logs}"
+    );
+}
+
 fn write_policy(port: u16) -> Result<NamedTempFile, String> {
     let mut file = NamedTempFile::new().map_err(|e| format!("create temp policy file: {e}"))?;
     let policy = format!(
@@ -264,6 +323,7 @@ filesystem_policy:
   include_workdir: true
   read_only:
     - /usr
+    - /bin
     - /lib
     - /proc
     - /dev/urandom
@@ -294,7 +354,7 @@ network_policies:
           - "192.168.0.0/16"
           - "fc00::/7"
     binaries:
-      - path: /usr/bin/curl
+      - path: /usr/bin/bash
 "#
     );
     file.write_all(policy.as_bytes())
@@ -316,16 +376,17 @@ async fn sandbox_reaches_host_openshell_internal_via_host_gateway_alias() {
         .expect("temp policy path should be utf-8")
         .to_string();
 
+    let command = format!(
+        r#"exec 3<>/dev/tcp/host.openshell.internal/{0}; printf 'GET / HTTP/1.1\r\nHost: host.openshell.internal:{0}\r\nConnection: close\r\n\r\n' >&3; while IFS= read -r line <&3 || [[ -n $line ]]; do printf '%s\n' "$line"; done"#,
+        server.port
+    );
     let guard = SandboxGuard::create(&[
         "--policy",
         &policy_path,
         "--",
-        "curl",
-        "--silent",
-        "--show-error",
-        "--max-time",
-        "15",
-        &format!("http://host.openshell.internal:{}/", server.port),
+        "/usr/bin/bash",
+        "-c",
+        &command,
     ])
     .await
     .expect("sandbox create with host.openshell.internal echo request");
@@ -400,10 +461,7 @@ async fn static_provider_credentials_are_bound_to_profile_endpoints() {
     .await
     .expect("create endpoint-bound provider B");
 
-    let command = format!(
-        r#"allowed=$(curl --silent --show-error --max-time 15 -H "Authorization: Bearer $BOUND_TOKEN_A" http://host.openshell.internal:{}/allowed/check); host_denied=$(curl --silent --show-error --max-time 15 -o /tmp/host-denied-body -w "%{{http_code}}" -H "Authorization: Bearer $BOUND_TOKEN_A" http://host.docker.internal:{}/allowed/check); path_denied=$(curl --silent --show-error --max-time 15 -o /tmp/path-denied-body -w "%{{http_code}}" -H "Authorization: Bearer $BOUND_TOKEN_A" http://host.openshell.internal:{}/other/check); printf 'ALLOWED=%s HOST_DENIED=%s PATH_DENIED=%s\n' "$allowed" "$host_denied" "$path_denied""#,
-        server.port, server.port, server.port
-    );
+    let command = binding_probe_command(server.port);
     let mut guard = SandboxGuard::create(&[
         "--policy",
         &policy_path,
@@ -413,7 +471,7 @@ async fn static_provider_credentials_are_bound_to_profile_endpoints() {
         BINDING_PROVIDER_B_NAME,
         "--no-auto-providers",
         "--",
-        "sh",
+        "/usr/bin/bash",
         "-c",
         &command,
     ])
@@ -426,36 +484,7 @@ async fn static_provider_credentials_are_bound_to_profile_endpoints() {
     })
     .await
     .expect("fetch endpoint mismatch logs");
-    assert!(
-        guard
-            .create_output
-            .contains(r#"ALLOWED={"authorized":true}"#),
-        "credential should resolve at the bound endpoint:\n{}\nlogs:\n{logs}",
-        guard.create_output,
-    );
-    assert!(
-        guard.create_output.contains("HOST_DENIED=403"),
-        "same placeholder must be denied at an unbound host:\n{}",
-        guard.create_output
-    );
-    assert!(
-        guard.create_output.contains("PATH_DENIED=403"),
-        "same placeholder must be denied at an unbound path on its bound host:\n{}",
-        guard.create_output
-    );
-
-    assert!(
-        logs.contains("openshell.provider_credential.endpoint_mismatch")
-            && logs.contains("credential_endpoint_mismatch"),
-        "OCSF logs should explain the endpoint-binding denial without secret material:\n{logs}"
-    );
-    assert!(
-        !logs.contains("e2e-bound-secret")
-            && !logs.contains("e2e-provider-b-secret")
-            && !logs.contains("BOUND_TOKEN_A")
-            && !logs.contains("BOUND_TOKEN_B"),
-        "OCSF logs must not contain credential values or environment keys:\n{logs}"
-    );
+    assert_binding_results(&guard, &logs);
 
     guard.cleanup().await;
     delete_provider(BINDING_PROVIDER_A_NAME).await;

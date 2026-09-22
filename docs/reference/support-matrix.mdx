@@ -59,21 +59,21 @@ Install the software for the compute driver you use:
 | kubectl | Compatible with your cluster | Required for Kubernetes operational inspection and secret creation. |
 | Host virtualization | Host dependent | Required for MicroVM-backed gateways. MicroVM uses Hypervisor.framework on macOS and KVM on Linux. |
 
-## Sandbox Runtime Versions
+## Workload Images
 
-Sandbox container images are maintained in the [OpenShell Community](https://github.com/NVIDIA/OpenShell-Community) repository. Refer to that repository for the current list of installed components and their versions.
+OpenShell accepts standard Linux OCI images. The built-in default workload is
+`nvcr.io/nvidia/base/ubuntu:24.04` for `linux/amd64` and `linux/arm64`. It is a
+minimal Ubuntu Noble userspace and does not bundle agent CLIs. Operators can
+change the default, and users can select an explicit image with `--from`.
 
 ## Container Images
-
-OpenShell publishes the gateway image for `linux/amd64` and `linux/arm64`.
 
 | Image | Reference | Pulled When |
 |---|---|---|
 | Gateway | `ghcr.io/nvidia/openshell/gateway:latest` | Helm chart install or upgrade, or standalone container deployment |
+| Default workload | `nvcr.io/nvidia/base/ubuntu:24.04` | First sandbox creation unless preloaded or overridden |
 
 The Helm chart in `deploy/helm/openshell` deploys the gateway workload, service account, service, optional persistent storage, and network policy for Kubernetes. It defaults to a StatefulSet for SQLite-backed installs and can render a Deployment for external database-backed installs.
-
-Sandbox images are maintained separately in the [OpenShell Community](https://github.com/NVIDIA/OpenShell-Community) repository.
 
 To override the default image references, use Helm values:
 

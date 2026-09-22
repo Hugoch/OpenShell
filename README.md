@@ -59,19 +59,18 @@ For deploying OpenShell on OpenShift, see [`deploy/helm/openshell/README.md#inst
 ### Create a sandbox
 
 ```bash
-openshell sandbox create -- claude  # or opencode, codex, copilot
+openshell sandbox create --name demo
 ```
 
-The sandbox container includes the following tools by default:
+The gateway defaults to `nvcr.io/nvidia/base/ubuntu:24.04`, a minimal Ubuntu
+Noble workload. To run an agent, build or select an OCI image that contains the
+agent and pass its explicit reference:
 
-| Category   | Tools                                                    |
-| ---------- | -------------------------------------------------------- |
-| Agent      | `claude`, `opencode`, `codex`, `copilot`                 |
-| Language   | `python` (3.14), `node` (22)                             |
-| Developer  | `gh`, `git`, `vim`, `nano`                               |
-| Networking | `ping`, `dig`, `nslookup`, `nc`, `traceroute`, `netstat` |
+```bash
+openshell sandbox create --from registry.example.com/agents/my-agent:1.0 -- my-agent
+```
 
-For more details see https://github.com/NVIDIA/OpenShell-Community/tree/main/sandboxes/base.
+Attach the providers and policy required by that workload.
 
 ### See network policy in action
 
@@ -147,25 +146,27 @@ Inference access uses the same provider workflow. Attach an inference-capable pr
 OpenShell can pass host GPUs into sandboxes for local inference, fine-tuning, or any GPU workload. Add `--gpu` when creating a sandbox:
 
 ```bash
-openshell sandbox create --gpu --from [gpu-enabled-sandbox] -- claude
+openshell sandbox create --gpu --from registry.example.com/your-org/gpu-agent:latest -- claude
 ```
 
 Docker-backed GPU sandboxes auto-select CDI when available and otherwise fall back to Docker's NVIDIA GPU request path (`--gpus all`).
 
-**Requirements:** NVIDIA drivers and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) must be installed on the host. The sandbox image itself must include the appropriate GPU drivers and libraries for your workload — the default `base` image does not. See the [BYOC example](https://github.com/NVIDIA/OpenShell/tree/main/examples/bring-your-own-container) for building a custom sandbox image with GPU support.
+**Requirements:** NVIDIA drivers and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) must be installed on the host. The sandbox image itself must include the appropriate GPU drivers and libraries for your workload — the default Ubuntu image does not. See the [BYOC example](https://github.com/NVIDIA/OpenShell/tree/main/examples/bring-your-own-container) for building a custom sandbox image with GPU support.
 
 ## Supported Agents
 
-| Agent                                                         | Source                                                                           | Notes                                                                         |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | [`base`](https://github.com/NVIDIA/OpenShell-Community/tree/main/sandboxes/base) | Works out of the box. Provider uses `ANTHROPIC_API_KEY`.                      |
-| [OpenCode](https://opencode.ai/)                              | [`base`](https://github.com/NVIDIA/OpenShell-Community/tree/main/sandboxes/base) | Works out of the box. Provider uses `OPENAI_API_KEY` or `OPENROUTER_API_KEY`. |
-| [Codex](https://developers.openai.com/codex)                  | [`base`](https://github.com/NVIDIA/OpenShell-Community/tree/main/sandboxes/base) | Works out of the box. Provider uses `OPENAI_API_KEY`.                         |
-| [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | [`base`](https://github.com/NVIDIA/OpenShell-Community/tree/main/sandboxes/base) | Works out of the box. Provider uses `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`. |
-| [OpenClaw](https://openclaw.ai/)                 | [NemoClaw](https://github.com/NVIDIA/NemoClaw)                                   | Run OpenClaw more securely inside NVIDIA OpenShell with the NemoClaw blueprint.       |
-| [Hermes Agent](https://github.com/NousResearch/hermes-agent)   | [NemoClaw](https://github.com/NVIDIA/NemoClaw)                                   | Run Hermes Agent more securely inside NVIDIA OpenShell with the NemoClaw blueprint.   |
-| [Ollama](https://ollama.com/)                                 | [Community](https://github.com/NVIDIA/OpenShell-Community)                       | Launch with `openshell sandbox create --from ollama`.                         |
-| [Pi](https://pi.dev/)                                 | [Community](https://github.com/NVIDIA/OpenShell-Community)                       | Launch with `openshell sandbox create --from pi`.                         |
+OpenShell can run Linux agents packaged in OCI images. The default Ubuntu
+workload does not bundle agent CLIs. Build or select an image containing your
+agent, then authorize its binary paths, service endpoints, and credentials.
+
+| Agent | Integration |
+| ----- | ----------- |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Package Claude Code in a workload image and attach a `claude-code` provider or another endpoint-bearing model profile. |
+| [OpenCode](https://opencode.ai/) | Package OpenCode in a workload image and attach its model provider and policy. |
+| [Codex](https://developers.openai.com/codex) | Package Codex in a workload image and attach an OpenAI provider and policy. |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) | Package the CLI in a workload image and attach GitHub credentials and policy. |
+| [OpenClaw](https://openclaw.ai/) | Use the [NemoClaw](https://github.com/NVIDIA/NemoClaw) blueprint. |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Use the [NemoClaw](https://github.com/NVIDIA/NemoClaw) blueprint. |
 
 ## Key Commands
 
@@ -197,23 +198,23 @@ openshell term
 
 The TUI gives you a live, keyboard-driven view of your gateway and sandboxes. Navigate with `Tab` to switch panels, `j`/`k` to move through lists, `Enter` to select, and `:` for command mode. Gateway health and sandbox status auto-refresh every two seconds.
 
-## Community Sandboxes and BYOC
+## Workload Images and BYOC
 
-Use `--from` to create sandboxes from the [OpenShell Community](https://github.com/NVIDIA/OpenShell-Community) catalog or a container image:
+Use `--from` with an explicit OCI image reference:
 
 ```bash
-openshell sandbox create --from gemini             # community catalog
-docker build -t my-sandbox:latest ./my-sandbox-dir # Docker gateway
-openshell sandbox create --from my-sandbox:latest  # Docker built image
-podman build -t localhost/my-sandbox:latest ./my-sandbox-dir # Podman gateway
-openshell sandbox create --from localhost/my-sandbox:latest  # Podman built image
-openshell sandbox create --from registry.io/img:v1 # container image
+docker build -t my-sandbox:latest ./my-sandbox-dir
+openshell sandbox create --from my-sandbox:latest
+
+podman build -t localhost/my-sandbox:latest ./my-sandbox-dir
+openshell sandbox create --from localhost/my-sandbox:latest
+
+openshell sandbox create --from registry.example.com/agents/my-agent:1.0
 ```
 
 Build with the container engine used by your local gateway. For a remote
-gateway, push the image to a registry that the gateway can pull from.
-
-See the [OpenShell Community](https://github.com/NVIDIA/OpenShell-Community) catalog and the [BYOC example](https://github.com/NVIDIA/OpenShell/tree/main/examples/bring-your-own-container) for details.
+gateway, push the image to a registry that the gateway can pull from. See the
+[BYOC example](https://github.com/NVIDIA/OpenShell/tree/main/examples/bring-your-own-container).
 
 ## Use OpenShell with Your Agent
 

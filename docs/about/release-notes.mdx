@@ -12,6 +12,23 @@ NVIDIA OpenShell follows a frequent release cadence. Use the following GitHub re
 
 ## 0.1.0 migration notes
 
+### Workload images
+
+The default workload image is now `nvcr.io/nvidia/base/ubuntu:24.04`. It is a
+minimal Ubuntu Noble environment and does not include agent CLIs or an
+image-baked OpenShell policy. OpenShell applies its built-in restrictive policy
+when no explicit policy is supplied.
+
+The CLI no longer expands bare catalog names or supports the former catalog
+registry override. Build or select an OCI image and pass its explicit reference:
+
+```shell
+openshell sandbox create --from registry.example.com/agents/my-agent:1.0 -- my-agent
+```
+
+Gateway operators can replace the default with the driver configuration or the
+Helm `server.sandboxImage` value.
+
 ### Network policy binaries
 
 OpenShell 0.1.0 removes the deprecated `NetworkBinary.harness` protobuf field and reserves its field number and name. Generated protobuf decoders ignore the unknown value. When the gateway loads policy history written by an older version, it migrates binaries marked by the former field into endpoint-provenance-marked rules so the upgrade cannot widen private-address access.

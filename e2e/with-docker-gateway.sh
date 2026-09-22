@@ -18,7 +18,7 @@
 #   OPENSHELL_E2E_DOCKER_SANDBOX_IMAGE=...
 #   OPENSHELL_E2E_DOCKER_SANDBOX_IMAGE_PULL_POLICY=always|if_not_present|never
 #
-# The default community sandbox image uses :latest. This wrapper refreshes it
+# The default sandbox image uses a mutable tag. This wrapper refreshes it
 # before starting the gateway, while the Docker driver defaults to
 # if_not_present so local Dockerfile-built images remain usable.
 #
@@ -516,7 +516,7 @@ build_local_docker_sandbox_runtime_image_if_required "${SANDBOX_RUNTIME_IMAGE}"
 ensure_docker_sandbox_runtime_image "${SANDBOX_RUNTIME_IMAGE}"
 echo "Using Docker sandbox runtime image: ${SANDBOX_RUNTIME_IMAGE}"
 
-DEFAULT_SANDBOX_IMAGE="ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
+DEFAULT_SANDBOX_IMAGE="nvcr.io/nvidia/base/ubuntu:24.04"
 SANDBOX_IMAGE="${OPENSHELL_E2E_DOCKER_SANDBOX_IMAGE:-${OPENSHELL_SANDBOX_IMAGE:-${DEFAULT_SANDBOX_IMAGE}}}"
 SANDBOX_IMAGE_PULL_POLICY="${OPENSHELL_E2E_DOCKER_SANDBOX_IMAGE_PULL_POLICY:-${OPENSHELL_SANDBOX_IMAGE_PULL_POLICY:-if_not_present}}"
 if ! ensure_sandbox_image_available "${SANDBOX_IMAGE}"; then

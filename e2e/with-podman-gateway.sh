@@ -613,7 +613,7 @@ SANDBOX_BOUNDARY_IMAGE="$(resolve_podman_sandbox_runtime_image)"
 ensure_podman_sandbox_runtime_image "${SANDBOX_BOUNDARY_IMAGE}"
 echo "Using Podman sandbox runtime image: ${SANDBOX_BOUNDARY_IMAGE}"
 
-DEFAULT_SANDBOX_IMAGE="ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
+DEFAULT_SANDBOX_IMAGE="nvcr.io/nvidia/base/ubuntu:24.04"
 SANDBOX_IMAGE_REQUEST="${OPENSHELL_E2E_PODMAN_SANDBOX_IMAGE:-${OPENSHELL_SANDBOX_IMAGE:-${DEFAULT_SANDBOX_IMAGE}}}"
 if [ "${OPENSHELL_E2E_REQUIRE_DIGEST_PINNED_SANDBOX_IMAGE:-0}" = "1" ] \
    && ! [[ "${SANDBOX_IMAGE_REQUEST}" =~ ^[^@]+@sha256:[0-9a-f]{64}$ ]]; then

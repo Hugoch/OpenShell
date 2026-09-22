@@ -16,7 +16,7 @@ use tokio::time::{interval, timeout};
 
 use super::port::find_free_port;
 
-const DEFAULT_TEST_SERVER_IMAGE: &str = "ghcr.io/nvidia/openshell-community/sandboxes/base:latest";
+const DEFAULT_TEST_SERVER_IMAGE: &str = super::sandbox::E2E_WORKLOAD_IMAGE;
 
 #[must_use]
 pub fn e2e_driver() -> Option<String> {

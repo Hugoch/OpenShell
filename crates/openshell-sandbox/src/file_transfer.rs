@@ -68,13 +68,15 @@ fn components(path: &Path) -> Result<Vec<OsString>> {
     Ok(result)
 }
 
-fn safe_symlink_target(path: &Path) -> Result<()> {
+fn safe_symlink_target(path: &Path, mut parent_depth: usize) -> Result<()> {
     for component in path.components() {
-        if matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        ) {
-            return Err(miette::miette!(SYMLINK_ESCAPE_ERROR));
+        match component {
+            Component::CurDir => {}
+            Component::Normal(_) => parent_depth += 1,
+            Component::ParentDir if parent_depth > 0 => parent_depth -= 1,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(miette::miette!(SYMLINK_ESCAPE_ERROR));
+            }
         }
     }
     Ok(())
@@ -202,7 +204,7 @@ fn extract<R: Read>(reader: R, workload_root: &Path, destination: &Path) -> Resu
                 .link_name()
                 .into_diagnostic()?
                 .ok_or_else(|| miette::miette!("symlink entry has no target"))?;
-            safe_symlink_target(&target)?;
+            safe_symlink_target(&target, parent_path.len())?;
             remove_non_directory(&parent, leaf)?;
             symlinkat(target.as_os_str(), &parent, leaf)
                 .into_diagnostic()
@@ -226,11 +228,17 @@ fn archive<W: Write>(writer: W, workload_root: &Path, source: &Path) -> Result<(
     let source = target_components(workload_root, source)?;
     let mut archive = tar::Builder::new(writer);
     if source.is_empty() {
-        append_directory_contents(&mut archive, &root, Path::new(""))?;
+        append_directory_contents(&mut archive, &root, Path::new(""), 0)?;
     } else {
         let (parent_path, leaf) = split_parent(&source)?;
         let parent = open_dir_path(&root, parent_path, false)?;
-        append_entry(&mut archive, &parent, leaf, Path::new(leaf))?;
+        append_entry(
+            &mut archive,
+            &parent,
+            leaf,
+            Path::new(leaf),
+            parent_path.len(),
+        )?;
     }
     archive
         .finish()
@@ -253,6 +261,7 @@ fn append_entry<W: Write>(
     parent: impl AsFd,
     name: &OsStr,
     archive_path: &Path,
+    workspace_parent_depth: usize,
 ) -> Result<()> {
     let stat = statat(&parent, name, AtFlags::SYMLINK_NOFOLLOW)
         .into_diagnostic()
@@ -286,11 +295,11 @@ fn append_entry<W: Write>(
         archive
             .append_data(&mut header, archive_path, std::io::empty())
             .into_diagnostic()?;
-        append_directory_contents(archive, &fd, archive_path)?;
+        append_directory_contents(archive, &fd, archive_path, workspace_parent_depth + 1)?;
     } else if kind == libc::S_IFLNK {
         let target = readlinkat(&parent, name, Vec::new()).into_diagnostic()?;
         let target = PathBuf::from(OsString::from_vec(target.into_bytes()));
-        safe_symlink_target(&target)?;
+        safe_symlink_target(&target, workspace_parent_depth)?;
         let mut header = header(&stat, tar::EntryType::Symlink);
         header.set_size(0);
         header.set_cksum();
@@ -310,6 +319,7 @@ fn append_directory_contents<W: Write>(
     archive: &mut tar::Builder<W>,
     directory: impl AsFd,
     archive_path: &Path,
+    workspace_directory_depth: usize,
 ) -> Result<()> {
     let mut names = Dir::read_from(&directory)
         .into_diagnostic()?
@@ -320,7 +330,13 @@ fn append_directory_contents<W: Write>(
     names.sort();
     for name in names {
         let name = OsString::from_vec(name);
-        append_entry(archive, &directory, &name, &archive_path.join(&name))?;
+        append_entry(
+            archive,
+            &directory,
+            &name,
+            &archive_path.join(&name),
+            workspace_directory_depth,
+        )?;
     }
     Ok(())
 }
@@ -334,6 +350,33 @@ mod tests {
         assert!(components(Path::new("../escape")).is_err());
         assert!(components(Path::new("/escape")).is_err());
         assert_eq!(components(Path::new("a/./b")).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn permits_parent_symlinks_that_stay_inside_the_workspace() {
+        assert!(safe_symlink_target(Path::new("../.agents/skills"), 1).is_ok());
+        assert!(safe_symlink_target(Path::new("../escape"), 0).is_err());
+        assert!(safe_symlink_target(Path::new("nested/../../escape"), 0).is_err());
+        assert!(safe_symlink_target(Path::new("/etc/passwd"), 3).is_err());
+    }
+
+    #[test]
+    fn round_trips_a_parent_symlink_that_stays_inside_the_workspace() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(source.path().join(".agents/skills")).unwrap();
+        std::fs::create_dir(source.path().join(".claude")).unwrap();
+        std::os::unix::fs::symlink("../.agents/skills", source.path().join(".claude/skills"))
+            .unwrap();
+
+        let mut bytes = Vec::new();
+        archive(&mut bytes, source.path(), Path::new("")).unwrap();
+
+        let destination = tempfile::tempdir().unwrap();
+        extract(bytes.as_slice(), destination.path(), Path::new(".")).unwrap();
+        assert_eq!(
+            std::fs::read_link(destination.path().join(".claude/skills")).unwrap(),
+            Path::new("../.agents/skills")
+        );
     }
 
     #[test]

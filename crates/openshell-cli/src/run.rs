@@ -1210,7 +1210,7 @@ enum ResolvedSource {
 /// 1. Existing file with `.tar`, `.tar.gz`, or `.tgz` extension → rootfs tar archive.
 /// 2. Local Dockerfile and directory paths → an actionable build-and-tag error.
 /// 3. Other explicit local paths → an actionable error.
-/// 4. Full image reference or community sandbox name → resolve as an image.
+/// 4. Any other value is passed through as an explicit image reference.
 fn resolve_from(value: &str) -> Result<ResolvedSource> {
     let path = Path::new(value);
 
@@ -1251,11 +1251,7 @@ fn resolve_from(value: &str) -> Result<ResolvedSource> {
         ));
     }
 
-    // Full image reference or community sandbox name — delegate to shared
-    // resolution in openshell-core.
-    Ok(ResolvedSource::Image(
-        openshell_core::image::resolve_community_image(value),
-    ))
+    Ok(ResolvedSource::Image(value.to_string()))
 }
 
 #[allow(clippy::case_sensitive_file_extension_comparisons)] // already lowercased
@@ -6699,7 +6695,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_from_keeps_bare_community_name_when_local_directory_matches() {
+    fn resolve_from_keeps_bare_image_reference_when_local_directory_matches() {
         let _lock = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -6711,11 +6707,8 @@ mod tests {
         let result = resolve_from("python");
 
         std::env::set_current_dir(original_dir).expect("restore current directory");
-        match result.expect("bare community name should not be a local path") {
-            super::ResolvedSource::Image(image) => assert_eq!(
-                image,
-                "ghcr.io/nvidia/openshell-community/sandboxes/python:latest"
-            ),
+        match result.expect("bare image reference should not be a local path") {
+            super::ResolvedSource::Image(image) => assert_eq!(image, "python"),
             other @ super::ResolvedSource::RootfsTar { .. } => {
                 panic!("expected image source, got {other:?}");
             }

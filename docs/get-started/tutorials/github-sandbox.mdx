@@ -54,7 +54,7 @@ Create a [credential provider](/sandboxes/manage-providers) that injects your Gi
 ```shell
 GITHUB_TOKEN=<your-token>
 openshell provider create --name my-github --type github --from-existing
-openshell sandbox create --provider my-github -- claude
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest --provider my-github -- claude
 ```
 
 `openshell sandbox create` keeps the sandbox running after Claude Code exits, so you can apply policy updates later without recreating the environment. Add `--no-keep` if you want the sandbox deleted automatically instead.

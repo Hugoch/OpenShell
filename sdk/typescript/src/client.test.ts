@@ -661,7 +661,7 @@ describe('sandbox templates', () => {
         metadata: { name: 'python', labels: { team: 'runtime' } },
         spec: {
           workload: {
-            image: 'ghcr.io/nvidia/openshell-community/sandboxes/python:latest',
+            image: 'registry.example.com/agents/python:latest',
             environment: { FEATURE_FLAG: 'on' },
             resources: { cpu: '1', memory: '512Mi', gpu: { count: 1 } },
           },

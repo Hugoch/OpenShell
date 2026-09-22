@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 title: "Quickstart"
-description: "Install the OpenShell CLI, connect to a gateway, and create your first sandboxed AI agent."
+description: "Install the OpenShell CLI, connect to a gateway, and create your first policy-enforced sandbox."
 keywords: "Generative AI, Cybersecurity, AI Agents, Sandboxing, Installation, Quickstart, Gateway, Docker, Kubernetes, Podman"
 position: 1
 ---
@@ -36,66 +36,37 @@ After installing the CLI, run `openshell --help` in your terminal to view the fu
 Install the public OpenShell agent skills with `npx skills add NVIDIA/OpenShell`. The `openshell-cli` skill guides your agent through common workflows and uses the installed CLI help as the command reference; no OpenShell source checkout is required.
 </Tip>
 
-## Create Your First OpenShell Sandbox
+## Create Your First Sandbox
 
-Create a sandbox and launch an agent inside it.
-Choose the tab that matches your agent:
-
-<Tabs>
-<Tab title="Claude Code">
-
-Run the following command to create a sandbox with Claude Code:
+Create a sandbox with the gateway's default workload image:
 
 ```shell
-openshell sandbox create -- claude
+openshell sandbox create --name quickstart
 ```
 
-The CLI prompts you to create a provider from local credentials.
-Type `yes` to continue.
-If `ANTHROPIC_API_KEY` is set in your environment, the CLI picks it up automatically.
-If not, you can configure it from inside the sandbox after it launches.
+The default is `nvcr.io/nvidia/base/ubuntu:24.04`. It provides a minimal Ubuntu Noble environment; install workload-specific tools in your own image.
 
-<Note>
-`ANTHROPIC_API_KEY` is an API key from [console.anthropic.com](https://console.anthropic.com), not a subscription token. Subscription users must generate a separate API key.
-</Note>
-</Tab>
-
-<Tab title="OpenCode">
-
-Run the following command to create a sandbox with OpenCode:
+Connect to the sandbox:
 
 ```shell
-openshell sandbox create -- opencode
+openshell sandbox connect quickstart
 ```
 
-The CLI prompts you to create a provider from local credentials.
-Type `yes` to continue.
-If `OPENAI_API_KEY` or `OPENROUTER_API_KEY` is set in your environment, the CLI picks it up automatically.
-If not, you can configure it from inside the sandbox after it launches.
-</Tab>
-
-<Tab title="Codex">
-
-Run the following command to create a sandbox with Codex:
+Run a command without opening an interactive session:
 
 ```shell
-openshell sandbox create -- codex
+openshell sandbox exec -n quickstart -- cat /etc/os-release
 ```
 
-The CLI prompts you to create a provider from local credentials.
-Type `yes` to continue.
-If `OPENAI_API_KEY` is set in your environment, the CLI picks it up automatically.
-If not, you can configure it from inside the sandbox after it launches.
-</Tab>
+## Run an Agent Image
 
-<Tab title="Base Sandbox">
-
-Use the `--from` flag to create a sandbox from the base container:
+Build an OCI image containing your agent and its dependencies, then pass its full image reference:
 
 ```shell
-openshell sandbox create --from base
+docker build -t my-agent:latest ./my-agent
+openshell sandbox create --from my-agent:latest -- my-agent
 ```
 
-</Tab>
+For a Podman gateway, build and use a Podman-visible name such as `localhost/my-agent:latest`. For a remote gateway, push the image to a registry that the gateway can pull from.
 
-</Tabs>
+Attach a provider and a policy that authorize the agent's credentials, endpoints, and executable paths. Refer to [Bring Your Own Container](https://github.com/NVIDIA/OpenShell/tree/main/examples/bring-your-own-container), [Providers](/providers), and [Customize Sandbox Policies](/sandboxes/policies).
