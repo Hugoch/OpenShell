@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 use tonic::{Request, Response, Status};
 
 use crate::proto::{
-    HttpEvent, HttpResult, MiddlewareManifest, ValidateConfigRequest, ValidateConfigResponse,
-    WebSocketSessionEvent, WebSocketSessionEventResult,
+    HttpEvent, HttpResult, MiddlewareDescribeRequest, MiddlewareManifest, ValidateConfigRequest,
+    ValidateConfigResponse, WebSocketSessionEvent, WebSocketSessionEventResult,
 };
 
 /// Transport-neutral result stream for one HTTP middleware stage.
@@ -34,7 +34,10 @@ pub type WebSocketResponseStream = Pin<
 /// whether invocations are direct calls or serialized gRPC requests.
 #[tonic::async_trait]
 pub trait SupervisorMiddlewareEndpoint: Send + Sync {
-    async fn describe(&self, request: Request<()>) -> Result<Response<MiddlewareManifest>, Status>;
+    async fn describe(
+        &self,
+        request: Request<MiddlewareDescribeRequest>,
+    ) -> Result<Response<MiddlewareManifest>, Status>;
 
     async fn validate_config(
         &self,
@@ -116,6 +119,12 @@ pub trait SupervisorMiddlewareEndpoint: Send + Sync {
 ///                 supported_http_body_modes: vec![HttpBodyMode::Buffered as i32],
 ///             }],
 ///             expected_audience: String::new(),
+///             extension: Some(openshell_core::extension_protocol::extension_metadata(
+///                 openshell_core::extension_protocol::ExtensionFamily::SupervisorMiddleware,
+///                 "example/audit",
+///                 "1",
+///                 [],
+///             )),
 ///         }
 ///     }
 ///

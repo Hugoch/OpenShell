@@ -16,11 +16,15 @@ use crate::persistence::{
 };
 use crate::sandbox_index::SandboxIndex;
 use crate::sandbox_watch::SandboxWatchBus;
+use crate::supervisor_owner::{OWNER_TTL, SupervisorOwnerIndex};
 use crate::supervisor_session::SupervisorSessionRegistry;
 use crate::tracing_bus::TracingLogBus;
 use futures::{Stream, StreamExt};
 #[cfg(unix)]
 use hyper_util::rt::TokioIo;
+use openshell_core::extension_protocol::{
+    ExtensionFamily, NegotiatedExtension, gateway_metadata, negotiate,
+};
 use openshell_core::proto::compute::v1::{
     AuthenticateSandboxRequest, CreateSandboxRequest, DeleteSandboxRequest, DeleteWorkspaceRequest,
     DeleteWorkspaceResponse, DriverCondition, DriverPlatformEvent, DriverResourceRequirements,
@@ -277,6 +281,8 @@ pub struct ComputeDriverInfoSnapshot {
     pub driver_name: String,
     /// Driver-reported implementation version from the startup capability snapshot.
     pub driver_version: String,
+    /// Common extension protocol negotiation result.
+    pub negotiated_extension: NegotiatedExtension,
     /// Whether the driver asks the gateway to reconcile compute across restarts.
     pub gateway_manages_lifecycle: bool,
     /// Whether the driver authenticates driver-native sandbox credentials.
@@ -600,6 +606,13 @@ pub struct ComputeRuntime {
     rootfs_tar_staging: Arc<rootfs_tar::RootfsTarStagingRegistry>,
 }
 
+pub struct SandboxSyncGuard {
+    // Drop the database guard before the local mutex so another local waiter
+    // cannot race ahead while this replica still owns the cluster-wide lock.
+    _distributed: crate::persistence::DistributedMutationGuard,
+    _local: tokio::sync::OwnedMutexGuard<()>,
+}
+
 impl fmt::Debug for ComputeRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ComputeRuntime").finish_non_exhaustive()
@@ -627,14 +640,24 @@ impl ComputeRuntime {
         tracing_log_bus: TracingLogBus,
         supervisor_sessions: Arc<SupervisorSessionRegistry>,
     ) -> Result<Self, ComputeError> {
+        let gateway = gateway_metadata(ExtensionFamily::Compute);
         let capabilities = driver
-            .get_capabilities(Request::new(GetCapabilitiesRequest {}))
+            .get_capabilities(Request::new(GetCapabilitiesRequest {
+                gateway: Some(gateway.clone()),
+            }))
             .await
             .map_err(|status| {
                 tracing::Span::current().record("otel.status_code", "ERROR");
                 compute_error_from_status(status)
             })?
             .into_inner();
+        let negotiated_extension = negotiate(
+            ExtensionFamily::Compute,
+            &driver_name,
+            &gateway,
+            capabilities.extension.clone(),
+        )
+        .map_err(|error| ComputeError::Message(error.to_string()))?;
         info!(
             configured_driver = %driver_name,
             advertised_driver = %capabilities.driver_name,
@@ -644,6 +667,7 @@ impl ComputeRuntime {
             name: driver_name.clone(),
             driver_name: capabilities.driver_name,
             driver_version: capabilities.driver_version,
+            negotiated_extension,
             gateway_manages_lifecycle: capabilities.gateway_manages_lifecycle,
             supports_sandbox_authentication: capabilities.supports_sandbox_authentication,
             driver_reports_runtime_readiness: capabilities.driver_reports_runtime_readiness,
@@ -677,13 +701,19 @@ impl ComputeRuntime {
     }
 
     /// Serializes sandbox/provider-profile invariant checks and object writes
-    /// within this gateway process.
+    /// across gateway replicas.
     ///
-    /// This is a temporary single-gateway guard for cross-object invariants.
-    /// It is not HA-safe; replace it with DB-backed CAS/resource-version writes
-    /// tracked by #1255 before enabling multiple gateway writers.
-    pub(crate) async fn sandbox_sync_guard(&self) -> tokio::sync::OwnedMutexGuard<()> {
-        self.sync_lock.clone().lock_owned().await
+    /// The local mutex preserves lock ordering within one process. `PostgreSQL`
+    /// deployments also hold a session-level advisory lock for the duration.
+    pub(crate) async fn sandbox_sync_guard(
+        &self,
+    ) -> crate::persistence::PersistenceResult<SandboxSyncGuard> {
+        let local = self.sync_lock.clone().lock_owned().await;
+        let distributed = self.store.acquire_distributed_mutation_guard().await?;
+        Ok(SandboxSyncGuard {
+            _distributed: distributed,
+            _local: local,
+        })
     }
 
     /// Acquires the process-wide lock for code that already holds the
@@ -1542,7 +1572,13 @@ impl ComputeRuntime {
     ) -> Option<Sandbox> {
         let sandbox_id = transition.object_id().to_string();
         let expected_resource_version = sandbox_resource_version(transition);
-        let session_connected = self.supervisor_sessions.has_session(&sandbox_id);
+        let session_connected = self
+            .supervisor_session_ready(&sandbox_id)
+            .await
+            .unwrap_or_else(|error| {
+                warn!(sandbox_id, %error, "Failed to resolve supervisor owner during lifecycle reconciliation");
+                self.supervisor_sessions.has_session(&sandbox_id)
+            });
         match self
             .store
             .update_message_cas::<Sandbox, _>(&sandbox_id, expected_resource_version, |sandbox| {
@@ -2021,7 +2057,13 @@ impl ComputeRuntime {
 
         match observed {
             Ok(Some(snapshot)) if snapshot.id == sandbox_id && snapshot.status.is_some() => {
-                let session_connected = self.supervisor_sessions.has_session(sandbox_id);
+                let session_connected = self
+                    .supervisor_session_ready(sandbox_id)
+                    .await
+                    .unwrap_or_else(|error| {
+                        warn!(sandbox_id, %error, "Failed to resolve supervisor owner during delete recovery");
+                        self.supervisor_sessions.has_session(sandbox_id)
+                    });
                 self.write_delete_recovery_with_retry(
                     sandbox_id,
                     deleting_resource_version,
@@ -3233,7 +3275,7 @@ impl ComputeRuntime {
         expected_resource_version: u64,
         existing_phase: SandboxPhase,
     ) -> Result<(), String> {
-        let session_connected = self.supervisor_sessions.has_session(&incoming.id);
+        let session_connected = self.supervisor_session_ready(&incoming.id).await?;
         let sandbox = self
             .store
             .update_message_cas::<Sandbox, _>(
@@ -3284,8 +3326,77 @@ impl ComputeRuntime {
         sandbox_id: &str,
         terminal_delivery_finalized: bool,
     ) -> Result<(), String> {
-        self.set_supervisor_session_state(sandbox_id, false, None, terminal_delivery_finalized)
+        let _guard = self.sync_lock.lock().await;
+
+        // A replacement session may already belong to another gateway. Do not
+        // let cleanup from this replica overwrite the replacement's Ready state.
+        if self.supervisor_session_ready(sandbox_id).await? {
+            return Ok(());
+        }
+
+        let existing = self
+            .store
+            .get_message::<Sandbox>(sandbox_id)
             .await
+            .map_err(|error| error.to_string())?;
+        self.set_supervisor_session_state_from_snapshot(
+            sandbox_id,
+            false,
+            None,
+            terminal_delivery_finalized,
+            existing,
+        )
+        .await?;
+
+        // Ownership can move while the CAS above is in flight. Restore Ready
+        // from the new owner's supervisor instance before releasing the local
+        // synchronization boundary.
+        if let Some(instance_id) = self
+            .supervisor_session_owner_instance_id(sandbox_id)
+            .await?
+        {
+            let existing = self
+                .store
+                .get_message::<Sandbox>(sandbox_id)
+                .await
+                .map_err(|error| error.to_string())?;
+            self.set_supervisor_session_state_from_snapshot(
+                sandbox_id,
+                true,
+                Some(&instance_id),
+                false,
+                existing,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn supervisor_session_ready(&self, sandbox_id: &str) -> Result<bool, String> {
+        if self.supervisor_sessions.has_session(sandbox_id) {
+            return Ok(true);
+        }
+        Ok(self
+            .supervisor_session_owner_instance_id(sandbox_id)
+            .await?
+            .is_some())
+    }
+
+    async fn supervisor_session_owner_instance_id(
+        &self,
+        sandbox_id: &str,
+    ) -> Result<Option<String>, String> {
+        let owner_index = SupervisorOwnerIndex::new(self.store.clone(), OWNER_TTL);
+        let Some(owner) = owner_index
+            .read(sandbox_id)
+            .await
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        Ok(owner
+            .is_fresh(OWNER_TTL)
+            .then_some(owner.supervisor_instance_id))
     }
 
     async fn set_supervisor_session_state(
@@ -3933,8 +4044,9 @@ impl ComputeRuntime {
             }
 
             let sandbox = decode_sandbox_record(&current_record)?;
-            let age_ms =
-                openshell_core::time::now_ms().saturating_sub(current_record.created_at_ms);
+            let age_ms = openshell_core::time::now_ms()
+                .saturating_sub(current_record.created_at_ms)
+                .max(0);
             if age_ms < grace_ms {
                 return Ok(());
             }
@@ -5324,6 +5436,12 @@ impl ComputeDriver for NoopTestDriver {
                 resource_capabilities: None,
                 rootfs_tar_staging_dir: String::new(),
                 rootfs_tar_max_bytes: 0,
+                extension: Some(openshell_core::extension_protocol::extension_metadata(
+                    ExtensionFamily::Compute,
+                    "openshell/noop-test-driver",
+                    "test",
+                    [],
+                )),
             },
         ))
     }
@@ -5439,6 +5557,23 @@ pub async fn new_test_runtime(store: Arc<Store>) -> ComputeRuntime {
 }
 
 #[cfg(any(test, feature = "test-support"))]
+fn test_compute_negotiation(name: &str) -> NegotiatedExtension {
+    let gateway = gateway_metadata(ExtensionFamily::Compute);
+    negotiate(
+        ExtensionFamily::Compute,
+        name,
+        &gateway,
+        Some(openshell_core::extension_protocol::extension_metadata(
+            ExtensionFamily::Compute,
+            format!("openshell/{name}"),
+            "test",
+            [],
+        )),
+    )
+    .unwrap()
+}
+
+#[cfg(any(test, feature = "test-support"))]
 pub async fn new_test_runtime_for_driver(store: Arc<Store>, driver_name: &str) -> ComputeRuntime {
     new_test_runtime_with_driver(store, driver_name, Arc::new(NoopTestDriver::default()))
 }
@@ -5456,6 +5591,7 @@ pub fn new_test_runtime_with_driver(
             name: driver_name.to_string(),
             driver_name: driver_name.to_string(),
             driver_version: "test".to_string(),
+            negotiated_extension: test_compute_negotiation(driver_name),
             gateway_manages_lifecycle: false,
             supports_sandbox_authentication,
             driver_reports_runtime_readiness: false,
@@ -5842,6 +5978,7 @@ mod tests {
         listed_sandboxes: Vec<DriverSandbox>,
         current_sandboxes: Vec<DriverSandbox>,
         workspace_rpcs_unimplemented: bool,
+        omit_protocol_metadata: bool,
     }
 
     #[tonic::async_trait]
@@ -5874,6 +6011,14 @@ mod tests {
                 resource_capabilities: None,
                 rootfs_tar_staging_dir: String::new(),
                 rootfs_tar_max_bytes: 0,
+                extension: (!self.omit_protocol_metadata).then(|| {
+                    openshell_core::extension_protocol::extension_metadata(
+                        ExtensionFamily::Compute,
+                        "openshell/test-driver",
+                        "test",
+                        [],
+                    )
+                }),
             }))
         }
 
@@ -6218,6 +6363,12 @@ mod tests {
                 resource_capabilities: None,
                 rootfs_tar_staging_dir: String::new(),
                 rootfs_tar_max_bytes: 0,
+                extension: Some(openshell_core::extension_protocol::extension_metadata(
+                    ExtensionFamily::Compute,
+                    "openshell/controlled-test-driver",
+                    "test",
+                    [],
+                )),
             }))
         }
 
@@ -6420,6 +6571,7 @@ mod tests {
                 name: driver_name.to_string(),
                 driver_name: driver_name.to_string(),
                 driver_version: "test".to_string(),
+                negotiated_extension: test_compute_negotiation(driver_name),
                 gateway_manages_lifecycle: false,
                 supports_sandbox_authentication: false,
                 driver_reports_runtime_readiness: false,
@@ -10609,6 +10761,42 @@ mod tests {
         assert_eq!(ready.message, "Supervisor session disconnected");
     }
 
+    #[tokio::test]
+    async fn stale_session_disconnect_preserves_new_remote_owner_ready_state() {
+        let runtime = test_runtime(Arc::new(TestDriver::default())).await;
+        let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
+        sandbox.set_phase(SandboxPhase::Ready as i32);
+        runtime.store.put_message(&sandbox).await.unwrap();
+
+        SupervisorOwnerIndex::new(runtime.store.clone(), OWNER_TTL)
+            .publish(
+                "sb-1",
+                "replacement-session",
+                "supervisor-instance",
+                2,
+                "gateway-b",
+                "http://gateway-b:8080",
+            )
+            .await
+            .unwrap();
+
+        runtime
+            .supervisor_session_disconnected("sb-1", false)
+            .await
+            .unwrap();
+
+        let stored = runtime
+            .store
+            .get_message::<Sandbox>("sb-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            SandboxPhase::try_from(stored.phase()).unwrap(),
+            SandboxPhase::Ready
+        );
+    }
+
     // --- Composition rule tests ---
 
     fn make_ready_driver_status() -> DriverSandboxStatus {
@@ -10947,6 +11135,7 @@ mod tests {
                 }),
                 workspace: "default".to_string(),
             }],
+            ..Default::default()
         }))
         .await;
 
@@ -11118,6 +11307,7 @@ mod tests {
                 })),
                 workspace: "default".to_string(),
             }],
+            ..Default::default()
         }))
         .await;
 
@@ -11957,6 +12147,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compute_driver_initialization_rejects_missing_protocol_metadata() {
+        let store = Arc::new(Store::connect("sqlite::memory:").await.unwrap());
+        let error = ComputeRuntime::from_driver(
+            "legacy-driver".to_string(),
+            Arc::new(TestDriver {
+                omit_protocol_metadata: true,
+                ..Default::default()
+            }),
+            None,
+            store,
+            SandboxIndex::new(),
+            SandboxWatchBus::new(),
+            TracingLogBus::new(),
+            Arc::new(SupervisorSessionRegistry::new()),
+        )
+        .await
+        .expect_err("legacy driver must fail negotiation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("did not provide protocol metadata")
+        );
+    }
+
+    #[tokio::test]
     #[cfg(unix)]
     async fn remote_compute_driver_interceptor_propagates_every_rpc() {
         use crate::otel_tracing::test_exporter;
@@ -11979,7 +12195,9 @@ mod tests {
         let traced = test_exporter::install_traced();
         async {
             remote
-                .get_capabilities(Request::new(GetCapabilitiesRequest {}))
+                .get_capabilities(Request::new(GetCapabilitiesRequest {
+                    gateway: Some(gateway_metadata(ExtensionFamily::Compute)),
+                }))
                 .await
                 .unwrap();
             remote

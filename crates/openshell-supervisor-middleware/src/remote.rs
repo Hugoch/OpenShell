@@ -9,8 +9,8 @@ use openshell_core::proto::middleware::v1::http_request_pre_credentials_client::
 use openshell_core::proto::middleware::v1::http_response_pre_return_client::HttpResponsePreReturnClient;
 use openshell_core::proto::middleware::v1::supervisor_middleware_client::SupervisorMiddlewareClient;
 use openshell_core::proto::{
-    HttpEvent, MiddlewareManifest, ValidateConfigRequest, ValidateConfigResponse,
-    WebSocketSessionEvent,
+    HttpEvent, MiddlewareDescribeRequest, MiddlewareManifest, ValidateConfigRequest,
+    ValidateConfigResponse, WebSocketSessionEvent,
 };
 use openshell_extension_core::{
     BearerTokenInterceptor, BearerTokenSlot, ExtensionChannelConfig, ExtensionServerTrust,
@@ -54,7 +54,13 @@ impl GrpcMiddlewareService {
 
     /// Forward a manifest request through the protobuf service contract.
     pub async fn describe(&self) -> std::result::Result<Response<MiddlewareManifest>, Status> {
-        self.service.describe(Request::new(())).await
+        self.service
+            .describe(Request::new(MiddlewareDescribeRequest {
+                gateway: Some(openshell_core::extension_protocol::gateway_metadata(
+                    openshell_core::extension_protocol::ExtensionFamily::SupervisorMiddleware,
+                )),
+            }))
+            .await
     }
 
     /// Materialize the owned configuration request required by gRPC.
@@ -147,7 +153,7 @@ impl RemoteMiddlewareService {
 impl SupervisorMiddlewareEndpoint for RemoteMiddlewareService {
     async fn describe(
         &self,
-        request: Request<()>,
+        request: Request<MiddlewareDescribeRequest>,
     ) -> std::result::Result<Response<MiddlewareManifest>, Status> {
         let mut client = self.client.clone();
         client.describe(request).await

@@ -38,11 +38,14 @@ use std::time::Duration;
 use miette::{Result, miette};
 use prost::Message;
 
+use openshell_core::extension_protocol::{
+    ExtensionFamily, NegotiatedExtension, gateway_metadata, negotiate,
+};
 use openshell_core::proto::{
     Decision, Finding, HeaderMutation, HttpHeader, HttpRequestTarget, MiddlewareBinding,
-    MiddlewareManifest, NetworkMiddlewareConfig, RequestContext, SandboxPolicy,
-    SupervisorMiddlewareOperation, SupervisorMiddlewarePhase, SupervisorMiddlewareService,
-    ValidateConfigRequest, ValidateConfigResponse,
+    MiddlewareDescribeRequest, MiddlewareManifest, NetworkMiddlewareConfig, RequestContext,
+    SandboxPolicy, SupervisorMiddlewareOperation, SupervisorMiddlewarePhase,
+    SupervisorMiddlewareService, ValidateConfigRequest, ValidateConfigResponse,
 };
 use tokio::sync::{OnceCell, OwnedSemaphorePermit, Semaphore};
 use tonic::Request;
@@ -58,7 +61,9 @@ struct EndpointInProcessAdapter {
 impl InProcessMiddleware for EndpointInProcessAdapter {
     async fn describe(&self) -> MiddlewareManifest {
         self.endpoint
-            .describe(Request::new(()))
+            .describe(Request::new(MiddlewareDescribeRequest {
+                gateway: Some(gateway_metadata(ExtensionFamily::SupervisorMiddleware)),
+            }))
             .await
             .expect("in-process endpoint Describe failed")
             .into_inner()
@@ -577,6 +582,7 @@ pub struct MiddlewareRegistry {
     services: Arc<Vec<Arc<MiddlewareServiceState>>>,
     registered_services: Arc<Vec<RegisteredMiddlewareService>>,
     middleware_names: Arc<HashSet<String>>,
+    negotiated_extensions: Arc<Vec<NegotiatedExtension>>,
     work_admission: Arc<Semaphore>,
     work_admission_waiters: Arc<Semaphore>,
     session_admission: Arc<Semaphore>,
@@ -612,6 +618,7 @@ impl Default for MiddlewareRegistry {
             services: Arc::new(Vec::new()),
             registered_services: Arc::new(Vec::new()),
             middleware_names: Arc::new(HashSet::new()),
+            negotiated_extensions: Arc::new(Vec::new()),
             work_admission: Arc::new(Semaphore::new(MAX_CONCURRENT_MIDDLEWARE_WORK)),
             work_admission_waiters: Arc::new(Semaphore::new(MAX_QUEUED_MIDDLEWARE_WORK)),
             session_admission: Arc::new(Semaphore::new(MAX_CONCURRENT_MIDDLEWARE_SESSIONS)),
@@ -919,6 +926,8 @@ impl MiddlewareRegistry {
         let mut services = Vec::with_capacity(in_process_services.len() + registrations.len());
         let mut registered_services = Vec::with_capacity(registrations.len());
         let mut middleware_names = HashSet::new();
+        let mut negotiated_extensions = Vec::new();
+        let gateway = gateway_metadata(ExtensionFamily::SupervisorMiddleware);
 
         for service in in_process_services {
             let service = MiddlewareDispatch::InProcess(service);
@@ -949,6 +958,15 @@ impl MiddlewareRegistry {
                 ));
             }
             validate_manifest_bindings(&source, &manifest, None)?;
+            negotiated_extensions.push(
+                negotiate(
+                    ExtensionFamily::SupervisorMiddleware,
+                    &manifest.name,
+                    &gateway,
+                    manifest.extension.clone(),
+                )
+                .map_err(|error| miette!(error.to_string()))?,
+            );
             let attachment_name = manifest.name.clone();
             let manifest_cell = OnceCell::new();
             manifest_cell
@@ -1021,6 +1039,15 @@ impl MiddlewareRegistry {
                 operator_max_payload_bytes,
                 authenticated,
             )?;
+            negotiated_extensions.push(
+                negotiate(
+                    ExtensionFamily::SupervisorMiddleware,
+                    &registration.name,
+                    &gateway,
+                    manifest.extension.clone(),
+                )
+                .map_err(|error| miette!(error.to_string()))?,
+            );
             let manifest_cell = OnceCell::new();
             manifest_cell
                 .set(manifest)
@@ -1040,6 +1067,7 @@ impl MiddlewareRegistry {
             services: Arc::new(services),
             registered_services: Arc::new(registered_services),
             middleware_names: Arc::new(middleware_names),
+            negotiated_extensions: Arc::new(negotiated_extensions),
             work_admission: Arc::new(Semaphore::new(MAX_CONCURRENT_MIDDLEWARE_WORK)),
             work_admission_waiters: Arc::new(Semaphore::new(MAX_QUEUED_MIDDLEWARE_WORK)),
             session_admission: Arc::new(Semaphore::new(MAX_CONCURRENT_MIDDLEWARE_SESSIONS)),
@@ -1122,6 +1150,11 @@ impl MiddlewareRegistry {
             .map(|service| service.registration.clone())
             .collect()
     }
+
+    #[must_use]
+    pub fn negotiated_extensions(&self) -> &[NegotiatedExtension] {
+        &self.negotiated_extensions
+    }
 }
 
 impl Default for ChainRunner {
@@ -1156,6 +1189,7 @@ impl ChainRunner {
                 })]),
                 registered_services: Arc::new(Vec::new()),
                 middleware_names: Arc::new(HashSet::new()),
+                negotiated_extensions: Arc::new(Vec::new()),
                 work_admission: Arc::new(Semaphore::new(MAX_CONCURRENT_MIDDLEWARE_WORK)),
                 work_admission_waiters: Arc::new(Semaphore::new(MAX_QUEUED_MIDDLEWARE_WORK)),
                 session_admission: Arc::new(Semaphore::new(MAX_CONCURRENT_MIDDLEWARE_SESSIONS)),
@@ -1733,6 +1767,12 @@ mod tests {
             service_version: "1".into(),
             bindings: vec![binding],
             expected_audience: String::new(),
+            extension: Some(openshell_core::extension_protocol::extension_metadata(
+                ExtensionFamily::SupervisorMiddleware,
+                "openshell/test-middleware",
+                "test",
+                [],
+            )),
         }
     }
 
