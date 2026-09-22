@@ -14,8 +14,9 @@ allowed and denied outcome. Every YAML block is a complete entry for the
 
 ## Choose a Protocol
 
-Layer 4 is a connection check over a host, port, and executable. Layer 7 is an
-application-request check after connection admission.
+OpenShell first checks whether a program can connect to a host and port
+(Layer 4). For inspected protocols, it then checks the application request
+(Layer 7).
 
 | Reader goal | `protocol` | Inspected boundary |
 |---|---|---|
@@ -37,9 +38,8 @@ uninspected traffic unless you explicitly set
 
 Each recipe illustrates a permission and how to verify it. The commands use
 `my-sandbox` as a placeholder for your running sandbox's name. The sandbox must
-contain the binary named by the recipe, and its container engine must be able to
-use the sandbox image. Recipes with example domains also require a service you
-control at the replacement hostname and path.
+contain the binary named by the recipe. Recipes with example domains require a
+service you control at the replacement hostname and path.
 
 Start with the current base policy so you preserve startup settings and exclude
 provider-owned rules:
@@ -49,12 +49,10 @@ openshell policy get my-sandbox --base
 ```
 
 Copy the YAML below the `---` separator into `policy.yaml`, leaving out the
-status metadata above it. Keep all existing sections. Insert the recipe under
-the top-level `network_policies` map, with its rule name indented two spaces.
-Add that map if it is absent. If it is empty (`network_policies: {}`), replace
-`{}` with the indented recipe on the following lines. Replace example hosts,
-paths, and binaries with your own values. Each recipe is a rule entry, not a
-complete policy file.
+status metadata above it. Add the recipe to the `network_policies` section,
+creating that section if needed. Replace example hosts, paths, and binaries
+with your own values. Each recipe supplies a network rule; keep the other
+sections of your complete policy file.
 
 Keep unrelated rules, and replace an existing rule with the same key only when
 that is your intent. Review the complete file, then apply it and confirm which
@@ -86,10 +84,12 @@ flowchart TD
     G --> A
 ```
 
-The destination and process check gates the connection. Protocol rules then
-check the application request, and optional middleware and credential bindings
-can impose additional restrictions. See the recipes below for native TCP and
-WebSocket boundaries that differ from ordinary inspected HTTP requests.
+Network rules check the destination and the calling program before allowing a
+connection. Protocol rules then check the application request. Middleware can
+filter or transform allowed traffic, and credential checks determine whether
+OpenShell can supply credentials to the destination. See the recipes below for
+native TCP and WebSocket boundaries that differ from ordinary inspected HTTP
+requests.
 
 ## Allow REST Reads
 
@@ -207,10 +207,11 @@ service reachable at the replacement hostname. [Apply the
 template](#apply-a-recipe), verify that `psql` reaches the server, then verify
 that another binary or port is denied at the connection boundary.
 
-Docker and Podman support policy DNS and transparent capture. The standard
-runtime initializes that substrate even when the initial policy has no TCP
-endpoints, so you can add the first endpoint through a live update. An alternate
-backend must advertise both the capability and a ready substrate.
+Docker and Podman support native TCP enforcement. The standard runtime prepares
+DNS and TCP connection handling before the workload starts, even when the
+initial policy has no TCP endpoints. You can therefore add the first endpoint
+without recreating the sandbox. Other runtimes must provide the same support
+and have it ready before activating a TCP rule.
 
 Prefer exact hostnames. A wildcard authorizes DNS queries for every matching
 name, which can expose a DNS-label exfiltration channel. An allowed hostname on

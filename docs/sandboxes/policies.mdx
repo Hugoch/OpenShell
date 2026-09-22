@@ -1,7 +1,7 @@
 ---
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-title: "Customize Sandbox Policies"
+title: "Configure Sandbox Policies"
 sidebar-title: "Policies"
 description: "Allow specific sandbox actions, inspect effective permissions, and apply policy changes safely."
 keywords: "Generative AI, Cybersecurity, Policy, Network Policy, Sandbox, Security, Hot Reload"
@@ -14,35 +14,29 @@ guide explains how to inspect, change, and verify those permissions.
 
 ## Policy Structure
 
-A policy has sections for filesystem access, process settings, and network
-permissions. Filesystem, Landlock, and process settings are startup-time controls.
-Network rules and middleware attachments can change after creation, subject to
-the lifecycle limits in [Understand Reloads](#understand-reloads).
-
-A network rule controls which executable can connect to a destination. An
-inspected endpoint can also limit application requests. For example, this rule
-allows curl to read the GitHub API while blocking POST requests. The excerpt
-includes the `network_policies` wrapper; place it beside `version: 1` and the
-other top-level policy sections:
+Policies are declarative YAML configurations. You specify access rules and
+processing settings, and OpenShell enforces them. The following outline shows
+the policy sections with their contents omitted:
 
 ```yaml
-network_policies:
-  github_readonly:
-    name: github-readonly
-    endpoints:
-      - host: api.github.com
-        port: 443
-        protocol: rest
-        enforcement: enforce
-        access: read-only
-    binaries:
-      - path: /usr/bin/curl
+version: 1
+filesystem_policy: { ... }   # Paths programs can read or write.
+landlock: { ... }            # Linux filesystem enforcement settings.
+process: { ... }             # User and group for sandbox processes.
+network_policies: { ... }    # Network destinations and permitted requests.
+network_middlewares: { ... } # Additional traffic processing.
 ```
 
-The rule permits `/usr/bin/curl` to connect to `api.github.com:443` and permits
-the REST methods in the `read-only` preset. `enforcement: enforce` is necessary
-for blocking. The default enforcement mode is `audit`, which logs an applicable
-request-rule violation but forwards the request.
+`network_policies` controls which programs can connect to a destination and which
+application requests they can make. `network_middlewares` selects additional
+processing, such as redaction or filtering, for traffic the network rules allow.
+Middleware does not grant network access.
+
+Filesystem enforcement and process identity are set when the workload starts.
+Network rules and policy settings for built-in or already registered middleware
+can change while it runs, subject to the lifecycle limits given in
+[Understand Reloads](#understand-reloads). Registering a new external middleware
+service or changing its gateway registration requires a gateway restart.
 
 Refer to the [Policy Schema Reference](/reference/policy-schema) for every
 accepted field.
@@ -63,11 +57,30 @@ normal sandbox and provider selection.
 ## Allow an API Request
 
 To allow an API request, select the program, destination, and permitted request
-types. Use `policy update` to add the permission without replacing the rest of
-the policy. For example, the following command adds the rule from
-[Policy Structure](#policy-structure) to an existing sandbox. Replace
-`my-sandbox` with your sandbox name; the executable path must match the program
-inside that sandbox:
+types. For example, this network rule permits curl to read the GitHub API:
+
+```yaml
+network_policies:
+  github_readonly:
+    name: github-readonly
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+    binaries:
+      - path: /usr/bin/curl
+```
+
+The rule permits `/usr/bin/curl` to connect to `api.github.com:443` and use the
+REST methods in the `read-only` preset. `enforcement: enforce` blocks requests
+outside that set. The default mode is `audit`, which logs a request-rule
+violation but forwards the request.
+
+Use `policy update` to add this permission without replacing the rest of the
+policy. Replace `my-sandbox` with your sandbox name; the executable path must
+match the program inside that sandbox:
 
 ```shell
 openshell policy update my-sandbox \
@@ -79,11 +92,10 @@ openshell policy update my-sandbox \
 
 Review the effective policy before adding a grant because other rules can also
 permit the requests you intend to block. Rules are not an ordered firewall list.
-Compatible rules that match the same request can contribute permissions, and an
-applicable request deny takes
-precedence over an allow. OpenShell selects request-processing metadata from the
-most-specific compatible endpoint separately from deciding whether to allow the
-request.
+Rules that match the same request can contribute permissions together, and an
+applicable deny takes precedence over an allow. See [Understand Overlapping
+Rules](/sandboxes/network-policy-recipes#understand-overlapping-rules) for how
+OpenShell combines permissions and selects request-processing settings.
 
 After activation, verify both an allowed request and a request that should remain
 blocked. Confirm the denial comes from OpenShell rather than the upstream
@@ -93,10 +105,11 @@ Policy](/get-started/tutorials/first-network-policy).
 
 ## Incremental Policy Updates
 
-Use `policy update` to add or remove network permissions. When a change affects
-an existing rule, identify the existing binaries, ports, and endpoint path that
-the change applies to. This prevents the update from authorizing undeclared
-binary-to-endpoint pairs.
+Use `policy update` to add or remove network permissions. When appending request
+allow or deny rules to an existing endpoint, identify its rule, specify the
+rule's complete binary list and the endpoint's complete port list, and include
+the endpoint path when needed. This prevents a narrow edit from accidentally
+giving other programs access to the destination.
 
 For a sandbox with the `github_readonly` rule shown above, this command previews
 a deny for `GET /zen` while leaving the rule's other read-only requests allowed:
@@ -109,10 +122,10 @@ openshell policy update my-sandbox \
   --dry-run
 ```
 
-The preview connects to the gateway, fetches the current policy, and renders the
-merge locally. It does not save a revision, and it does not prove that every
-gateway, provider, or runtime check will accept a later submission. Refer to the
-[Incremental Policy Update Reference](/reference/policy-updates) for the full
+The preview fetches the current policy from the gateway and shows the proposed
+result locally. It does not save a revision or run every check needed to activate
+the change. Refer to the [Incremental Policy Update
+Reference](/reference/policy-updates) for the full
 grammar, scope rules, and status behavior.
 
 ## Inspect and Replace a Policy
@@ -169,7 +182,7 @@ openshell policy get my-sandbox --base --output json \
 ```
 
 `--base` excludes provider-owned entries, and `jq` extracts the policy from the
-JSON metadata wrapper. Edit `base-policy.json`, then pass it to `policy set`
+JSON response. Edit `base-policy.json`, then pass it to `policy set`
 instead of `policy.yaml`.
 
 ## Understand Policy Sources
@@ -227,13 +240,15 @@ model for every sandbox on the gateway.
 ## Understand Reloads
 
 OpenShell validates a proposed policy before activating it. Network rules and
-middleware can change while the workload runs. Filesystem and process settings
-have different limits.
+the policy's middleware settings can change while the workload runs. Filesystem
+and process settings take effect at startup. External middleware registration is
+a separate gateway operation.
 
 | Change | Running workload behavior | Required action |
 |---|---|---|
 | Network request rules | The running workload receives the new rules. Connections using the previous active configuration close. | Use `update` or `set`, inspect status, and retry. |
-| Middleware attachments | The running workload receives the new attachments, but incremental network updates do not edit them. | Preserve the base and use `set`. |
+| Middleware selected or configured in `network_middlewares` | You can add, remove, or reconfigure built-in middleware and external services already registered with the gateway. | Preserve the base and use `set`; `update` does not edit middleware. |
+| External middleware registration in gateway TOML | Policy updates cannot register a new service or change its gateway connection settings. | Update the registration and restart the gateway. |
 | First native TCP endpoint | The standard runtime can add it while the workload runs because policy DNS and transparent capture are already available. | Use `update` or `set`, inspect status, and retry. |
 | Added filesystem paths | The saved policy can change, but the running workload keeps its existing filesystem permissions. | Recreate the sandbox to apply the new startup configuration. |
 | Removed baseline paths or changed workdir, Landlock, or process identity | OpenShell rejects the change after the workload starts. | Recreate the sandbox with the intended startup configuration. |
@@ -267,20 +282,31 @@ from runtime activation. The troubleshooting guide explains `fail_closed`,
 
 Use `protocol: tcp` for clients that need ordinary DNS resolution and a native
 TCP socket without application payload inspection. It supports Docker and
-Podman. The standard runtime prepares its capture substrate even when the
-initial policy has no TCP endpoints, so you can add the first endpoint live. Refer to
+Podman. The standard runtime prepares DNS and TCP connection handling even when
+the initial policy has no TCP endpoints, so you can add the first endpoint
+without recreating the sandbox. Refer to
 [Configure Network Policy Rules](/sandboxes/network-policy-recipes#allow-native-tcp)
 for the recipe and shared-hosting limitations.
 
 ## Supervisor Middleware
 
-Optional middleware can inspect selected HTTP requests before credential
-injection, selected HTTP responses before return, and complete client WebSocket
-text messages when the implementation advertises those operations. Host matching
-alone does not select every operation. Middleware does not inspect binary or
-upstream-to-client WebSocket messages. Refer to
+Use `network_middlewares` to select middleware, choose the destination hosts it
+applies to, and configure its behavior. Network rules must allow the traffic
+before middleware can process it.
+
+Middleware can inspect HTTP requests before credential injection, HTTP responses
+before they reach the sandbox, and complete client WebSocket text messages. Each
+implementation declares which operations it supports; matching a destination
+host does not enable unsupported operations. Binary and upstream-to-client
+WebSocket messages are not inspected.
+
+Built-in middleware is available without registration. External middleware must
+be registered in the gateway configuration before a policy can use it. Once it
+is registered, a policy change can add it to or remove it from a running sandbox,
+or change its policy settings. Adding or changing the gateway registration
+requires restarting the gateway. Refer to
 [Supervisor Middleware](/extensibility/supervisor-middleware) for registration,
-ordering, mutation, limits, and failure behavior.
+processing order, supported transformations, and failure behavior.
 
 ## Validation Failures
 

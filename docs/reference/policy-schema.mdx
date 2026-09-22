@@ -48,7 +48,10 @@ is pending or rejected.
 
 Dynamic fields can activate on a running sandbox after the complete effective
 candidate validates. `policy update` edits only `network_policies`; use an
-exported base with `policy set` for middleware or complete replacement.
+editable base with `policy set` for middleware or complete replacement.
+Middleware policy changes can select built-ins or external services already
+registered with the gateway. Adding or changing an external service registration
+requires a gateway restart.
 
 ## Parsing and Representation
 

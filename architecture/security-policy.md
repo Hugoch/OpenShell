@@ -15,12 +15,15 @@ For the field-by-field YAML reference, use
 | Filesystem | Landlock restricts read-only and read-write paths. |
 | Process | The supervisor launches the agent as an unprivileged user with reduced capabilities. |
 | Network | The proxy evaluates destination, port, calling binary, and optional L7 rules. |
+| Middleware | `network_middlewares` selects additional processing independently of the network rule that allows traffic. |
 | Provider access | Attached provider profiles contribute endpoint and binary rules; credentials remain bound to profile-authorized endpoints. |
 | Runtime settings | Typed settings are delivered with policy and can be global or sandbox scoped. |
 
 Filesystem, Landlock, and process policy are startup-time controls. Network and
 middleware policy can activate dynamically when the complete effective
-configuration validates. Stored startup fields and restrictions installed on a
+configuration validates. Middleware policy can select built-ins or services in
+the gateway's startup registry; changing an external service registration
+requires a gateway restart. Stored startup fields and restrictions installed on a
 running child are distinct: additive filesystem paths may be accepted for a
 later launch, while removals and identity changes are rejected after activation.
 Before first activation, qualifying configuration admission can accept a

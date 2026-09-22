@@ -97,7 +97,12 @@ The gateway connects to every registered service and verifies its capabilities b
 
 `MiddlewareDescribeRequest` carries the caller's common protocol metadata, and `MiddlewareManifest.extension` returns the service's protocol and implementation metadata. This replaces the former empty `Describe` request. Regenerate service bindings and return protocol `1.0` plus `openshell.supervisor-middleware.contract`. Legacy gateways and current middleware cannot interoperate, so upgrade both peers during a coordinated outage. See [Extension Protocol Negotiation](/extensibility/extension-negotiation) for the skew policy and migration sequence.
 
-Registration is static. Restart the gateway after adding, removing, or changing a service. See [Gateway Configuration](/reference/gateway-config#supervisor-middleware-services) for the complete gateway TOML context.
+Registration is loaded at gateway startup. Restart the gateway after adding,
+removing, or changing a registration. A sandbox policy can add, remove, or
+reconfigure its use of an already registered service without restarting the
+gateway. Built-in middleware requires no registration. See
+[Gateway Configuration](/reference/gateway-config#supervisor-middleware-services)
+for the complete gateway TOML context.
 
 ### Authenticate OpenShell Callers
 
@@ -217,6 +222,7 @@ Plan startup and updates around these boundaries:
 - Start registered services before the gateway. The gateway validates every registration during startup.
 - Keep service endpoints reachable from both the gateway and sandbox supervisors. The supervisors call operator-run services directly on the request path.
 - Restart the gateway after changing registrations.
+- Use `policy set` to add, remove, or reconfigure a sandbox's use of built-in or already registered middleware. These policy changes can activate while the sandbox runs.
 - Keep required services available before creating or updating policies. The gateway validates implementation-owned config before persisting a policy.
 - Treat `fail_open` as an explicit availability-over-enforcement decision.
 
