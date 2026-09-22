@@ -89,13 +89,13 @@ nix develop --command zizmor --offline --persona=regular --min-severity=high --n
 
 ## Run the security scans together
 
-`Security Scan` (`.github/workflows/security-scan.yml`) calls Codex Security,
-CodeQL, Trivy, Cargo Deny, and Workflow Security Reports (Actionlint/Zizmor) in
-parallel. Run it manually from Actions or call it from another workflow. All
-children scan `candidate_ref`, which must be an existing `vX.Y.Z-pre.N` tag
-because Codex qualifies pre-releases. Codex compares it with the previous stable;
-the other scanners analyze the candidate snapshot. Cargo Deny uses its existing
-NVIDIA self-hosted runner and CI container.
+`Security Scan` (`.github/workflows/security-scan.yml`) calls CodeQL, Trivy,
+Cargo Deny, and Workflow Security Reports (Actionlint/Zizmor) in parallel for a
+release tag. It additionally calls Codex Security for `vX.Y.Z-pre.N` tags, which
+Codex compares with the previous stable release. Run the parent manually from
+Actions or call it from another workflow. All applicable children analyze the
+candidate snapshot. Cargo Deny uses its existing NVIDIA self-hosted runner and
+CI container.
 
 ```shell
 gh workflow run security-scan.yml --ref main \
@@ -132,6 +132,8 @@ jobs:
 ```
 
 Set `needs: security` on a downstream promotion job to require successful scans.
+The tagged release workflow does this after publishing its commit-addressed OCI
+images, so failed scans or High/Critical findings block release publication.
 
 `CODEX_SECURITY_API_KEY` is required; `CACHIX_AUTH_TOKEN` is optional. The parent
 publishes SARIF, including Codex results for manual parent runs. Codex keeps its
@@ -350,7 +352,8 @@ The bot's full administrator documentation is internal to NVIDIA. The only comma
 |---|---|
 | `.github/workflows/branch-checks.yml` | Required non-E2E checks. Triggers on `push: pull-request/[0-9]+` for PR mirrors and `merge_group` for queued merges. |
 | `.github/workflows/branch-e2e.yml` | Standard, GPU, Kubernetes HA, and Kubernetes credential-driver E2E. PR mirror pushes use `test:e2e`, `test:e2e-gpu`, and `test:e2e-kubernetes` labels; merge groups run core and GPU E2E. |
-| `.github/workflows/build-{cli,gateway,sandbox}-binaries.yml` | Independent target matrices used by branch and release workflows without creating skipped jobs. |
+| `.github/workflows/build-binaries.yml`, `build-vm-driver.yml` | Shared binary matrices used by branch and release workflows. The VM driver remains separate because its build consumes the runtime binaries. |
+| `.github/workflows/build-images.yml` | Builds and pushes multi-platform images, then uploads the same OCI images as workflow artifacts. |
 | `.github/workflows/package-release-binaries.yml` | Packages raw build artifacts into release tarballs without rebuilding them. |
 | `.github/workflows/e2e-docker-test.yml`, `e2e-podman-test.yml`, `e2e-vm-test.yml`, `e2e-kubernetes-test.yml` | Reusable runtime lanes called directly by branch and release workflows. Callers select suites and declare only the artifacts each runtime consumes. |
 | `.github/actions/setup-e2e-*` | Shared artifact, Podman, KVM, and kind setup used by the runtime lanes. |
@@ -373,9 +376,9 @@ These workflows run after merge to publish dev/tagged artifacts and verify them.
 
 | File | Role |
 |---|---|
-| `.github/workflows/release-dev.yml` | Publishes the rolling `dev` build on every push to `main`. Builds gateway/supervisor images and binaries, packages, wheels, and pushes the Helm chart as `oci://ghcr.io/nvidia/openshell/helm-chart:0.0.0-dev` (plus an immutable `0.0.0-dev.<sha>` pin). Also dispatchable manually. |
-| `.github/workflows/release-tag.yml` | Publishes a tagged stable release. Its automatic tag trigger excludes `-pre.*`; manual dispatch remains maintainer-controlled. |
-| `.github/workflows/release-canary.yml` | Smoke-tests published artifacts on `macos`, `ubuntu`, `fedora`, and `kubernetes` (kind + Helm) runners. Triggers automatically when `Release Dev` succeeds, and via `workflow_dispatch` on any branch (`gh workflow run release-canary.yml --ref <branch>`). The `kubernetes` job pins to `0.0.0-dev` artifacts; the other jobs install the latest tagged release via `install.sh`. See the `test-release-canary` skill for the manual-dispatch playbook and local kind reproduction. |
+| `.github/workflows/release-dev.yml` | Publishes the rolling `dev` build on every push to `main`. Builds gateway, sandbox, and supervisor images and binaries, packages, wheels, and pushes the Helm chart as `oci://ghcr.io/nvidia/openshell/helm-chart:0.0.0-dev` (plus an immutable `0.0.0-dev.<sha>` pin). Also dispatchable manually. |
+| `.github/workflows/release-tag.yml` | Publishes tagged stable releases and manually dispatched pre-releases. Its automatic tag trigger excludes `-pre.*`. Security Scan gates release publication. |
+| `.github/workflows/release-canary.yml` | Smoke-tests published dev artifacts on `macos`, `ubuntu`, `fedora`, and `kubernetes` (kind + Helm) runners. Each job reaches its gateway and creates, exercises, and deletes a sandbox. It runs automatically after `Release Dev` succeeds and supports manual dispatch (`gh workflow run release-canary.yml --ref <branch>`). See the `test-release-canary` skill for the playbook and local kind reproduction. |
 
 ## Required status contexts
 

@@ -21,10 +21,9 @@ PODMAN_OPTIONS_ORACLE="${OPENSHELL_PARITY_PODMAN_OPTIONS_ORACLE:-${ROOT}/e2e/par
 CONFORMANCE_TRACE_WRAPPER="${ROOT}/e2e/parity/trace-conformance.sh"
 RESULTS_VERIFIER="${ROOT}/e2e/parity/verify-results.py"
 PODMAN_BIN="${OPENSHELL_PARITY_PODMAN_BIN:-podman}"
-DEFAULT_SANDBOX_IMAGE="ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
+DEFAULT_SANDBOX_IMAGE="nvcr.io/nvidia/base/ubuntu:24.04"
 SANDBOX_IMAGE_REQUEST="${OPENSHELL_E2E_PODMAN_SANDBOX_IMAGE:-${DEFAULT_SANDBOX_IMAGE}}"
 PARITY_SANDBOX_RUNTIME_IMAGE=""
-PARITY_SANDBOX_COMMUNITY_REGISTRY=""
 PARITY_SUPERVISOR_BASE_IMAGE=""
 PARITY_SUPERVISOR_BASE_RUNTIME_IMAGE=""
 TEMP_WORKTREE=""
@@ -290,11 +289,13 @@ supervisor_target_triple() {
 build_supervisor() {
   local variant=$1 source_root=$2 target_dir=$3 override=$4 output_var=$5
   local binary target jobs=()
-  target="$(supervisor_target_triple)"
   target_dir="${target_dir:-${ROOT}/target/parity/${variant}}"
   case "${target_dir}" in /*) ;; *) target_dir="${ROOT}/${target_dir}" ;; esac
-  binary="${override:-${target_dir}/${target}/release/openshell-sandbox}"
-  if [ -z "${override}" ]; then
+  if [ -n "${override}" ]; then
+    binary="${override}"
+  else
+    target="$(supervisor_target_triple)"
+    binary="${target_dir}/${target}/release/openshell-sandbox"
     require_clean_source "${variant}" "${source_root}"
     if [ -n "${CARGO_BUILD_JOBS:-}" ]; then jobs=(-j "${CARGO_BUILD_JOBS}"); fi
     echo "Building ${variant} supervisor in ${target_dir}..."
@@ -400,11 +401,6 @@ resolve_parity_sandbox_image() {
   if ! [[ "${image_id}" =~ ^[0-9a-f]{64}$ ]] \
      || ! [[ "${PARITY_SANDBOX_RUNTIME_IMAGE}" =~ ^[^@]+@sha256:[0-9a-f]{64}$ ]]; then
     echo "ERROR: could not resolve one immutable parity sandbox image from ${SANDBOX_IMAGE_REQUEST}." >&2
-    exit 2
-  fi
-  PARITY_SANDBOX_COMMUNITY_REGISTRY="${repository%/base}"
-  if [ "${PARITY_SANDBOX_COMMUNITY_REGISTRY}" = "${repository}" ]; then
-    echo "ERROR: parity sandbox repository must end in /base for the conformance alias: ${repository}." >&2
     exit 2
   fi
   echo "Using one immutable parity sandbox image for both variants: ${PARITY_SANDBOX_RUNTIME_IMAGE} (ID ${image_id})"
@@ -540,7 +536,8 @@ run_variant() {
     -u CONTAINER_HOST -u CONTAINER_CONNECTION -u CONTAINERS_STORAGE_CONF \
     -u CONTAINERS_CONF -u CONTAINERS_REGISTRIES_CONF -u CONTAINERS_REGISTRIES_CONF_DIR \
     -u CONTAINERS_POLICY -u PODMAN_CONNECTIONS_CONF -u DOCKER_HOST \
-    -u OPENSHELL_SANDBOX_IMAGE -u OPENSHELL_E2E_PODMAN_SANDBOX_IMAGE \
+    -u OPENSHELL_SANDBOX_IMAGE -u OPENSHELL_SANDBOX_RUNTIME_IMAGE \
+    -u OPENSHELL_E2E_PODMAN_SANDBOX_IMAGE \
     -u OPENSHELL_GRPC_ENDPOINT -u OPENSHELL_PODMAN_HOST_GATEWAY_IP \
     -u OPENSHELL_PODMAN_USERNS -u OPENSHELL_PROVIDER_SPIFFE_WORKLOAD_API_SOCKET \
     -u OPENSHELL_E2E_PROVIDER_SPIFFE_SOCKET -u OPENSHELL_APP_ARMOR_PROFILE \
@@ -548,7 +545,6 @@ run_variant() {
     -u OPENSHELL_SANDBOX_PROXY_AUTH_FILE -u OPENSHELL_SANDBOX_PROXY_AUTH_ALLOW_INSECURE \
     -u OPENSHELL_SANDBOX_PROXY_CONNECT_BY_HOSTNAME -u OPENSHELL_SANDBOX_PROXY_CA_BUNDLE \
     -u OPENSHELL_OTLP_ENDPOINT -u OPENSHELL_GATEWAY_NAME -u OPENSHELL_COMPUTE_DRIVER_BIND \
-    -u OPENSHELL_COMMUNITY_REGISTRY \
     OPENSHELL_PARITY_VARIANT="${variant}" \
     OPENSHELL_E2E_CONFIG_SCHEMA_VERSION="${schema}" \
     OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER="$([ "${SCENARIO}" = external-driver ] && printf 1 || printf 0)" \
@@ -558,7 +554,6 @@ run_variant() {
     OPENSHELL_E2E_FORCE_TEMP_PODMAN_SERVICE=1 \
     OPENSHELL_E2E_REQUIRE_DIGEST_PINNED_SANDBOX_IMAGE=1 \
     OPENSHELL_E2E_PODMAN_SANDBOX_IMAGE="${PARITY_SANDBOX_RUNTIME_IMAGE}" \
-    OPENSHELL_COMMUNITY_REGISTRY="${PARITY_SANDBOX_COMMUNITY_REGISTRY}" \
     OPENSHELL_E2E_SUPERVISOR_BASE_IMAGE="${PARITY_SUPERVISOR_BASE_IMAGE}" \
     OPENSHELL_E2E_SUPERVISOR_BASE_RUNTIME_IMAGE="${PARITY_SUPERVISOR_BASE_RUNTIME_IMAGE}" \
     OPENSHELL_E2E_EXPECTED_GATEWAY_SHA256="${gateway_digest}" \

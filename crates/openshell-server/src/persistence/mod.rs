@@ -3,6 +3,7 @@
 
 //! Persistence layer for `OpenShell` Server.
 
+mod legacy_time_wire;
 mod postgres;
 mod sqlite;
 
@@ -196,9 +197,18 @@ pub enum Store {
     Sqlite(SqliteStore),
 }
 
+/// RAII guard for the database-backed cross-object mutation lock.
+pub struct DistributedMutationGuard {
+    _postgres: Option<postgres::PostgresAdvisoryLockGuard>,
+}
+
 /// Trait for inferring an object type string from a message type.
 pub trait ObjectType {
     fn object_type() -> &'static str;
+}
+
+pub fn migrate_legacy_time_fields(object_type: &str, payload: &[u8]) -> PersistenceResult<Vec<u8>> {
+    legacy_time_wire::migrate(object_type, payload)
 }
 
 // Import object metadata accessor traits from openshell-core. Implementations
@@ -227,10 +237,11 @@ pub fn generate_name() -> String {
 /// Extracted to avoid repeating the identical decode-and-hydrate block across
 /// `get_message`, `get_message_by_name`, `list_messages`, and
 /// `list_messages_with_selector`.
-fn decode_record<T: Message + Default + SetResourceVersion>(
+fn decode_record<T: Message + Default + SetResourceVersion + ObjectType>(
     record: ObjectRecord,
 ) -> PersistenceResult<T> {
-    let mut message = T::decode(record.payload.as_slice())
+    let payload = legacy_time_wire::migrate(T::object_type(), &record.payload)?;
+    let mut message = T::decode(payload.as_slice())
         .map_err(|e| PersistenceError::Decode(format!("protobuf decode error: {e}")))?;
     message.set_resource_version(record.resource_version);
     Ok(message)
@@ -269,6 +280,23 @@ impl Store {
     /// coordination is needed, `false` for multi-replica backends (`Postgres`).
     pub fn is_single_replica(&self) -> bool {
         matches!(self, Self::Sqlite(_))
+    }
+
+    /// Serialize mutations whose invariants span multiple persisted objects.
+    ///
+    /// `SQLite` deployments are single-replica and use only the caller's local
+    /// mutex. `PostgreSQL` deployments additionally hold a session-level
+    /// advisory lock so concurrent gateway replicas cannot validate and write
+    /// the same cross-object invariant independently.
+    pub async fn acquire_distributed_mutation_guard(
+        &self,
+    ) -> PersistenceResult<DistributedMutationGuard> {
+        match self {
+            Self::Postgres(store) => Ok(DistributedMutationGuard {
+                _postgres: Some(store.acquire_cross_object_lock().await?),
+            }),
+            Self::Sqlite(_) => Ok(DistributedMutationGuard { _postgres: None }),
+        }
     }
 
     /// Connect to a persistence store based on the database URL.

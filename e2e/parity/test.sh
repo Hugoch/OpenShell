@@ -8,13 +8,47 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/openshell-parity-test.XXXXXX")"
+TEST_SUPERVISOR_BASE="$(awk '$1 == "FROM" { print $2; exit }' "${ROOT}/deploy/docker/Dockerfile.supervisor")"
+TMP_ROOT="${TMPDIR:-/tmp}"
+TMP_ROOT="${TMP_ROOT%/}"
+WORKDIR="$(mktemp -d "${TMP_ROOT}/openshell-parity-test.XXXXXX")"
 trap 'rm -rf "${WORKDIR}"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_contains() { grep -F -- "$2" "$1" >/dev/null || fail "expected $1 to contain: $2"; }
 assert_not_contains() { ! grep -F -- "$2" "$1" >/dev/null || fail "expected $1 not to contain: $2"; }
 assert_status() { [ "$1" -eq "$2" ] || fail "expected status $2, got $1"; }
+
+# Package provenance must work for both Debian status and distroless status.d.
+uv run --no-project python - "${ROOT}" "${WORKDIR}" <<'PYTEST'
+import runpy
+import sys
+from pathlib import Path
+
+manifest = runpy.run_path(str(Path(sys.argv[1]) / "e2e/support/debian-package-manifest.py"))["package_manifest"]
+root = Path(sys.argv[2]) / "dpkg-fixture"
+root.mkdir()
+(root / "status").write_text("Package: removed\nStatus: deinstall ok config-files\n\n")
+(root / "status.d").mkdir()
+(root / "status.d/libc6").write_text("Package: libc6\nVersion: 2.41\nArchitecture: arm64\nMulti-Arch: same\n")
+(root / "status.d/libc6.md5sums").write_text("ignored checksum file")
+assert manifest(root) == ["libc6:arm64=2.41"]
+(root / "status").write_text("Package: ca-certificates\nStatus: install ok installed\nVersion: 20250419\nArchitecture: all\n")
+assert manifest(root) == ["ca-certificates=20250419", "libc6:arm64=2.41"]
+(root / "status.d/libc6").write_text("Package: broken\n")
+try:
+    manifest(root)
+except ValueError:
+    pass
+else:
+    raise AssertionError("incomplete package metadata accepted")
+try:
+    manifest(root / "missing")
+except ValueError:
+    pass
+else:
+    raise AssertionError("missing package metadata accepted")
+PYTEST
 
 # Schema generator behavior is separately deterministic and does not need a
 # gateway, certificates, or Podman.
@@ -95,6 +129,7 @@ for variable in \
   CONTAINER_HOST CONTAINER_CONNECTION CONTAINERS_STORAGE_CONF CONTAINERS_CONF \
   CONTAINERS_REGISTRIES_CONF CONTAINERS_REGISTRIES_CONF_DIR CONTAINERS_POLICY \
   PODMAN_CONNECTIONS_CONF DOCKER_HOST OPENSHELL_SANDBOX_IMAGE \
+  OPENSHELL_SANDBOX_RUNTIME_IMAGE \
   OPENSHELL_GRPC_ENDPOINT OPENSHELL_PODMAN_HOST_GATEWAY_IP OPENSHELL_PODMAN_USERNS \
   OPENSHELL_PROVIDER_SPIFFE_WORKLOAD_API_SOCKET OPENSHELL_E2E_PROVIDER_SPIFFE_SOCKET \
   OPENSHELL_APP_ARMOR_PROFILE OPENSHELL_SANDBOX_HTTPS_PROXY OPENSHELL_SANDBOX_NO_PROXY \
@@ -103,12 +138,11 @@ for variable in \
   OPENSHELL_OTLP_ENDPOINT OPENSHELL_GATEWAY_NAME OPENSHELL_COMPUTE_DRIVER_BIND; do
   [ -z "${!variable:-}" ] || exit 23
 done
-expected_sandbox="ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:$(printf '%064d' 0)"
+expected_sandbox="nvcr.io/nvidia/base/ubuntu@sha256:$(printf '%064d' 0)"
 [ "${OPENSHELL_E2E_REQUIRE_DIGEST_PINNED_SANDBOX_IMAGE:-0}" = 1 ] || exit 24
 [ "${OPENSHELL_E2E_PODMAN_SANDBOX_IMAGE:-}" = "${expected_sandbox}" ] || exit 25
-[ "${OPENSHELL_COMMUNITY_REGISTRY:-}" = "ghcr.io/nvidia/openshell-community/sandboxes" ] || exit 28
-expected_base="docker.io/library/alpine@sha256:$(printf '%064d' 0)"
-[ "${OPENSHELL_E2E_SUPERVISOR_BASE_IMAGE:-}" = alpine:3.22 ] || exit 26
+expected_base="docker.io/library/debian@sha256:$(printf '%064d' 0)"
+[ "${OPENSHELL_E2E_SUPERVISOR_BASE_IMAGE:-}" = "${OPENSHELL_PARITY_TEST_SUPERVISOR_BASE}" ] || exit 26
 [ "${OPENSHELL_E2E_SUPERVISOR_BASE_RUNTIME_IMAGE:-}" = "${expected_base}" ] || exit 27
 printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$OPENSHELL_PARITY_VARIANT" "$OPENSHELL_E2E_CONFIG_SCHEMA_VERSION" "$OPENSHELL_GATEWAY_BIN" "$OPENSHELL_BIN" "$OPENSHELL_CONFORMANCE_BIN" "$MISE_TRUSTED_CONFIG_PATHS" "${OPENSHELL_E2E_PODMAN_OPTION_PROFILE:-}" "${OPENSHELL_PARITY_ORACLE_RESULT:-}" "${OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER:-}" "${OPENSHELL_EXTERNAL_DRIVER_BIN:-}" "${OPENSHELL_E2E_SUPERVISOR_BIN:-}" >>"$OPENSHELL_PARITY_TEST_CALLS"
 mkdir -p "$XDG_DATA_HOME/containers/storage"
@@ -124,12 +158,13 @@ schema = int(os.environ["OPENSHELL_E2E_CONFIG_SCHEMA_VERSION"])
 external = os.environ.get("OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER") == "1"
 zero = "0" * 64
 image_digest = f"sha256:{zero}"
-sandbox_runtime = f"ghcr.io/nvidia/openshell-community/sandboxes/base@{image_digest}"
+sandbox_runtime = f"nvcr.io/nvidia/base/ubuntu@{image_digest}"
+sandbox_boundary = "localhost/openshell/sandbox:dev"
 supervisor_runtime = f"localhost/openshell/supervisor@{image_digest}"
-base_runtime = f"docker.io/library/alpine@{image_digest}"
+base_runtime = f"docker.io/library/debian@{image_digest}"
 pull_policy = "missing" if schema == 1 else "if_not_present"
 gateway_port = 18181
-callback = f"https://host.containers.internal:{gateway_port}"
+grpc_endpoint = f"https://127.0.0.1:{gateway_port}"
 driver_socket = f"/tmp/{variant}-driver.sock"
 podman_socket = f"/tmp/{variant}-podman.sock"
 network = f"{variant}-network"
@@ -170,7 +205,7 @@ launch = {
     "supervisor_image_id": zero,
     "supervisor_image_digest": image_digest,
     "supervisor_runtime_image": supervisor_runtime,
-    "supervisor_base_image": "alpine:3.22",
+    "supervisor_base_image": os.environ["OPENSHELL_PARITY_TEST_SUPERVISOR_BASE"],
     "supervisor_base_image_id": zero,
     "supervisor_base_image_digest": image_digest,
     "supervisor_base_runtime_image": base_runtime,
@@ -181,7 +216,8 @@ launch = {
     "sandbox_image_id": zero,
     "sandbox_image_digest": image_digest,
     "sandbox_runtime_image": sandbox_runtime,
-    "sandbox_client_image_alias": "ghcr.io/nvidia/openshell-community/sandboxes/base:latest",
+    "sandbox_boundary_image": sandbox_boundary,
+    "sandbox_client_image_alias": "nvcr.io/nvidia/base/ubuntu:24.04",
     "sandbox_client_image_alias_id": zero,
     "gateway_sha256_before_execution": os.environ[
         "OPENSHELL_E2E_EXPECTED_GATEWAY_SHA256"
@@ -206,19 +242,21 @@ launch = {
 if external:
     launch.update(
         {
-            "external_driver_grpc_endpoint": callback,
+            "external_driver_grpc_endpoint": grpc_endpoint,
             "external_driver_host_gateway_ip": "host-gateway",
             "external_driver_userns": None,
             "external_driver_spiffe": False,
             "external_driver_proxy": False,
             "external_driver_app_armor": False,
             "external_driver_environment": {
+                "XDG_DATA_HOME": f"/tmp/{variant}-driver-data",
                 "OPENSHELL_COMPUTE_DRIVER_SOCKET": driver_socket,
                 "OPENSHELL_PODMAN_SOCKET": podman_socket,
                 "OPENSHELL_SANDBOX_IMAGE": sandbox_runtime,
                 "OPENSHELL_SANDBOX_IMAGE_PULL_POLICY": pull_policy,
+                "OPENSHELL_SANDBOX_RUNTIME_IMAGE": sandbox_boundary,
                 "OPENSHELL_HEALTH_CHECK_INTERVAL_SECS": 10,
-                "OPENSHELL_GRPC_ENDPOINT": callback,
+                "OPENSHELL_GRPC_ENDPOINT": grpc_endpoint,
                 "OPENSHELL_GATEWAY_PORT": gateway_port,
                 "OPENSHELL_NETWORK_NAME": network,
                 "OPENSHELL_STOP_TIMEOUT": 15,
@@ -253,7 +291,7 @@ done
 printf '%s %064d sha256:%064d %s %s %s %s\n' \
   "${expected_sandbox}" 0 0 "${expected_base}" \
   "localhost/openshell/supervisor@sha256:$(printf '%064d' 0)" \
-  "ghcr.io/nvidia/openshell-community/sandboxes/base:latest" \
+  "nvcr.io/nvidia/base/ubuntu:24.04" \
   "${package_hash}" >&2
 if [ "${OPENSHELL_E2E_EXTERNAL_COMPUTE_DRIVER:-0}" = 1 ]; then
   printf 'fixture external driver log\n' >"${OPENSHELL_PARITY_EXTERNAL_DRIVER_LOG_CAPTURE}"
@@ -262,7 +300,7 @@ if [ "${OPENSHELL_PARITY_TEST_MUTATE_ARTIFACT:-}" = "${OPENSHELL_PARITY_VARIANT}
   replacement="${OPENSHELL_GATEWAY_BIN}.replacement"
   printf '#!/usr/bin/env bash\nexit 0\n# mutated\n' >"${replacement}"
   chmod 0555 "${replacement}"
-  mv "${replacement}" "${OPENSHELL_GATEWAY_BIN}"
+  mv -f "${replacement}" "${OPENSHELL_GATEWAY_BIN}"
 fi
 if [ "${OPENSHELL_E2E_PODMAN_OPTION_PROFILE:-}" = podman-options ]; then
   case "${OPENSHELL_PARITY_VARIANT}" in baseline) pids=2048 ;; candidate) pids=31 ;; esac
@@ -285,7 +323,7 @@ case "$1" in
     case "$4" in
       '{{.Id}}') printf 'sha256:%064d\n' 0 ;;
       '{{.Digest}}') printf 'sha256:%064d\n' 0 ;;
-      '{{index .RepoDigests 0}}') printf 'docker.io/library/alpine@sha256:%064d\n' 0 ;;
+      '{{index .RepoDigests 0}}') printf 'docker.io/library/debian@sha256:%064d\n' 0 ;;
       *) exit 19 ;;
     esac
     ;;
@@ -328,6 +366,7 @@ run_harness() {
   if [ "${OPENSHELL_PARITY_TEST_KEEP_RESULTS_DIR:-0}" != 1 ]; then
     rm -rf -- "${WORKDIR}/results"
   fi
+  OPENSHELL_PARITY_TEST_SUPERVISOR_BASE="${TEST_SUPERVISOR_BASE}" \
   OPENSHELL_PARITY_CAPABILITY_MANIFEST="${WORKDIR}/manifest.toml" \
   OPENSHELL_PARITY_BASELINE_WORKTREE="${ROOT}" \
   OPENSHELL_PARITY_PODMAN_WRAPPER="${WORKDIR}/bin/fake-wrapper" \
@@ -366,6 +405,7 @@ CONTAINERS_POLICY=/tmp/untrusted-policy.json \
 PODMAN_CONNECTIONS_CONF=/tmp/untrusted-connections.json \
 DOCKER_HOST=tcp://untrusted.invalid:2375 \
 OPENSHELL_SANDBOX_IMAGE=untrusted.invalid/sandbox:latest \
+OPENSHELL_SANDBOX_RUNTIME_IMAGE=untrusted.invalid/runtime:latest \
 OPENSHELL_GRPC_ENDPOINT=http://untrusted.invalid:1 \
 OPENSHELL_PODMAN_HOST_GATEWAY_IP=192.0.2.1 \
 OPENSHELL_PODMAN_USERNS=keep-id \
@@ -381,7 +421,6 @@ OPENSHELL_SANDBOX_PROXY_CA_BUNDLE=/tmp/untrusted-proxy-ca \
 OPENSHELL_OTLP_ENDPOINT=http://untrusted.invalid:4317 \
 OPENSHELL_GATEWAY_NAME=untrusted \
 OPENSHELL_COMPUTE_DRIVER_BIND=192.0.2.2:50061 \
-OPENSHELL_COMMUNITY_REGISTRY=untrusted.invalid/community \
   run_harness
 assert_contains "${WORKDIR}/calls" "baseline|1|${WORKDIR}/results/artifacts/baseline/gateway|${WORKDIR}/results/artifacts/baseline/cli|${WORKDIR}/results/artifacts/baseline/conformance"
 assert_contains "${WORKDIR}/calls" "candidate|2|${WORKDIR}/results/artifacts/candidate/gateway|${WORKDIR}/results/artifacts/candidate/cli|${WORKDIR}/results/artifacts/candidate/conformance"
@@ -398,8 +437,8 @@ assert_contains "${WORKDIR}/results/semantic-verification.json" '"accepted": tru
 assert_not_contains "${WORKDIR}/results/baseline.json" '"scenarios"'
 assert_contains "${WORKDIR}/results/baseline.log" '"scenarios"'
 assert_contains "${WORKDIR}/results/baseline.conformance.json" '"passed":true'
-assert_contains "${WORKDIR}/podman-calls" 'pull ghcr.io/nvidia/openshell-community/sandboxes/base:latest'
-assert_contains "${WORKDIR}/podman-calls" 'pull alpine:3.22'
+assert_contains "${WORKDIR}/podman-calls" 'pull nvcr.io/nvidia/base/ubuntu:24.04'
+assert_contains "${WORKDIR}/podman-calls" "pull ${TEST_SUPERVISOR_BASE}"
 assert_contains "${WORKDIR}/podman-calls" 'unshare rm -rf -- '
 assert_contains "${WORKDIR}/podman-calls" 'openshell-parity-run.'
 

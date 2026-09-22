@@ -38,10 +38,24 @@ assert_file_exists() {
 }
 
 service="${ROOT}/deploy/deb/openshell-gateway.service"
+control="${ROOT}/deploy/deb/control.in"
 spec="${ROOT}/openshell.spec"
 
 assert_file_exists "$service"
+assert_file_exists "$control"
 assert_file_exists "$spec"
+
+# Debian control files are RFC822-style metadata. Older dpkg-deb releases
+# reject comment lines as malformed fields, so keep SPDX metadata in the
+# adjacent .license sidecar instead of emitting it into DEBIAN/control.
+if grep -Eq '^[[:space:]]*#' "$control"; then
+  echo "FAIL: Debian control template contains a comment field" >&2
+  exit 1
+fi
+if [[ $(sed -n '/[^[:space:]]/ { p; q; }' "$control") != "Package: openshell" ]]; then
+  echo "FAIL: Debian control template must begin with the Package field" >&2
+  exit 1
+fi
 
 assert_contains \
   "$service" \
@@ -58,6 +72,9 @@ assert_contains \
   "$spec" \
   'ExecStartPre=/usr/bin/openshell-gateway generate-certs --output-dir ${OPENSHELL_LOCAL_TLS_DIR} --server-san host.openshell.internal'
 assert_contains "$spec" 'ExecStartPre=/usr/bin/openshell-gateway config preflight'
+assert_contains "$spec" '%package prover'
+assert_contains "$spec" '%files prover'
+assert_contains "$spec" '%{_bindir}/%{name}-prover'
 assert_not_contains "$spec" '%%S/openshell/tls'
 
 # Schema-v2 package startup wiring.
@@ -95,12 +112,13 @@ if command -v dpkg-deb >/dev/null 2>&1; then
   package_work=$(mktemp -d "${TMPDIR:-/tmp}/openshell-package-assets.XXXXXX")
   trap 'rm -rf "$package_work"' EXIT
   mkdir -p "$package_work/bin" "$package_work/output"
-  for binary in openshell openshell-gateway openshell-driver-vm; do
+  for binary in openshell openshell-gateway openshell-prover openshell-driver-vm; do
     printf '#!/bin/sh\nexit 0\n' >"$package_work/bin/$binary"
     chmod +x "$package_work/bin/$binary"
   done
   OPENSHELL_CLI_BINARY="$package_work/bin/openshell" \
     OPENSHELL_GATEWAY_BINARY="$package_work/bin/openshell-gateway" \
+    OPENSHELL_PROVER_BINARY="$package_work/bin/openshell-prover" \
     OPENSHELL_DRIVER_VM_BINARY="$package_work/bin/openshell-driver-vm" \
     OPENSHELL_DEB_VERSION=0.0.0 \
     OPENSHELL_DEB_ARCH=amd64 \
@@ -111,6 +129,11 @@ if command -v dpkg-deb >/dev/null 2>&1; then
       >"$package_work/staged.service"
   if ! cmp -s "$service" "$package_work/staged.service"; then
     echo "FAIL: package-deb did not stage the current Debian service" >&2
+    exit 1
+  fi
+  if ! dpkg-deb --fsys-tarfile "$package_work/output/openshell_0.0.0_amd64.deb" \
+    | tar -tf - | grep -x './usr/bin/openshell-prover' >/dev/null; then
+    echo "FAIL: package-deb did not stage openshell-prover" >&2
     exit 1
   fi
 else

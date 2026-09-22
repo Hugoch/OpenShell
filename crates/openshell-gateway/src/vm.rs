@@ -718,7 +718,11 @@ async fn wait_for_compute_driver(
                 let mut client =
                     ComputeDriverClient::with_interceptor(channel.clone(), TraceContextInterceptor);
                 match client
-                    .get_capabilities(tonic::Request::new(GetCapabilitiesRequest {}))
+                    .get_capabilities(tonic::Request::new(GetCapabilitiesRequest {
+                        gateway: Some(openshell_core::extension_protocol::gateway_metadata(
+                            openshell_core::extension_protocol::ExtensionFamily::Compute,
+                        )),
+                    }))
                     .await
                 {
                     Ok(_) => return Ok(channel),
@@ -771,6 +775,14 @@ mod tests {
     use std::os::unix::net::UnixListener as StdUnixListener;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn vm_uses_nvidia_ubuntu_default_image() {
+        assert_eq!(
+            VmComputeConfig::default().default_image,
+            openshell_core::image::DEFAULT_SANDBOX_BASE_IMAGE
+        );
+    }
 
     #[test]
     fn vm_driver_command_includes_gateway_otlp_configuration() {

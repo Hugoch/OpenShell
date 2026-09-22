@@ -24,6 +24,24 @@ type SandboxStatus = types.SandboxStatus
 // SandboxCondition describes an observed condition of a sandbox.
 type SandboxCondition = types.SandboxCondition
 
+// EndpointStatus holds a configured tool endpoint and its last accepted network result.
+type EndpointStatus = types.EndpointStatus
+
+// EndpointResult classifies the last accepted network result for a tool endpoint.
+type EndpointResult = types.EndpointResult
+
+// EndpointResult values describe passive observations of actual traffic.
+const (
+	EndpointUnspecified           = types.EndpointUnspecified
+	EndpointNoObservedExchange    = types.EndpointNoObservedExchange
+	EndpointHTTPResponseReceived  = types.EndpointHTTPResponseReceived
+	EndpointPolicyDenied          = types.EndpointPolicyDenied
+	EndpointCredentialUnavailable = types.EndpointCredentialUnavailable
+	EndpointTLSFailed             = types.EndpointTLSFailed
+	EndpointTransportFailed       = types.EndpointTransportFailed
+	EndpointUpstreamRejected      = types.EndpointUpstreamRejected
+)
+
 // AttachProviderResult holds the result of attaching a provider to a sandbox.
 type AttachProviderResult = types.AttachProviderResult
 
@@ -59,7 +77,7 @@ type SandboxInterface interface {
 	ListAll(ctx context.Context, workspace string, opts ...ListOptions) ([]*Sandbox, error)
 	Stop(ctx context.Context, workspace, name string) (*Sandbox, error)
 	Start(ctx context.Context, workspace, name string) (*Sandbox, error)
-	Delete(ctx context.Context, workspace, name string) error
+	Delete(ctx context.Context, workspace, name string, opts ...DeleteOptions) (*DeletionResult, error)
 	AttachProvider(ctx context.Context, workspace, sandboxName, providerName string, expectedResourceVersion uint64) (*AttachProviderResult, error)
 	DetachProvider(ctx context.Context, workspace, sandboxName, providerName string, expectedResourceVersion uint64) (*DetachProviderResult, error)
 	ListProviders(ctx context.Context, workspace, sandboxName string) ([]*Provider, error)

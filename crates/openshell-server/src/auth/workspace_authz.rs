@@ -68,19 +68,6 @@ pub enum AuthorizedWorkspaceScope {
     AllWorkspaces,
 }
 
-/// Authorize the required named selector on a single-workspace request.
-#[allow(clippy::result_large_err)]
-pub async fn authorize_workspace_selector(
-    store: &Store,
-    admin_role: &str,
-    principal: &Principal,
-    selector: Option<&WorkspaceSelector>,
-    min_role: MinWorkspaceRole,
-) -> Result<AuthorizedWorkspace, Status> {
-    let workspace = selected_workspace_name(selector)?;
-    authorize_workspace(store, admin_role, principal, workspace, min_role).await
-}
-
 /// Authorize a selector on a request that explicitly supports all workspaces.
 #[allow(clippy::result_large_err)]
 pub async fn authorize_list_workspace_selector(
@@ -109,7 +96,8 @@ pub async fn authorize_list_workspace_selector(
 pub fn selected_workspace_name(selector: Option<&WorkspaceSelector>) -> Result<&str, Status> {
     match selected_workspace(selector)? {
         WorkspaceSelection::Workspace(workspace) => Ok(workspace),
-        WorkspaceSelection::AllWorkspaces(_) => Err(Status::invalid_argument(
+        WorkspaceSelection::AllWorkspaces(_) => Err(openshell_core::rpc_error::invalid_argument(
+            "workspace_scope",
             "all_workspaces is not supported by this request",
         )),
     }
@@ -119,7 +107,12 @@ pub fn selected_workspace_name(selector: Option<&WorkspaceSelector>) -> Result<&
 fn selected_workspace(selector: Option<&WorkspaceSelector>) -> Result<&WorkspaceSelection, Status> {
     let selection = selector
         .and_then(|selector| selector.selection.as_ref())
-        .ok_or_else(|| Status::invalid_argument("workspace_scope is required"))?;
+        .ok_or_else(|| {
+            openshell_core::rpc_error::invalid_argument(
+                "workspace_scope",
+                "workspace_scope is required",
+            )
+        })?;
 
     if let WorkspaceSelection::Workspace(workspace) = selection {
         crate::grpc::workspace::validate_workspace_name(workspace)?;
@@ -144,6 +137,7 @@ pub async fn authorize_workspace(
     workspace: &str,
     min_role: MinWorkspaceRole,
 ) -> Result<AuthorizedWorkspace, Status> {
+    crate::grpc::workspace::validate_workspace_name(workspace)?;
     let workspace = workspace.to_string();
 
     match principal {
@@ -196,16 +190,17 @@ pub async fn authorize_workspace(
             workspace,
             grant: AuthGrant::Sandbox,
         }),
+        Principal::Peer(_) => Err(Status::permission_denied(
+            "gateway peer principals cannot perform workspace operations",
+        )),
         Principal::Anonymous => Err(Status::unauthenticated("authentication required")),
     }
 }
 
-/// Authorize a data-plane operation where the workspace is resolved from the
-/// sandbox record rather than the request message.
-///
 /// Used by `ExecSandbox`, `ForwardTcp`, `WatchSandbox`, `CreateSshSession` — these
-/// RPCs identify a sandbox by name/ID and the handler resolves the workspace
-/// from the sandbox record.
+/// RPCs identify a sandbox by its canonical name within an explicit workspace.
+/// User requests authorize that workspace before lookup; sandbox principals
+/// remain bound to the immutable ID from their authenticated identity.
 #[allow(clippy::result_large_err)]
 pub async fn authorize_sandbox_workspace(
     store: &Store,
@@ -230,6 +225,9 @@ pub fn require_platform_admin(admin_role: &str, principal: &Principal) -> Result
         )),
         Principal::Sandbox(_) => Err(Status::permission_denied(
             "sandbox principals cannot perform cross-workspace operations",
+        )),
+        Principal::Peer(_) => Err(Status::permission_denied(
+            "gateway peer principals cannot perform cross-workspace operations",
         )),
         Principal::Anonymous => Err(Status::unauthenticated("authentication required")),
     }
@@ -298,12 +296,12 @@ mod tests {
             metadata: Some(ObjectMeta {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: subject.to_string(),
-                created_at_ms: 1_000_000,
+                created_time: openshell_core::time::timestamp_from_millis(1_000_000).ok(),
                 labels: HashMap::new(),
                 annotations: HashMap::new(),
                 resource_version: 0,
                 workspace: workspace.to_string(),
-                deletion_timestamp_ms: 0,
+                deletion_time: None,
             }),
             principal_subject: subject.to_string(),
             role: role.into(),
@@ -465,15 +463,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_named_selector_is_rejected() {
+    async fn empty_workspace_is_rejected() {
         let store = test_store().await;
         add_member(&store, "default", "user-d", ProtoWorkspaceRole::User).await;
         let principal = user_principal("user-d", &["openshell-user"]);
-        let result = authorize_workspace_selector(
+        let result = authorize_workspace(
             &store,
             "openshell-admin",
             &principal,
-            Some(&openshell_core::proto::workspace_selector("")),
+            "",
             MinWorkspaceRole::User,
         )
         .await;

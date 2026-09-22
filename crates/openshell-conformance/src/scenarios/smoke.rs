@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::{OpenShellRunner, PlanRun, STATUS_TIMEOUT, Scenario, ScenarioFuture};
+use crate::{OpenShellRunner, STATUS_TIMEOUT, Scenario, ScenarioFuture};
 use serde::Deserialize;
 use tokio::time::sleep;
 
@@ -32,12 +32,10 @@ struct SandboxListPage {
 pub const SMOKE_SCENARIO: Scenario = Scenario {
     name: "smoke",
     description: "Create, inspect, execute in, and delete a base sandbox.",
-    requires_plan: false,
     run: run_smoke,
-    validate_plan_run: None,
 };
 
-fn run_smoke<'a>(runner: &'a mut OpenShellRunner, _plan_run: &'a PlanRun) -> ScenarioFuture<'a> {
+fn run_smoke(runner: &mut OpenShellRunner) -> ScenarioFuture<'_> {
     Box::pin(async move { run_smoke_inner(runner).await })
 }
 
@@ -57,15 +55,7 @@ async fn run_smoke_inner(runner: &mut OpenShellRunner) -> Result<(), String> {
         .step("create")
         .description("sandbox creation succeeds")
         .with_timeout(CREATE_TIMEOUT)
-        .run(&[
-            "sandbox",
-            "create",
-            "--name",
-            &sandbox_name,
-            "--from",
-            "base",
-            "--detach",
-        ])
+        .run(&["sandbox", "create", "--name", &sandbox_name, "--detach"])
         .await
         .map_err(|error| error.to_string())?;
     create.require_success()?;

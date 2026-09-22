@@ -24,9 +24,9 @@ compute_driver = "podman"
 ```
 
 The RPM does not override `bind_address`. The primary listener uses the
-built-in `127.0.0.1:17670` default. The Podman driver reports the callback
-interface it needs, and the gateway adds a separate listener scoped to that
-interface. This keeps the general API off unrelated host interfaces.
+built-in `127.0.0.1:17670` default. Host-networked Podman supervisors connect
+to this same loopback listener, so the gateway does not expose another host
+interface.
 
 `compute_driver = "podman"` pins the compute driver to Podman. Without
 this, the gateway auto-detects in order: Kubernetes, Podman, Docker. Pinning
@@ -68,8 +68,7 @@ systemctl --user edit openshell-gateway
 
 The RPM enables mutual TLS by default. The gateway requires a valid
 client certificate for all API connections. Its primary listener uses
-`127.0.0.1:17670`; Podman callback traffic uses the additional listener
-described in "Default configuration" above.
+`127.0.0.1:17670`; Podman supervisor sessions use that same listener.
 
 ### Auto-generated certificates
 
@@ -221,8 +220,9 @@ overrides that persist across package upgrades.
 |-------------|---------|-------------|
 | `bind_address` | `127.0.0.1:17670` (gateway default) | Address for the primary gRPC/HTTP API listener. |
 | `compute_driver` | `"podman"` (RPM default) | When unset, the gateway auto-detects Kubernetes, then Podman, then Docker. The RPM default pins to Podman; legacy `compute_drivers` lists are rejected. |
-| `[openshell.drivers.podman].default_image` | `ghcr.io/nvidia/openshell-community/sandboxes/base:latest` | Default sandbox image. |
-| `[openshell.drivers.podman].supervisor_image` | `ghcr.io/nvidia/openshell/supervisor:latest` | Supervisor image mounted into Podman sandboxes. |
+| `[openshell.drivers.podman].default_image` | `nvcr.io/nvidia/base/ubuntu:24.04` | Default sandbox image. |
+| `[openshell.drivers.podman].sandbox_runtime_image` | `ghcr.io/nvidia/openshell/sandbox:latest` | Static musl sandbox runtime image mounted into Podman workloads. |
+| `[openshell.drivers.podman].supervisor_image` | `ghcr.io/nvidia/openshell/supervisor:latest` | Dynamic glibc supervisor image used outside the workload. |
 | `[openshell.gateway].guest_tls_ca`, `guest_tls_cert`, `guest_tls_key` | auto-generated paths | Gateway-owned client TLS material injected into the selected local driver and mounted into sandbox containers. |
 | `[openshell.gateway.tls]` paths | auto-generated paths | Server TLS certificate, key, and client CA. |
 | `disable_tls` | unset | Set to `true` to disable TLS. |
@@ -243,10 +243,10 @@ version = 2
 compute_driver = "podman"
 
 [openshell.drivers.podman]
-default_image = "ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
+network_name = "openshell"
+default_image = "nvcr.io/nvidia/base/ubuntu:24.04"
 image_pull_policy = "if_not_present"
 health_check_interval_secs = 10
-network_name = "openshell"
 stop_timeout_secs = 10
 ```
 
@@ -260,7 +260,7 @@ To update cached images:
 
 ```shell
 podman pull ghcr.io/nvidia/openshell/supervisor:latest
-podman pull ghcr.io/nvidia/openshell-community/sandboxes/base:latest
+podman pull nvcr.io/nvidia/base/ubuntu:24.04
 ```
 
 Or set `image_pull_policy = "always"` in
@@ -270,8 +270,9 @@ To pin specific image versions instead of `:latest`, set these values in
 `[openshell.drivers.podman]`:
 
 ```toml
+sandbox_runtime_image = "ghcr.io/nvidia/openshell/sandbox:v0.0.37"
 supervisor_image = "ghcr.io/nvidia/openshell/supervisor:v0.0.37"
-default_image = "ghcr.io/nvidia/openshell-community/sandboxes/base:v0.0.37"
+default_image = "nvcr.io/nvidia/base/ubuntu:24.04"
 ```
 
 For air-gapped environments:
@@ -280,9 +281,9 @@ For air-gapped environments:
 
    ```shell
    podman pull ghcr.io/nvidia/openshell/supervisor:latest
-   podman pull ghcr.io/nvidia/openshell-community/sandboxes/base:latest
+   podman pull nvcr.io/nvidia/base/ubuntu:24.04
    podman save -o supervisor.tar ghcr.io/nvidia/openshell/supervisor:latest
-   podman save -o sandbox.tar ghcr.io/nvidia/openshell-community/sandboxes/base:latest
+   podman save -o sandbox.tar nvcr.io/nvidia/base/ubuntu:24.04
    ```
 
 1. Transfer the tarballs to the air-gapped host and load them:

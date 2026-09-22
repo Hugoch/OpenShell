@@ -657,6 +657,7 @@ pub struct App {
     pub sandbox_created: Vec<String>,
     pub sandbox_images: Vec<String>,
     pub sandbox_notes: Vec<String>,
+    pub sandbox_detail_notes: Vec<String>,
     /// Formatted labels for each sandbox (e.g., "env=prod,team=platform" or empty string).
     pub sandbox_labels: Vec<String>,
     /// Formatted annotations for each sandbox (e.g., "policy-signature=abc" or empty string).
@@ -900,9 +901,12 @@ fn provider_to_redacted_yaml(provider: &openshell_core::proto::Provider) -> Stri
         }
     }
 
-    if !provider.credential_expires_at_ms.is_empty() {
-        out.push_str("credential_expires_at_ms:\n");
-        let mut entries = provider.credential_expires_at_ms.iter().collect::<Vec<_>>();
+    if !provider.credential_expiration_times.is_empty() {
+        out.push_str("credential_expiration_times:\n");
+        let mut entries = provider
+            .credential_expiration_times
+            .iter()
+            .collect::<Vec<_>>();
         entries.sort_by_key(|(key, _)| *key);
         for (key, value) in entries {
             out.push_str("  ");
@@ -1016,6 +1020,7 @@ impl App {
             sandbox_created: Vec::new(),
             sandbox_images: Vec::new(),
             sandbox_notes: Vec::new(),
+            sandbox_detail_notes: Vec::new(),
             sandbox_labels: Vec::new(),
             sandbox_annotations: Vec::new(),
             sandbox_workspaces: Vec::new(),
@@ -3225,13 +3230,6 @@ impl App {
     // Helpers
     // ------------------------------------------------------------------
 
-    /// Get the ID of the currently selected sandbox.
-    pub fn selected_sandbox_id(&self) -> Option<&str> {
-        self.sandbox_ids
-            .get(self.sandbox_selected)
-            .map(String::as_str)
-    }
-
     /// Get the name of the currently selected sandbox.
     pub fn selected_sandbox_name(&self) -> Option<&str> {
         self.sandbox_names
@@ -3290,10 +3288,9 @@ impl App {
                             .get(key)
                             .map_or_else(|| "-".to_string(), |value| mask_secret(value));
                         let expiry = provider
-                            .credential_expires_at_ms
+                            .credential_expiration_times
                             .get(key)
-                            .copied()
-                            .filter(|value| *value > 0)
+                            .and_then(|value| openshell_core::time::timestamp_to_millis(value).ok())
                             .map_or_else(String::new, |value| format!(" expires={value}"));
                         format!("{key}: {masked}{expiry}")
                     })
@@ -3320,9 +3317,8 @@ impl App {
                             credential.env_vars.join(", ")
                         };
                         let expiry = present_key
-                            .and_then(|key| provider.credential_expires_at_ms.get(key))
-                            .copied()
-                            .filter(|value| *value > 0)
+                            .and_then(|key| provider.credential_expiration_times.get(key))
+                            .and_then(|value| openshell_core::time::timestamp_to_millis(value).ok())
                             .map_or_else(String::new, |value| format!(" expires={value}"));
                         format!(
                             "{} ({required}) env=[{env_vars}] {status}{expiry}",
@@ -3356,14 +3352,15 @@ impl App {
                         } else {
                             endpoint.protocol.as_str()
                         };
-                        let access = if endpoint.access.is_empty() {
+                        let access = if endpoint.access == 0 {
                             if endpoint.rules.is_empty() {
                                 "custom"
                             } else {
                                 "rules"
                             }
                         } else {
-                            endpoint.access.as_str()
+                            openshell_policy::network_access_preset_to_str(endpoint.access)
+                                .unwrap_or("unknown")
                         };
                         let path = if endpoint.path.is_empty() {
                             String::new()
@@ -3527,6 +3524,7 @@ impl App {
         self.sandbox_created.clear();
         self.sandbox_images.clear();
         self.sandbox_notes.clear();
+        self.sandbox_detail_notes.clear();
         self.sandbox_labels.clear();
         self.sandbox_annotations.clear();
         self.sandbox_policy_versions.clear();
