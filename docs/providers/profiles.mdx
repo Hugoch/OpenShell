@@ -257,10 +257,10 @@ inference and agent providers in
 reviewable starting points, not platform defaults.
 
 Read a file's header before importing it. Each one names the client binaries it
-expects, the image layout those paths assume, the credential scope, the endpoint
-access it grants, and a smoke test. Several name paths that exist only in the
-OpenShell Community image, such as `/sandbox/.venv` or
-`/usr/lib/node_modules/@openai`. Imported unchanged into a different image the
+expects, the reference image layout those paths assume, the credential scope,
+the endpoint access it grants, and a smoke test. Several name layout-specific
+paths, such as `/sandbox/.venv` or `/usr/lib/node_modules/@openai`. Imported
+unchanged into a different image the
 profile matches nothing: the catalog still lists it, but the credential is never
 injected and the traffic is denied. Copy the file, edit `binaries` and
 `endpoints` for your image and workload, and import your copy.

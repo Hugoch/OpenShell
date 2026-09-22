@@ -12,6 +12,23 @@ NVIDIA OpenShell follows a frequent release cadence. Use the following GitHub re
 
 ## 0.1.0 migration notes
 
+### Workload images
+
+The default workload image is now `nvcr.io/nvidia/base/ubuntu:24.04`. It is a
+minimal Ubuntu Noble environment and does not include agent CLIs or an
+image-baked OpenShell policy. OpenShell applies its built-in restrictive policy
+when no explicit policy is supplied.
+
+The CLI no longer expands bare catalog names or supports the former catalog
+registry override. Build or select an OCI image and pass its explicit reference:
+
+```shell
+openshell sandbox create --from registry.example.com/agents/my-agent:1.0 -- my-agent
+```
+
+Gateway operators can replace the default with the driver configuration or the
+Helm `server.sandboxImage` value.
+
 ### Provider profiles are import-only
 
 OpenShell 0.1.0 stops compiling provider profiles into the gateway binary. A gateway's catalog contains exactly the profiles an operator imported, the default `provider_profile_sources` is `[{ type = "user" }]`, and the `builtin` source type is removed: a `gateway.toml` that still names it is rejected at startup with the import command. A gateway with nothing imported reaches ready and serves an empty catalog.
@@ -34,7 +51,7 @@ A provider whose profile is absent after the upgrade stays listable and exportab
 
 Command-to-provider inference is removed. `openshell sandbox create -- <command>` no longer derives a provider from the trailing command, and the compiled alias table that drove it is gone. A profile's `binaries` list authorizes a binary to reach that profile's endpoints; it is not a statement that running the binary asks for the provider, so treating it as attachment intent could attach credentials the operator did not select. Name providers explicitly with `--provider <name>`, which still creates a missing provider from local discovery when the name matches an imported profile ID.
 
-The files under `providers/` are reviewable examples, not defaults. Read each file's header before importing it: several bind network access to binary paths that exist only in the OpenShell Community image, and imported unchanged into another image the profile matches nothing.
+The files under `providers/` are reviewable examples, not defaults. Read each file's header before importing it: several bind network access to binary paths from the image layout where they were authored, and imported unchanged into another image the profile matches nothing.
 
 ### Network policy binaries
 

@@ -57,7 +57,7 @@ openshell provider profile import -f github.yaml --global
 
 GITHUB_TOKEN=<your-token>
 openshell provider create --name my-github --type github --from-existing
-openshell sandbox create --provider my-github -- claude
+openshell sandbox create --from registry.example.com/your-org/claude-agent:latest --provider my-github -- claude
 ```
 
 The import step registers the `github` profile on your gateway. OpenShell ships

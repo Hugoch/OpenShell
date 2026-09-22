@@ -71,6 +71,12 @@ let
 
     installers = [
       {
+        name = "none";
+        use_galaxy = false;
+        playbooks = [ ];
+        inputs = { };
+      }
+      {
         name = "binaries";
         use_galaxy = false;
         playbooks = [
@@ -99,6 +105,12 @@ let
     ];
 
     testsuites = [
+      {
+        name = "shell";
+        playbooks = [ "ansible/playbooks/shell.yaml" ];
+        inputs = { };
+        interactive = true;
+      }
       {
         name = "conformance";
         playbooks = [ "ansible/playbooks/conformance/cli.yaml" ];
