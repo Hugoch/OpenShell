@@ -439,7 +439,9 @@ database-backed installs can render a Deployment with `workload.kind=deployment`
 HA deployments must point `server.externalDbSecret` at an operator-managed
 PostgreSQL database. Agent Sandbox CRDs and controller lifecycle remain
 operator-owned; the chart can optionally preflight for a served supported API
-but does not install the cluster-scoped dependency.
+but does not install the cluster-scoped dependency. OpenShell's Kubernetes test
+clusters install the upstream core manifest; Agent Sandbox extensions are not
+required by the gateway.
 Standalone local deployments start the gateway with a selected runtime such as
 Docker, Podman, or VM. The CLI can register multiple gateways and switch between
 them without changing the sandbox architecture.
