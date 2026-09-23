@@ -16,6 +16,11 @@ on:
         required: false
         type: string
         default: ""
+      image-tag:
+        description: Runtime image tag; defaults to the candidate source SHA
+        required: false
+        type: string
+        default: ""
     outputs:
       source_sha:
         description: Source revision of the candidate artifacts
@@ -91,7 +96,7 @@ jobs:
 
       - name: Export runtime images
         env:
-          IMAGE_TAG: ${{ steps.artifact-run.outputs.source_sha }}
+          IMAGE_TAG: ${{ inputs.image-tag || steps.artifact-run.outputs.source_sha }}
         run: |
           mkdir -p artifacts/images
 

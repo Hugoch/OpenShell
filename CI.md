@@ -38,10 +38,11 @@ To repeat the full non-Windows E2E matrix on a fixed commit, manually dispatch
 `Branch E2E Checks` from that commit's branch with `stability_campaign=true`.
 This enables the Kubernetes HA and credential-driver jobs and runs GPU E2E on
 Linux ARM64 and AMD64. It excludes the experimental WSL GPU job. The standard
-PR and merge-queue E2E selection is unchanged. Wait for each run to finish
-before starting the next round; retain the run attempt and per-job results for
-every round, including failures and skips. Run `mise run test` once on the same
-commit before the repeated E2E rounds.
+PR and merge-queue E2E selection is unchanged. Each campaign dispatch gets a
+unique concurrency key and runtime-image tag, so up to five runs can execute
+at once without sharing mutable image tags. Dispatch ten runs in two waves of
+five, retain each run ID and per-job result, and count failures and skips.
+Run `mise run test` once on the same commit before the E2E rounds.
 
 ## Informational security reports
 

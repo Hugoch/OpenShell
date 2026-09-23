@@ -16,7 +16,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.stability_campaign && github.run_id || 'normal' }}
   cancel-in-progress: ${{ !inputs.stability_campaign }}
 
 jobs:
@@ -34,6 +34,7 @@ jobs:
       run_kubernetes_ha_e2e: ${{ steps.labels.outputs.run_kubernetes_ha_e2e }}
       run_kubernetes_credential_drivers_e2e: ${{ steps.labels.outputs.run_kubernetes_credential_drivers_e2e }}
       run_any_e2e: ${{ steps.labels.outputs.run_any_e2e }}
+      image_tag: ${{ steps.labels.outputs.image_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,6 +47,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           LABELS_JSON: ${{ steps.gate.outputs.labels_json }}
           STABILITY_CAMPAIGN: ${{ inputs.stability_campaign }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -82,6 +85,10 @@ jobs:
           else
             run_any_e2e=false
           fi
+          image_tag="$SOURCE_SHA"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$STABILITY_CAMPAIGN" = "true" ]; then
+            image_tag="$SOURCE_SHA-$RUN_ID"
+          fi
 
           {
             echo "run_core_e2e=$run_core_e2e"
@@ -89,6 +96,7 @@ jobs:
             echo "run_kubernetes_ha_e2e=$run_kubernetes_ha_e2e"
             echo "run_kubernetes_credential_drivers_e2e=$run_kubernetes_credential_drivers_e2e"
             echo "run_any_e2e=$run_any_e2e"
+            echo "image_tag=$image_tag"
           } >> "$GITHUB_OUTPUT"
 
   version:
@@ -210,6 +218,8 @@ jobs:
       contents: read
       packages: write
     uses: ./.github/workflows/build-images.yml
+    with:
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
 
   prepare-integration:
     needs: [pr_metadata, build-binaries, build-images]
@@ -219,6 +229,8 @@ jobs:
       contents: read
       packages: read
     uses: ./.github/workflows/prepare-integration-inputs.yml
+    with:
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
 
   # Run driver-independent conformance tests.
   conformance-integration:
@@ -283,7 +295,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-docker-test.yml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       runner: linux-arm64-cpu8
       conformance-artifact-prefix: openshell-conformance
 
@@ -307,7 +319,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-docker-test.yml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       runner: linux-arm64-cpu8
       gateway-artifact: openshell-gateway-plain-aarch64-unknown-linux-gnu
       external-driver-binary: openshell-driver-docker
@@ -324,7 +336,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-podman-test.yml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       gateway-artifact: openshell-gateway-plain-x86_64-unknown-linux-gnu
       external-driver-binary: openshell-driver-podman
       conformance-artifact-prefix: openshell-conformance
@@ -354,7 +366,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-gpu-test.yaml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       conformance-artifact-prefix: openshell-conformance
       runner-matrix: ${{ inputs.stability_campaign && '[{"name":"linux-arm64","runner":"linux-arm64-gpu-l4-latest-1","experimental":false},{"name":"linux-amd64","runner":"linux-amd64-gpu-rtxpro6000-latest-1","experimental":false}]' || '[{"name":"linux-arm64","runner":"linux-arm64-gpu-l4-latest-1","experimental":false},{"name":"linux-amd64","runner":"linux-amd64-gpu-rtxpro6000-latest-1","experimental":false},{"name":"wsl-amd64","runner":"wsl-amd64-gpu-rtxpro6000-latest-1","experimental":true}]' }}
 
@@ -375,7 +387,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-kubernetes-test.yml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       job-name: Kubernetes E2E (Rust smoke, Agent Sandbox ${{ matrix.agent_sandbox_api }})
       agent-sandbox-version: ${{ matrix.agent_sandbox_version }}
       conformance-artifact-prefix: openshell-conformance
@@ -389,7 +401,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-kubernetes-test.yml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       job-name: Kubernetes E2E (workspace managed mode)
       e2e-task: e2e:kubernetes:workspace-managed
       conformance-artifact-prefix: openshell-conformance
@@ -403,7 +415,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-kubernetes-test.yml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       job-name: Kubernetes E2E (external compute driver)
       e2e-task: e2e:kubernetes:external-driver
       gateway-artifact: openshell-gateway-plain-x86_64-unknown-linux-gnu
@@ -420,7 +432,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-kubernetes-test.yml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       job-name: Kubernetes E2E (workspace operator mode)
       e2e-task: e2e:kubernetes:workspace-operator
       conformance-artifact-prefix: openshell-conformance
@@ -434,7 +446,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-kubernetes-test.yml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       job-name: Kubernetes HA E2E (Rust smoke)
       extra-helm-values: deploy/helm/openshell/ci/values-high-availability.yaml
       external-postgres-secret: openshell-ha-pg
@@ -452,7 +464,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/e2e-kubernetes-test.yml
     with:
-      image-tag: ${{ github.sha }}
+      image-tag: ${{ needs.pr_metadata.outputs.image_tag }}
       job-name: Kubernetes Credential Drivers E2E
       e2e-task: e2e:kubernetes:credential-drivers
       conformance-artifact-prefix: openshell-conformance
