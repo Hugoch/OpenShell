@@ -1130,19 +1130,12 @@ impl ComputeRuntime {
                 if self.supports_sandbox_authentication() {
                     let driver_name = self.configured_driver_name().to_string();
                     let persisted = self
-                        .store
-                        .update_message_cas::<Sandbox, _>(&sandbox_id, 0, move |sandbox| {
-                            if let Some(metadata) = sandbox.metadata.as_mut() {
-                                metadata.annotations.insert(
-                                    COMPUTE_DRIVER_ANNOTATION.to_string(),
-                                    driver_name.clone(),
-                                );
-                                metadata.annotations.insert(
-                                    COMPUTE_RUNTIME_IDENTITY_ANNOTATION.to_string(),
-                                    runtime_identity.clone(),
-                                );
-                            }
-                        })
+                        .persist_create_runtime_binding(
+                            &sandbox_id,
+                            &sandbox,
+                            &driver_name,
+                            &runtime_identity,
+                        )
                         .await;
                     sandbox = match persisted {
                         Ok(sandbox) => sandbox,
@@ -1839,6 +1832,87 @@ impl ComputeRuntime {
                 ))
             }
         }
+    }
+
+    async fn persist_create_runtime_binding(
+        &self,
+        sandbox_id: &str,
+        created: &Sandbox,
+        driver_name: &str,
+        runtime_identity: &str,
+    ) -> Result<Sandbox, String> {
+        let created_generation = created.metadata.as_ref().and_then(|metadata| {
+            metadata
+                .annotations
+                .get(crate::auth::sandbox_session::RUNTIME_GENERATION_ANNOTATION)
+        });
+        let mut expected_resource_version = sandbox_resource_version(created);
+
+        for attempt in 1..=START_PHASE_CAS_RETRY_LIMIT {
+            let driver_name = driver_name.to_string();
+            let binding_identity = runtime_identity.to_string();
+            match self
+                .store
+                .update_message_cas::<Sandbox, _>(
+                    sandbox_id,
+                    expected_resource_version,
+                    move |sandbox| {
+                        if let Some(metadata) = sandbox.metadata.as_mut() {
+                            metadata
+                                .annotations
+                                .insert(COMPUTE_DRIVER_ANNOTATION.to_string(), driver_name.clone());
+                            metadata.annotations.insert(
+                                COMPUTE_RUNTIME_IDENTITY_ANNOTATION.to_string(),
+                                binding_identity.clone(),
+                            );
+                        }
+                    },
+                )
+                .await
+            {
+                Ok(sandbox) => return Ok(sandbox),
+                Err(crate::persistence::PersistenceError::Conflict { .. })
+                    if attempt < START_PHASE_CAS_RETRY_LIMIT =>
+                {
+                    let current = self
+                        .store
+                        .get_message::<Sandbox>(sandbox_id)
+                        .await
+                        .map_err(|error| error.to_string())?
+                        .ok_or_else(|| {
+                            "sandbox was removed while persisting runtime identity".to_string()
+                        })?;
+                    let current_generation = current.metadata.as_ref().and_then(|metadata| {
+                        metadata
+                            .annotations
+                            .get(crate::auth::sandbox_session::RUNTIME_GENERATION_ANNOTATION)
+                    });
+                    let phase =
+                        SandboxPhase::try_from(current.phase()).unwrap_or(SandboxPhase::Unknown);
+                    let current_identity = sandbox_compute_runtime_identity(&current);
+                    if current.object_name() != created.object_name()
+                        || current.object_workspace() != created.object_workspace()
+                        || current_generation != created_generation
+                        || !matches!(phase, SandboxPhase::Provisioning | SandboxPhase::Ready)
+                        || (!current_identity.is_empty() && current_identity != runtime_identity)
+                    {
+                        return Err(format!(
+                            "sandbox changed lifecycle ownership while persisting runtime identity (phase: {phase:?})"
+                        ));
+                    }
+                    expected_resource_version = sandbox_resource_version(&current);
+                    debug!(
+                        sandbox_id,
+                        attempt,
+                        expected_resource_version,
+                        "Retrying runtime identity persistence after concurrent create progress"
+                    );
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+
+        unreachable!("runtime identity persistence retry loop always returns")
     }
 
     async fn persist_start_runtime_binding(
@@ -7414,6 +7488,89 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn create_binding_retries_after_concurrent_status_update() {
+        let runtime = test_runtime(Arc::new(TestDriver::default())).await;
+        let created = runtime
+            .create_sandbox(
+                sandbox_record(
+                    "sb-create-binding-race",
+                    "create-binding-race",
+                    SandboxPhase::Provisioning,
+                ),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        runtime
+            .store
+            .update_message_cas::<Sandbox, _>(created.object_id(), 0, |sandbox| {
+                sandbox.set_phase(SandboxPhase::Ready as i32);
+            })
+            .await
+            .unwrap();
+
+        let bound = runtime
+            .persist_create_runtime_binding(
+                created.object_id(),
+                &created,
+                "test-driver",
+                "new-runtime-identity",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(bound.phase(), SandboxPhase::Ready as i32);
+        assert_eq!(
+            sandbox_compute_runtime_identity(&bound),
+            "new-runtime-identity"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_binding_does_not_retry_after_deletion() {
+        let runtime = test_runtime(Arc::new(TestDriver::default())).await;
+        let created = runtime
+            .create_sandbox(
+                sandbox_record(
+                    "sb-create-binding-delete",
+                    "create-binding-delete",
+                    SandboxPhase::Provisioning,
+                ),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        runtime
+            .store
+            .update_message_cas::<Sandbox, _>(created.object_id(), 0, |sandbox| {
+                sandbox.set_phase(SandboxPhase::Deleting as i32);
+            })
+            .await
+            .unwrap();
+
+        let error = runtime
+            .persist_create_runtime_binding(
+                created.object_id(),
+                &created,
+                "test-driver",
+                "new-runtime-identity",
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("changed lifecycle ownership"));
+        let stored = runtime
+            .store
+            .get_message::<Sandbox>(created.object_id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.phase(), SandboxPhase::Deleting as i32);
+        assert!(sandbox_compute_runtime_identity(&stored).is_empty());
     }
 
     #[tokio::test]

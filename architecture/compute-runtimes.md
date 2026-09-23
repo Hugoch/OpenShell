@@ -537,6 +537,10 @@ validation or storage fails after a lifecycle call succeeds, the gateway
 compensates that call before returning the error. This correlates credential
 authentication with the durable runtime record rather than authorizing from the
 sandbox ID alone.
+During create, a concurrent gateway replica may advance the sandbox status
+before the driver returns. The binding write retries a resource-version conflict
+only while the same sandbox generation remains in provisioning or ready phase;
+it never restores a binding to a deleting sandbox.
 
 `StartSandbox` carries the previously recorded opaque identity. Kubernetes
 requires exactly one label-selected Sandbox CR and verifies that its namespace
