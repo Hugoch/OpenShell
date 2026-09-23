@@ -711,7 +711,7 @@ impl russh::server::Handler for SshHandler {
                     .extended_data(
                         channel,
                         1,
-                        format!("openshell: {error}; attached read-only\n").into_bytes(),
+                        format!("openshell: {error}; attached read-only{line_ending}").into_bytes(),
                     )
                     .await;
             }
@@ -1482,10 +1482,29 @@ mod tests {
 
     #[tokio::test]
     async fn main_attachment_occupied_stdin_still_attaches_read_only() {
+        assert_read_only_attachment(false, "\n").await;
+    }
+
+    #[tokio::test]
+    async fn main_attachment_read_only_pty_warning_returns_cursor_to_start_of_line() {
+        assert_read_only_attachment(true, "\r\n").await;
+    }
+
+    async fn assert_read_only_attachment(terminal: bool, line_ending: &str) {
         let main_session = MainSession::inert();
         let (owner, _input) = main_session.acquire_input().unwrap();
         let client = main_test_client(Some(main_session.clone())).await;
         let mut channel = client.channel_open_session().await.unwrap();
+        if terminal {
+            channel
+                .request_pty(true, "xterm", 80, 24, 0, 0, &[])
+                .await
+                .unwrap();
+            assert!(matches!(
+                next_main_event(&mut channel).await,
+                russh::ChannelMsg::Success
+            ));
+        }
         channel
             .request_subsystem(true, "openshell-main")
             .await
@@ -1498,7 +1517,9 @@ mod tests {
             russh::ChannelMsg::ExtendedData { data, ext: 1 } => {
                 assert_eq!(
                     String::from_utf8_lossy(&data),
-                    "openshell: canonical main process already has an input owner; attached read-only\n"
+                    format!(
+                        "openshell: canonical main process already has an input owner; attached read-only{line_ending}"
+                    )
                 );
             }
             event => panic!("expected read-only warning, got {event:?}"),

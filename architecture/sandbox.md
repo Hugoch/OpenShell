@@ -641,8 +641,8 @@ sandbox workload directly. The relay supports:
   buffer, and a single stdin lease across client disconnects. If the main
   session is unavailable or has exited without a pending attachment, the
   supervisor accepts the subsystem request and sends an explanatory stderr
-  message, exit status 1, EOF, and channel close. These errors use CRLF for
-  PTY attachments and LF otherwise. Unsupported subsystem names
+  message, exit status 1, EOF, and channel close. These errors and the read-only
+  attachment warning use CRLF for PTY attachments and LF otherwise. Unsupported subsystem names
   still receive an SSH request failure. Pending post-exit attachments continue
   to receive retained output and the main process's exit status.
 - Independent interactive shell sessions.
