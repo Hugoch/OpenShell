@@ -152,6 +152,8 @@ pub(super) struct EgressDecision {
     pub(super) endpoint: EndpointDecision,
     /// Resolved binary path.
     pub(super) binary: Option<PathBuf>,
+    /// SHA-256 of the resolved binary, when identity evidence is available.
+    pub(super) binary_sha256: Option<String>,
     /// PID owning the socket.
     pub(super) binary_pid: Option<u32>,
     /// Ancestor binary paths from process tree walk.

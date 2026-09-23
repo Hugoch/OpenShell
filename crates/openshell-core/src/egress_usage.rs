@@ -13,10 +13,10 @@ pub const MAX_NETWORK_BUDGETS: usize = 32;
 pub const MAX_BUDGET_HOST_PATTERNS: usize = 32;
 
 /// Default usage window.
-pub const DEFAULT_WINDOW: Duration = Duration::from_secs(60);
+pub const DEFAULT_WINDOW: Duration = Duration::from_mins(1);
 
 /// Default novelty learning period.
-pub const DEFAULT_LEARNING_PERIOD: Duration = Duration::from_secs(600);
+pub const DEFAULT_LEARNING_PERIOD: Duration = Duration::from_mins(10);
 
 /// Default drift ratio above the baseline.
 pub const DEFAULT_DRIFT_RATIO: u32 = 10;

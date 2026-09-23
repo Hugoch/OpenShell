@@ -9,7 +9,6 @@
 
 use miette::Result;
 use openshell_core::host_pattern::HostSelector;
-use openshell_core::mcp::is_mcp_protocol;
 use openshell_core::policy::{
     FilesystemPolicy, LandlockCompatibility, LandlockPolicy, ProcessPolicy,
 };
@@ -154,6 +153,7 @@ pub struct OpaEngine {
     websocket_assembly_budget: crate::l7::websocket::WebSocketAssemblyBudget,
     generation_tx: watch::Sender<u64>,
     fail_closed_reason: RwLock<Option<String>>,
+    usage: Arc<crate::usage::UsageState>,
 }
 
 #[cfg(test)]
@@ -277,7 +277,16 @@ impl OpaEngine {
         self.websocket_assembly_budget.clone()
     }
 
-    fn with_engine(engine: regorus::Engine, binary_identity_required: bool) -> Self {
+    /// Egress usage accounting shared by every connection.
+    pub fn usage(&self) -> &Arc<crate::usage::UsageState> {
+        &self.usage
+    }
+
+    fn with_engine(
+        engine: regorus::Engine,
+        binary_identity_required: bool,
+        usage_config: crate::usage::UsageConfig,
+    ) -> Self {
         let generation = Arc::new(AtomicU64::new(0));
         let (generation_tx, _) = watch::channel(0);
         Self {
@@ -288,6 +297,7 @@ impl OpaEngine {
             websocket_assembly_budget: crate::l7::websocket::WebSocketAssemblyBudget::default(),
             generation_tx,
             fail_closed_reason: RwLock::new(None),
+            usage: crate::usage::UsageState::new(usage_config),
         }
     }
 
@@ -363,7 +373,11 @@ impl OpaEngine {
         engine
             .add_data_json(&data_json)
             .map_err(|_| miette::miette!("failed to load OPA policy data"))?;
-        Ok(Self::with_engine(engine, require_binary_identity))
+        Ok(Self::with_engine(
+            engine,
+            require_binary_identity,
+            usage_config_from_yaml(&yaml_str),
+        ))
     }
 
     /// Load policy rules and data from strings (data is YAML).
@@ -410,7 +424,11 @@ impl OpaEngine {
         engine
             .add_data_json(&data_json)
             .map_err(|_| miette::miette!("failed to load OPA policy data"))?;
-        Ok(Self::with_engine(engine, require_binary_identity))
+        Ok(Self::with_engine(
+            engine,
+            require_binary_identity,
+            usage_config_from_yaml(data_yaml),
+        ))
     }
 
     /// Create OPA engine from a typed proto policy.
@@ -489,6 +507,7 @@ impl OpaEngine {
         // Expand access presets to explicit rules after validation
         let expansion_warnings = crate::l7::expand_access_presets(&mut data);
         emit_l7_config_warnings(&expansion_warnings, "L7 access preset expansion warning");
+        crate::l7::stamp_rule_ids(&mut data);
 
         let data_json = data.to_string();
         let mut engine = regorus::Engine::new();
@@ -498,7 +517,11 @@ impl OpaEngine {
         engine
             .add_data_json(&data_json)
             .map_err(|_| miette::miette!("failed to load OPA policy data"))?;
-        Ok(Self::with_engine(engine, require_binary_identity))
+        Ok(Self::with_engine(
+            engine,
+            require_binary_identity,
+            crate::usage::UsageConfig::from_proto(&proto),
+        ))
     }
 
     /// Evaluate a network access request against the loaded policy.
@@ -777,6 +800,7 @@ impl OpaEngine {
         let generation = self.advance_generation();
         commit_credentials();
         *engine = new_engine;
+        self.usage.reconfigure(new.usage.config().as_ref().clone());
         if let Some(new_runner) = new_runner {
             *runner = new_runner;
         }
@@ -1478,6 +1502,14 @@ fn validate_opa_object_array<'a>(
     Ok(entries)
 }
 
+/// Usage settings for a policy loaded from local YAML data. Runtime data
+/// that the authored schema does not accept gets default settings.
+fn usage_config_from_yaml(yaml: &str) -> crate::usage::UsageConfig {
+    openshell_policy::parse_sandbox_policy(yaml)
+        .map(|policy| crate::usage::UsageConfig::from_proto(&policy))
+        .unwrap_or_default()
+}
+
 /// Select a fixed category without formatting authored fields or nested reasons.
 /// Keep this match exhaustive so new validator variants require an explicit
 /// decision before their diagnostics can cross the supervisor load boundary.
@@ -1646,6 +1678,7 @@ fn preprocess_yaml_data(
     // Expand access presets to explicit rules after validation
     let expansion_warnings = crate::l7::expand_access_presets(&mut data);
     emit_l7_config_warnings(&expansion_warnings, "L7 access preset expansion warning");
+    crate::l7::stamp_rule_ids(&mut data);
 
     serde_json::to_string(&data).map_err(|_| miette::miette!("failed to serialize OPA policy data"))
 }
@@ -2377,17 +2410,16 @@ fn proto_to_opa_data_json(proto: &ProtoSandboxPolicy, entrypoint_pid: u32) -> St
                     if e.provider_credentialed {
                         ep["provider_credentialed"] = true.into();
                     }
-                    if is_mcp_protocol(&e.protocol) {
-                        // Derive endpoint identity from the policy endpoint while
-                        // it is still available. Request handling carries this
-                        // opaque value through exact path selection and never
-                        // recomputes identity from a concrete request host.
-                        ep["endpoint_id"] =
-                            openshell_core::endpoint_status::endpoint_id(e).into();
-                        // The selected endpoint must retain its policy identity
-                        // so it cannot bind to a replacement observation inventory.
-                        ep["policy_hash"] = policy_hash.clone().into();
-                    }
+                    // Derive endpoint identity from the policy endpoint while
+                    // it is still available. Request handling carries this
+                    // opaque value through exact path selection and never
+                    // recomputes identity from a concrete request host. Usage
+                    // accounting keys on it for every protocol; endpoint
+                    // status observation still accepts only MCP endpoints.
+                    ep["endpoint_id"] = openshell_core::endpoint_status::endpoint_id(e).into();
+                    // The selected endpoint must retain its policy identity
+                    // so it cannot bind to a replacement observation inventory.
+                    ep["policy_hash"] = policy_hash.clone().into();
                     if !e.credential_signing.is_empty() {
                         ep["credential_signing"] = e.credential_signing.clone().into();
                     }
@@ -3297,7 +3329,7 @@ mod tests {
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         }
     }
@@ -3416,18 +3448,14 @@ mod tests {
         assert!(yaml_config.get("endpoint_id").is_none());
         assert!(yaml_config.get("policy_hash").is_none());
         let mut expected = yaml_config.clone();
-        if is_mcp_protocol(&endpoint.protocol) {
-            // Gateway MCP observations carry canonical endpoint/policy identity.
-            // Derive only that metadata independently; compare every remaining
-            // configuration field without filtering actual runtime output.
-            expected["endpoint_id"] = openshell_core::endpoint_status::endpoint_id(endpoint).into();
-            expected["policy_hash"] = deterministic_policy_hash(canonical_policy).into();
-            assert_eq!(proto_config["endpoint_id"], expected["endpoint_id"]);
-            assert_eq!(proto_config["policy_hash"], expected["policy_hash"]);
-        } else {
-            assert!(proto_config.get("endpoint_id").is_none());
-            assert!(proto_config.get("policy_hash").is_none());
-        }
+        // Gateway-delivered endpoints carry canonical endpoint/policy
+        // identity for every protocol. Derive only that metadata
+        // independently; compare every remaining configuration field without
+        // filtering actual runtime output.
+        expected["endpoint_id"] = openshell_core::endpoint_status::endpoint_id(endpoint).into();
+        expected["policy_hash"] = deterministic_policy_hash(canonical_policy).into();
+        assert_eq!(proto_config["endpoint_id"], expected["endpoint_id"]);
+        assert_eq!(proto_config["policy_hash"], expected["policy_hash"]);
         assert_eq!(
             &expected, proto_config,
             "{}: endpoint configuration must match apart from verified gateway identity",
@@ -3794,9 +3822,16 @@ network_policies:
                 ancestors: vec![],
                 cmdline_paths: vec![],
             };
+            let mut proto_config =
+                serde_json::to_value(proto_engine.query_endpoint_config(&input).unwrap()).unwrap();
+            // Gateway-delivered endpoints carry endpoint identity for usage accounting.
+            if let Some(object) = proto_config.as_object_mut() {
+                object.remove("endpoint_id");
+                object.remove("policy_hash");
+            }
             assert_eq!(
-                yaml_engine.query_endpoint_config(&input).unwrap(),
-                proto_engine.query_endpoint_config(&input).unwrap()
+                serde_json::to_value(yaml_engine.query_endpoint_config(&input).unwrap()).unwrap(),
+                proto_config
             );
             for engine in [&yaml_engine, &proto_engine] {
                 assert!(matches!(
@@ -5003,7 +5038,7 @@ process:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
         let engine = OpaEngine::from_proto_with_pid_and_binary_identity_required(&proto, 0, false)
@@ -5326,7 +5361,7 @@ network_policies:
             .expect("policy should load");
         rego.add_data_json(&data_json.to_string())
             .expect("data should load");
-        let engine = OpaEngine::with_engine(rego, true);
+        let engine = OpaEngine::with_engine(rego, true, crate::usage::UsageConfig::default());
         let input = l7_websocket_graphql_input(
             "realtime.graphql.com",
             serde_json::json!([{
@@ -5543,7 +5578,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
 
@@ -5616,7 +5651,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
 
@@ -5694,7 +5729,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
 
@@ -7236,7 +7271,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
 
@@ -7295,7 +7330,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
 
@@ -7355,7 +7390,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
 
@@ -7417,7 +7452,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
 
@@ -7478,7 +7513,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
 
@@ -8991,7 +9026,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
@@ -9063,7 +9098,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
         let engine = OpaEngine::from_proto(&proto).expect("Failed to create engine from proto");
@@ -9295,7 +9330,7 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
-            network_budgets: Default::default(),
+            network_budgets: std::collections::HashMap::default(),
             usage_monitoring: None,
         };
         let engine = OpaEngine::from_proto(&proto).unwrap();

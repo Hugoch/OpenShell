@@ -246,6 +246,80 @@ allow_request if {
 	not deny_request
 }
 
+# --- L7 usage attribution ---
+#
+# Reports which policies and rules admitted an L7 request, for egress usage
+# accounting and budget selection. Rego allows the request through any
+# matching policy, so the result can contain more than one policy.
+
+_l7_authorizing_policies contains name if {
+	some name
+	policy := data.network_policies[name]
+	endpoint_allowed(policy, input.network)
+	binary_allowed(policy, input.exec)
+	_policy_allows_l7(policy)
+}
+
+_l7_rule_ids contains rule_id if {
+	some name
+	policy := data.network_policies[name]
+	endpoint_allowed(policy, input.network)
+	binary_allowed(policy, input.exec)
+	rule_id := _policy_l7_rule_ids(policy)[_]
+}
+
+_policy_l7_rule_ids(policy) := {rule_id |
+	ep := policy.endpoints[_]
+	endpoint_matches_l7_request(ep, input.network, input.request)
+	request_allowed_for_endpoint(input.request, ep)
+	rule_id := _endpoint_usage_rule_ids(input.request, ep)[_]
+}
+
+_rule_level_ids(request, endpoint) := {rule_id |
+	rule := endpoint.rules[_]
+	_usage_rule_matches(request, endpoint, rule)
+	rule_id := object.get(rule, "rule_id", "")
+	rule_id != ""
+}
+
+_endpoint_usage_rule_ids(request, endpoint) := ids if {
+	ids := _rule_level_ids(request, endpoint)
+	count(ids) > 0
+}
+
+# Allow variants without a matching rule (MCP method allow-all, MCP response
+# frames and receive streams, GraphQL operations) use the endpoint identity.
+_endpoint_usage_rule_ids(request, endpoint) := {sprintf("endpoint:%s", [object.get(endpoint, "endpoint_id", "")])} if {
+	count(_rule_level_ids(request, endpoint)) == 0
+}
+
+_usage_rule_matches(request, endpoint, rule) if {
+	not jsonrpc_family_endpoint(endpoint)
+	rule.allow.method
+	method_matches(request.method, rule.allow.method)
+	path_matches(request.path, rule.allow.path)
+	query_params_match(request, rule)
+}
+
+_usage_rule_matches(request, endpoint, rule) if {
+	rule.allow.command
+	command_matches(request.command, rule.allow.command)
+}
+
+_usage_rule_matches(request, endpoint, rule) if {
+	jsonrpc_family_endpoint(endpoint)
+	request.method == "POST"
+	rule.allow.method
+	not jsonrpc_response_frame_present(request)
+	jsonrpc_rule_matches(request, endpoint, rule.allow)
+}
+
+l7_request_usage := {
+	"policies": _l7_authorizing_policies,
+	"rule_ids": _l7_rule_ids,
+	"l4_policies": _matching_policy_names,
+}
+
 # --- L7 deny rules ---
 #
 # Deny rules are evaluated after allow rules and take precedence.

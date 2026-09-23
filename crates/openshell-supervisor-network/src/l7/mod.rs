@@ -1811,6 +1811,64 @@ fn access_preset_rules(protocol: &str, access: &str) -> Option<Vec<serde_json::V
 ///
 /// Unsupported preset detection lives here rather than in `validate_l7_policies`
 /// so supported presets stay defined only in `access_preset_rules`.
+/// Stamp a stable `rule_id` into every L7 allow rule for usage accounting.
+///
+/// A rule from an `access` preset is `preset:<access>:<METHOD>`. Other rules
+/// use a content hash of the `allow` object, so the ID keeps its meaning when
+/// rules are reordered.
+pub fn stamp_rule_ids(data: &mut serde_json::Value) {
+    use sha2::{Digest, Sha256};
+
+    let Some(policies) = data
+        .get_mut("network_policies")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for policy in policies.values_mut() {
+        let Some(endpoints) = policy
+            .get_mut("endpoints")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for endpoint in endpoints {
+            let access = endpoint
+                .get("access")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let Some(rules) = endpoint
+                .get_mut("rules")
+                .and_then(serde_json::Value::as_array_mut)
+            else {
+                continue;
+            };
+            for rule in rules {
+                let allow = rule.get("allow").cloned().unwrap_or_default();
+                let rule_id = if access.is_empty() {
+                    let digest = Sha256::digest(allow.to_string().as_bytes());
+                    let hex = digest[..8].iter().fold(String::new(), |mut hex, byte| {
+                        use std::fmt::Write as _;
+                        let _ = write!(hex, "{byte:02x}");
+                        hex
+                    });
+                    format!("rule:v1:{hex}")
+                } else {
+                    let method = allow
+                        .get("method")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("*");
+                    format!("preset:{access}:{method}")
+                };
+                if let Some(rule) = rule.as_object_mut() {
+                    rule.insert("rule_id".to_string(), rule_id.into());
+                }
+            }
+        }
+    }
+}
+
 pub fn expand_access_presets(data: &mut serde_json::Value) -> Vec<String> {
     let mut warnings = Vec::new();
     let Some(policies) = data

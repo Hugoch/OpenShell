@@ -85,6 +85,8 @@ pub struct L7EvalContext {
     pub(crate) agent_proposals: openshell_core::proposals::AgentProposals,
     /// Bounded, nonblocking sink for privacy-safe tool server endpoint outcomes.
     pub(crate) endpoint_observation_tx: Option<EndpointObservationSender>,
+    /// Egress usage handle of the connection that carries this request.
+    pub(crate) usage: Option<crate::usage::ConnectionUsage>,
 }
 
 fn request_default_port(ctx: &L7EvalContext) -> Option<u16> {
@@ -1087,6 +1089,13 @@ where
         );
 
         if allowed || (config.enforcement == EnforcementMode::Audit && !force_deny) {
+            if let Err(denial) =
+                admit_l7_usage(&engine, ctx, &request_info, allowed, &config.endpoint_id)
+            {
+                send_budget_denial(client, ctx, &request_info.action, &redacted_target, &denial)
+                    .await?;
+                return Ok(());
+            }
             let chain = engine.query_middleware_chain(&middleware_network_input(ctx))?;
             let response_chain = chain.clone();
             let request_id = uuid::Uuid::new_v4().to_string();
@@ -1854,6 +1863,13 @@ where
         }
 
         if allowed || config.enforcement == EnforcementMode::Audit {
+            if let Err(denial) =
+                admit_l7_usage(engine, ctx, &request_info, allowed, &config.endpoint_id)
+            {
+                send_budget_denial(client, ctx, &request_info.action, &redacted_target, &denial)
+                    .await?;
+                return Ok(());
+            }
             let chain = engine.query_middleware_chain(&middleware_network_input(ctx))?;
             let response_chain = chain.clone();
             let request_id = uuid::Uuid::new_v4().to_string();
@@ -2310,6 +2326,13 @@ where
         }
 
         if allowed || (config.enforcement == EnforcementMode::Audit && !force_deny) {
+            if let Err(denial) =
+                admit_l7_usage(engine, ctx, &request_info, allowed, &config.endpoint_id)
+            {
+                send_budget_denial(client, ctx, &request_info.action, &redacted_target, &denial)
+                    .await?;
+                return Ok(());
+            }
             let chain = engine.query_middleware_chain(&middleware_network_input(ctx))?;
             let response_chain = chain.clone();
             let request_id = uuid::Uuid::new_v4().to_string();
@@ -2592,6 +2615,13 @@ where
         }
 
         if allowed || (config.enforcement == EnforcementMode::Audit && !force_deny) {
+            if let Err(denial) =
+                admit_l7_usage(engine, ctx, &request_info, allowed, &config.endpoint_id)
+            {
+                send_budget_denial(client, ctx, &request_info.action, &redacted_target, &denial)
+                    .await?;
+                return Ok(());
+            }
             let chain = engine.query_middleware_chain(&middleware_network_input(ctx))?;
             let response_chain = chain.clone();
             let request_id = uuid::Uuid::new_v4().to_string();
@@ -3095,24 +3125,7 @@ fn evaluate_l7_request_once(
         ));
     }
 
-    let input = serde_json::json!({
-        "network": {
-            "host": ctx.host,
-            "port": ctx.port,
-        },
-        "exec": {
-            "path": ctx.binary_path,
-            "ancestors": ctx.ancestors,
-            "cmdline_paths": ctx.cmdline_paths,
-        },
-        "request": {
-            "method": request.action,
-            "path": request.target,
-            "query_params": request.query_params.clone(),
-            "graphql": request.graphql.clone(),
-            "jsonrpc": request.jsonrpc.as_ref().map(jsonrpc_policy_input),
-        }
-    });
+    let input = l7_policy_input(ctx, request);
 
     let mut engine = engine
         .engine()
@@ -3140,6 +3153,164 @@ fn evaluate_l7_request_once(
     };
 
     Ok((allowed, reason))
+}
+
+fn l7_policy_input(ctx: &L7EvalContext, request: &L7RequestInfo) -> serde_json::Value {
+    serde_json::json!({
+        "network": {
+            "host": ctx.host,
+            "port": ctx.port,
+        },
+        "exec": {
+            "path": ctx.binary_path,
+            "ancestors": ctx.ancestors,
+            "cmdline_paths": ctx.cmdline_paths,
+        },
+        "request": {
+            "method": request.action,
+            "path": request.target,
+            "query_params": request.query_params.clone(),
+            "graphql": request.graphql.clone(),
+            "jsonrpc": request.jsonrpc.as_ref().map(jsonrpc_policy_input),
+        }
+    })
+}
+
+/// Policies and rules that admitted one L7 request.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct L7UsageFacts {
+    pub(crate) policies: Vec<String>,
+    pub(crate) rule_ids: Vec<String>,
+}
+
+fn string_set(value: &regorus::Value, field: &str) -> Vec<String> {
+    let mut values: Vec<String> = match &value[field] {
+        regorus::Value::Set(set) => set
+            .iter()
+            .filter_map(|item| item.as_string().ok().map(ToString::to_string))
+            .collect(),
+        regorus::Value::Array(array) => array
+            .iter()
+            .filter_map(|item| item.as_string().ok().map(ToString::to_string))
+            .collect(),
+        _ => Vec::new(),
+    };
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn l7_usage_facts_once(
+    engine: &TunnelPolicyEngine,
+    ctx: &L7EvalContext,
+    request: &L7RequestInfo,
+) -> Result<L7UsageFacts> {
+    let input = l7_policy_input(ctx, request);
+    let mut engine = engine
+        .engine()
+        .lock()
+        .map_err(|_| miette!("OPA engine lock poisoned"))?;
+    crate::opa::set_regorus_input(&mut engine, input)?;
+    let usage = engine
+        .eval_rule("data.openshell.sandbox.l7_request_usage".into())
+        .map_err(|e| miette!("{e}"))?;
+    Ok(L7UsageFacts {
+        policies: string_set(&usage, "policies"),
+        rule_ids: string_set(&usage, "rule_ids"),
+    })
+}
+
+/// Usage facts of an L7 request. A JSON-RPC batch takes the union of the
+/// authorizing policies and rules of its calls.
+pub(crate) fn l7_usage_facts(
+    engine: &TunnelPolicyEngine,
+    ctx: &L7EvalContext,
+    request: &L7RequestInfo,
+) -> Result<L7UsageFacts> {
+    let Some(jsonrpc) = request
+        .jsonrpc
+        .as_ref()
+        .filter(|jsonrpc| jsonrpc.is_batch && !jsonrpc.calls.is_empty())
+    else {
+        return l7_usage_facts_once(engine, ctx, request);
+    };
+    let mut facts = L7UsageFacts::default();
+    for call in &jsonrpc.calls {
+        let call_facts =
+            l7_usage_facts_once(engine, ctx, &jsonrpc_request_for_call(request, call))?;
+        facts.policies.extend(call_facts.policies);
+        facts.rule_ids.extend(call_facts.rule_ids);
+    }
+    facts.policies.sort();
+    facts.policies.dedup();
+    facts.rule_ids.sort();
+    facts.rule_ids.dedup();
+    Ok(facts)
+}
+
+/// Charge an admitted L7 request to the usage table and its budgets.
+///
+/// `allowed` is false when audit mode forwards a request that no rule
+/// allows: the request is charged to the L4 policies with the
+/// `audit_forwarded` rule ID. Returns the denial when a deny budget has no
+/// balance left.
+pub(crate) fn admit_l7_usage(
+    engine: &TunnelPolicyEngine,
+    ctx: &L7EvalContext,
+    request: &L7RequestInfo,
+    allowed: bool,
+    endpoint_id: &str,
+) -> std::result::Result<(), crate::usage::BudgetDenial> {
+    let Some(usage) = ctx.usage.as_ref() else {
+        return Ok(());
+    };
+    let facts = if allowed {
+        l7_usage_facts(engine, ctx, request).unwrap_or_else(|error| {
+            debug!(error = %error, "L7 usage attribution unavailable; charging L4 policies");
+            L7UsageFacts::default()
+        })
+    } else {
+        L7UsageFacts {
+            policies: Vec::new(),
+            rule_ids: vec![openshell_core::egress_usage::AUDIT_FORWARDED_RULE_ID.to_string()],
+        }
+    };
+    usage.admit_request(&facts.policies, endpoint_id, &facts.rule_ids)
+}
+
+/// Refuse an L7 request that a deny budget has no balance for.
+async fn send_budget_denial<C: AsyncWrite + Unpin>(
+    client: &mut C,
+    ctx: &L7EvalContext,
+    method: &str,
+    redacted_target: &str,
+    denial: &crate::usage::BudgetDenial,
+) -> Result<()> {
+    let event = HttpActivityBuilder::new(openshell_ocsf::ctx::ctx())
+        .activity(ActivityId::Other)
+        .action(ActionId::Denied)
+        .disposition(DispositionId::Blocked)
+        .severity(SeverityId::Medium)
+        .status(StatusId::Failure)
+        .http_request(HttpRequest::new(
+            method,
+            OcsfUrl::new("http", &ctx.host, redacted_target, ctx.port),
+        ))
+        .http_response(openshell_ocsf::HttpResponse { code: 429 })
+        .dst_endpoint(Endpoint::from_domain(&ctx.host, ctx.port))
+        .firewall_rule(&ctx.policy_name, "budget")
+        .message(format!(
+            "L7_REQUEST budget_exceeded {method} {}:{}{redacted_target} budget={}",
+            ctx.host, ctx.port, denial.budget
+        ))
+        .status_detail("budget_exceeded")
+        .build();
+    ocsf_emit!(event);
+    client
+        .write_all(&crate::usage::budget_exceeded_response(denial))
+        .await
+        .into_diagnostic()?;
+    client.flush().await.into_diagnostic()
 }
 
 /// Relay HTTP traffic with credential injection only (no L7 OPA evaluation).
@@ -3222,6 +3393,14 @@ where
                 ))
                 .build();
             ocsf_emit!(event);
+        }
+
+        // No L7 rules apply, so the request is charged to the L4 policies.
+        if let Some(usage) = ctx.usage.as_ref()
+            && let Err(denial) = usage.admit_request(&[], "", &[])
+        {
+            send_budget_denial(client, ctx, &req.action, &redacted_target, &denial).await?;
+            return Ok(());
         }
 
         let request_id = uuid::Uuid::new_v4().to_string();
@@ -4607,6 +4786,152 @@ network_policies:
             ..Default::default()
         };
         (config, tunnel_engine, ctx)
+    }
+
+    #[tokio::test]
+    async fn l7_rest_relay_charges_requests_and_denies_over_budget() {
+        const RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+        let data = r#"
+version: 1
+network_policies:
+  api:
+    name: api
+    endpoints:
+      - host: api.example.test
+        port: 8080
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow:
+              method: GET
+              path: "/v1/**"
+    binaries:
+      - { path: /usr/bin/curl }
+network_budgets:
+  api-requests:
+    policies: [api]
+    requests_per_minute: 2
+    on_exceed: deny
+"#;
+        let engine = OpaEngine::from_strings(TEST_POLICY, data).unwrap();
+        let input = NetworkInput {
+            host: "api.example.test".into(),
+            port: 8080,
+            binary_path: PathBuf::from("/usr/bin/curl"),
+            binary_sha256: "sha-curl".into(),
+            ancestors: vec![],
+            cmdline_paths: vec![],
+        };
+        let (endpoint_config, generation) = engine
+            .query_endpoint_config_with_generation(&input)
+            .unwrap();
+        let config = crate::l7::parse_l7_config(&endpoint_config.unwrap()).unwrap();
+        let tunnel_engine = engine.clone_engine_for_tunnel(generation).unwrap();
+        let usage = crate::usage::ConnectionUsage::admit_connection(
+            engine.usage(),
+            crate::usage::ConnectionMeta {
+                host: "api.example.test".into(),
+                port: 8080,
+                binary_path: "/usr/bin/curl".into(),
+                binary_sha256: "sha-curl".into(),
+                reported_policy: "api".into(),
+                l4_policies: vec!["api".into()],
+                endpoint_id: "api#0".into(),
+                started: std::time::Instant::now(),
+            },
+            false,
+        )
+        .unwrap();
+        let ctx = L7EvalContext {
+            host: "api.example.test".into(),
+            port: 8080,
+            request_default_port: Some(8080),
+            policy_name: "api".into(),
+            binary_path: "/usr/bin/curl".into(),
+            usage: Some(usage.clone()),
+            ..Default::default()
+        };
+        let (mut app, mut relay_client) = tokio::io::duplex(8192);
+        let (relay_upstream, mut upstream) = tokio::io::duplex(8192);
+        let mut counted_upstream = crate::usage::CountingStream::new(relay_upstream, usage.cell());
+        let relay = tokio::spawn(async move {
+            relay_with_inspection(
+                &config,
+                tunnel_engine,
+                &mut relay_client,
+                &mut counted_upstream,
+                &ctx,
+            )
+            .await
+        });
+
+        for _ in 0..2 {
+            app.write_all(b"GET /v1/items HTTP/1.1\r\nHost: api.example.test\r\n\r\n")
+                .await
+                .unwrap();
+            let mut request = [0u8; 512];
+            let n = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                upstream.read(&mut request),
+            )
+            .await
+            .expect("request should reach upstream")
+            .unwrap();
+            assert!(String::from_utf8_lossy(&request[..n]).starts_with("GET /v1/items"));
+            upstream.write_all(RESPONSE).await.unwrap();
+            let mut response = vec![0u8; RESPONSE.len()];
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                app.read_exact(&mut response),
+            )
+            .await
+            .expect("response should reach client")
+            .unwrap();
+        }
+
+        app.write_all(b"GET /v1/items HTTP/1.1\r\nHost: api.example.test\r\n\r\n")
+            .await
+            .unwrap();
+        let mut denied = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            app.read_to_end(&mut denied),
+        )
+        .await
+        .expect("429 should reach client")
+        .unwrap();
+        let denied = String::from_utf8_lossy(&denied);
+        assert!(
+            denied.starts_with("HTTP/1.1 429 Too Many Requests"),
+            "{denied}"
+        );
+        assert!(denied.contains("Retry-After: "));
+        assert!(denied.contains(r#""error":"budget_exceeded""#));
+        assert!(denied.contains(r#""budget":"api-requests""#));
+        tokio::time::timeout(std::time::Duration::from_secs(1), relay)
+            .await
+            .expect("relay should finish")
+            .unwrap()
+            .unwrap();
+
+        let snapshot = engine.usage().drain_window();
+        let summary = snapshot
+            .summaries
+            .iter()
+            .find(|summary| summary.requests > 0)
+            .expect("request summary");
+        assert_eq!(summary.requests, 2);
+        assert_eq!(summary.budget_denials, 1);
+        assert_eq!(summary.responses.status_2xx, 2);
+        assert_eq!(summary.bytes_in, 2 * RESPONSE.len() as u64);
+        assert!(summary.bytes_out > 0);
+        assert_eq!(summary.rule_hits.len(), 1);
+        assert!(
+            summary.rule_hits[0].0.starts_with("rule:v1:"),
+            "{:?}",
+            summary.rule_hits
+        );
+        assert_eq!(summary.rule_hits[0].1, 2);
     }
 
     fn mcp_test_relay_context() -> (L7EndpointConfig, TunnelPolicyEngine, L7EvalContext) {

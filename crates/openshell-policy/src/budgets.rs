@@ -70,8 +70,8 @@ pub fn from_proto(budgets: &HashMap<String, NetworkBudget>) -> BTreeMap<String, 
         .collect()
 }
 
-pub fn monitoring_into_proto(definition: Option<UsageMonitoringDef>) -> Option<UsageMonitoring> {
-    definition.map(|monitoring| UsageMonitoring {
+pub fn monitoring_into_proto(monitoring: UsageMonitoringDef) -> UsageMonitoring {
+    UsageMonitoring {
         novelty: monitoring.novelty.map(|novelty| UsageNovelty {
             learning_period: novelty
                 .learning_period_seconds
@@ -86,11 +86,11 @@ pub fn monitoring_into_proto(definition: Option<UsageMonitoringDef>) -> Option<U
             min_requests: drift.min_requests,
             min_bytes: drift.min_bytes,
         }),
-    })
+    }
 }
 
-pub fn monitoring_from_proto(monitoring: Option<&UsageMonitoring>) -> Option<UsageMonitoringDef> {
-    monitoring.map(|monitoring| UsageMonitoringDef {
+pub fn monitoring_from_proto(monitoring: &UsageMonitoring) -> UsageMonitoringDef {
+    UsageMonitoringDef {
         novelty: monitoring.novelty.as_ref().map(|novelty| UsageNoveltyDef {
             learning_period_seconds: novelty
                 .learning_period
@@ -103,7 +103,7 @@ pub fn monitoring_from_proto(monitoring: Option<&UsageMonitoring>) -> Option<Usa
             min_requests: drift.min_requests,
             min_bytes: drift.min_bytes,
         }),
-    })
+    }
 }
 
 pub fn validate(policy: &SandboxPolicy) -> Vec<PolicyViolation> {

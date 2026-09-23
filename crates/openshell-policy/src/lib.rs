@@ -505,7 +505,7 @@ fn to_proto(raw: PolicyFile) -> Result<SandboxPolicy> {
         .into_diagnostic()
         .wrap_err("failed to convert network middleware config")?;
     let network_budgets = budgets::into_proto(raw.network_budgets);
-    let usage_monitoring = budgets::monitoring_into_proto(raw.usage_monitoring);
+    let usage_monitoring = raw.usage_monitoring.map(budgets::monitoring_into_proto);
 
     let network_policies = raw
         .network_policies
@@ -802,7 +802,10 @@ fn from_proto(policy: &SandboxPolicy) -> Result<PolicyFile> {
 
     let network_middlewares = middleware::from_proto(&policy.network_middlewares);
     let network_budgets = budgets::from_proto(&policy.network_budgets);
-    let usage_monitoring = budgets::monitoring_from_proto(policy.usage_monitoring.as_ref());
+    let usage_monitoring = policy
+        .usage_monitoring
+        .as_ref()
+        .map(budgets::monitoring_from_proto);
 
     Ok(PolicyFile {
         // Proto3 scalar fields do not preserve presence. Treat zero as an
