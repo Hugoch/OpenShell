@@ -991,9 +991,12 @@ pub async fn sandbox_create(
                     }
                 }
             }
-            Some(openshell_core::proto::sandbox_stream_event::Payload::DraftPolicyUpdate(_))
+            Some(
+                openshell_core::proto::sandbox_stream_event::Payload::DraftPolicyUpdate(_)
+                | openshell_core::proto::sandbox_stream_event::Payload::EgressUsage(_),
+            )
             | None => {
-                // Draft policy updates are handled in the draft panel, not during provisioning.
+                // Draft policy and usage updates are not part of provisioning output.
             }
         }
     }

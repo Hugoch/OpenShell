@@ -2500,7 +2500,7 @@ async fn persist_existing_policy_projection(
     Ok(sandbox_metadata_annotations(&updated))
 }
 
-async fn resolve_sandbox_by_name_for_principal(
+pub(super) async fn resolve_sandbox_by_name_for_principal(
     store: &Store,
     workspace: &str,
     principal: &Principal,
@@ -14503,7 +14503,7 @@ mod tests {
             chunks.push(chunk);
         }
 
-        let approved = handle_approve_all_draft_chunks(
+        let approved = Box::pin(handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
                 sandbox: sandbox_name.to_string(),
@@ -14519,7 +14519,7 @@ mod tests {
                     .collect(),
                 ..Default::default()
             })),
-        )
+        ))
         .await
         .unwrap()
         .into_inner();
@@ -14639,7 +14639,7 @@ mod tests {
         .map(Option::unwrap)
         .collect::<Vec<_>>();
 
-        let approved = handle_approve_all_draft_chunks(
+        let approved = Box::pin(handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
                 sandbox: sandbox_name.to_string(),
@@ -14655,7 +14655,7 @@ mod tests {
                     .collect(),
                 ..Default::default()
             })),
-        )
+        ))
         .await
         .unwrap()
         .into_inner();
@@ -14840,7 +14840,7 @@ mod tests {
                 .contains("allowed_ips includes private/internal range '10.0.0.0/8'.")
         );
 
-        let skipped = handle_approve_all_draft_chunks(
+        let skipped = Box::pin(handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
                 request_id: String::new(),
@@ -14854,7 +14854,7 @@ mod tests {
                     review_token: chunk.review_token.clone(),
                 }],
             })),
-        )
+        ))
         .await
         .unwrap()
         .into_inner();
@@ -14871,7 +14871,7 @@ mod tests {
             "pending"
         );
 
-        let approved = handle_approve_all_draft_chunks(
+        let approved = Box::pin(handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
                 request_id: String::new(),
@@ -14885,7 +14885,7 @@ mod tests {
                     review_token: chunk.review_token.clone(),
                 }],
             })),
-        )
+        ))
         .await
         .unwrap()
         .into_inner();
@@ -14996,7 +14996,7 @@ mod tests {
                 .contains("allowed_ips includes private/internal range '10.0.0.0/8'.")
         );
 
-        let skipped = handle_approve_all_draft_chunks(
+        let skipped = Box::pin(handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
                 sandbox: sandbox_name.to_string(),
@@ -15006,7 +15006,7 @@ mod tests {
                 include_security_flagged: false,
                 ..Default::default()
             })),
-        )
+        ))
         .await
         .unwrap()
         .into_inner();
@@ -15063,7 +15063,7 @@ mod tests {
             .await
             .unwrap();
 
-        let skipped = handle_approve_all_draft_chunks(
+        let skipped = Box::pin(handle_approve_all_draft_chunks(
             &state,
             with_user(Request::new(ApproveAllDraftChunksRequest {
                 sandbox: sandbox_name.to_string(),
@@ -15073,7 +15073,7 @@ mod tests {
                 include_security_flagged: false,
                 ..Default::default()
             })),
-        )
+        ))
         .await
         .unwrap()
         .into_inner();
@@ -22542,7 +22542,7 @@ mod tests {
             err.code()
         );
 
-        let err = handle_approve_all_draft_chunks(
+        let err = Box::pin(handle_approve_all_draft_chunks(
             &state,
             non_member_request(ApproveAllDraftChunksRequest {
                 sandbox: ("any").to_string(),
@@ -22551,7 +22551,7 @@ mod tests {
                 )),
                 ..Default::default()
             }),
-        )
+        ))
         .await
         .unwrap_err();
         assert_eq!(

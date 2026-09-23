@@ -257,6 +257,20 @@ impl OpenShell for TestOpenShell {
         Ok(Response::new(proto::ReportEndpointStatusResponse {}))
     }
 
+    async fn report_egress_usage(
+        &self,
+        _request: tonic::Request<proto::ReportEgressUsageRequest>,
+    ) -> Result<Response<proto::ReportEgressUsageResponse>, Status> {
+        Ok(Response::new(proto::ReportEgressUsageResponse {}))
+    }
+
+    async fn get_egress_usage(
+        &self,
+        _request: tonic::Request<proto::GetEgressUsageRequest>,
+    ) -> Result<Response<proto::GetEgressUsageResponse>, Status> {
+        Ok(Response::new(proto::GetEgressUsageResponse::default()))
+    }
+
     async fn begin_rootfs_tar_staging(
         &self,
         _request: tonic::Request<proto::BeginRootfsTarStagingRequest>,

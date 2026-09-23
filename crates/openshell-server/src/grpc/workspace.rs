@@ -400,6 +400,10 @@ pub(super) async fn handle_delete_workspace(
         (POLICY_OBJECT_TYPE, "sandbox policy"),
         (DRAFT_CHUNK_OBJECT_TYPE, "draft policy chunk"),
         (
+            super::egress_usage::EGRESS_USAGE_OBJECT_TYPE,
+            "egress usage state",
+        ),
+        (
             StoredProviderCredentialRefreshState::object_type(),
             "credential refresh state",
         ),

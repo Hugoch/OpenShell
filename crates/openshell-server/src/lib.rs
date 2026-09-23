@@ -283,6 +283,9 @@ pub struct ServerState {
     /// In-memory anonymous telemetry accounting for active sandbox sessions.
     pub(crate) telemetry: telemetry::TelemetryState,
 
+    /// Recent egress usage windows and findings per sandbox.
+    pub egress_usage: grpc::egress_usage::EgressUsageStore,
+
     /// Active SSH tunnel connection counts per session token.
     pub ssh_connections_by_token: Mutex<HashMap<String, u32>>,
 
@@ -439,6 +442,7 @@ impl ServerState {
             sandbox_watch_bus,
             tracing_log_bus,
             telemetry: telemetry::TelemetryState::new(),
+            egress_usage: grpc::egress_usage::EgressUsageStore::default(),
             ssh_connections_by_token: Mutex::new(HashMap::new()),
             ssh_connections_by_sandbox: Mutex::new(HashMap::new()),
             settings_mutex: tokio::sync::Mutex::new(()),

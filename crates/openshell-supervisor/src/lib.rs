@@ -20,6 +20,7 @@ mod denial_aggregator;
 mod endpoint_status;
 mod mechanistic_mapper;
 mod provider_readiness;
+mod usage_reporter;
 
 use miette::{IntoDiagnostic, Result, WrapErr};
 use std::future::Future;
@@ -514,6 +515,15 @@ pub async fn run_network_proxy(
         None,
     )
     .await?;
+
+    if let Some(engine) = opa_engine.as_ref() {
+        tokio::spawn(usage_reporter::run_local_windows(
+            engine.usage().clone(),
+            usage_reporter::window_from_env(
+                std::env::var("OPENSHELL_USAGE_WINDOW_SECS").ok().as_deref(),
+            ),
+        ));
+    }
 
     if let Some((ca_certificate, trust_bundle)) = networking.ca_file_paths.as_ref() {
         info!(
@@ -1131,6 +1141,24 @@ pub async fn run_sandbox(
             None
         };
         let instance_id = boundary_access.instance_id().to_string();
+        if let (Some(engine), Some(endpoint)) = (opa_engine.as_ref(), openshell_endpoint.as_ref()) {
+            tokio::spawn(
+                usage_reporter::UsageReporter {
+                    endpoint: endpoint.clone(),
+                    sandbox_name: sandbox_name_for_agg
+                        .clone()
+                        .or_else(|| sandbox_id.clone())
+                        .unwrap_or_default(),
+                    workspace: workspace_rx.clone(),
+                    supervisor_instance_id: instance_id.clone(),
+                    window: usage_reporter::window_from_env(
+                        std::env::var("OPENSHELL_USAGE_WINDOW_SECS").ok().as_deref(),
+                    ),
+                    usage: engine.usage().clone(),
+                }
+                .run(),
+            );
+        }
         let wait_agent = agent.clone();
         let shutdown_requested = wait_for_control_shutdown_signal();
         tokio::pin!(shutdown_requested);

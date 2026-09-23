@@ -494,6 +494,14 @@ service OpenShell {
     };
   }
 
+  // Report one window of egress usage summaries and findings.
+  rpc ReportEgressUsage(ReportEgressUsageRequest)
+      returns (ReportEgressUsageResponse) {
+    option (openshell.options.v1.authorization) = {
+      auth_mode: "sandbox"
+    };
+  }
+
   // Report installed provider state for the current ConnectSupervisor session.
   // Replacing or losing that session invalidates its observations.
   rpc ReportProviderReadiness(ReportProviderReadinessRequest)
@@ -523,6 +531,15 @@ service OpenShell {
       returns (ExchangeProviderSubjectTokenResponse) {
     option (openshell.options.v1.authorization) = {
       auth_mode: "sandbox"
+    };
+  }
+
+  // Fetch recent egress usage windows and findings of one sandbox.
+  rpc GetEgressUsage(GetEgressUsageRequest) returns (GetEgressUsageResponse) {
+    option (openshell.options.v1.authorization) = {
+      auth_mode: "bearer"
+      scope: "sandbox:read"
+      workspace_role: "user"
     };
   }
 
@@ -2052,6 +2069,8 @@ message SandboxStreamEvent {
     SandboxStreamWarning warning = 4;
     // Draft policy update notification.
     DraftPolicyUpdate draft_policy_update = 5;
+    // New egress usage window or findings.
+    EgressUsageUpdate egress_usage = 7;
   }
   // Opaque position in this sandbox's cursor space, shared across the resumable
   // log and platform event sources. Empty for non-resumable events (status
@@ -3688,6 +3707,129 @@ message ReportEndpointStatusRequest {
   // are allowed when an inventory reset supersedes a frozen snapshot. Retrying
   // a report preserves its complete body and sequence for idempotent acknowledgement.
   uint64 report_sequence = 7;
+}
+
+// One window of egress usage from a sandbox supervisor.
+message ReportEgressUsageRequest {
+  // Workspace scope. Only a named workspace selection is accepted.
+  openshell.datamodel.v1.WorkspaceSelector workspace_scope = 1;
+  // Sandbox name. The authenticated sandbox principal remains authoritative.
+  string name = 2;
+  // Ephemeral supervisor instance ID. Stable for the supervisor process
+  // lifetime, across gateway reconnects.
+  string supervisor_instance_id = 3;
+  // Monotonic window counter within one supervisor instance. The gateway adds
+  // a report only when its sequence is higher than the last accepted one.
+  uint64 window_sequence = 4;
+  google.protobuf.Timestamp window_start = 5;
+  google.protobuf.Duration window_duration = 6;
+  repeated EgressUsageSummary summaries = 7;
+  repeated EgressUsageFinding findings = 8;
+  // Reports dropped because the supervisor outbox was full.
+  uint64 dropped_windows = 9;
+  // Findings not included because the report reached its finding bound.
+  uint64 dropped_findings = 10;
+}
+
+// Acknowledgement of an egress usage report, including a repeated report.
+message ReportEgressUsageResponse {}
+
+// Counters of one usage key over one window. Carries no request paths,
+// query strings, headers, or bodies.
+message EgressUsageSummary {
+  // Reported policy key: the smallest key in the authorizing policies.
+  string policy_key = 1;
+  string endpoint_id = 2;
+  // Observed host. Differs from the endpoint host for glob endpoints.
+  string host = 3;
+  uint32 port = 4;
+  // Empty when process identity is unavailable.
+  string binary_path = 5;
+  string binary_sha256 = 6;
+  uint64 config_revision = 7;
+  string policy_hash = 8;
+  uint64 connections = 9;
+  uint64 requests = 10;
+  // Bytes sent by the sandbox.
+  uint64 bytes_out = 11;
+  // Bytes received by the sandbox.
+  uint64 bytes_in = 12;
+  EgressResponseCounts responses = 13;
+  repeated EgressRuleHit rule_hits = 14;
+  uint64 budget_denials = 15;
+  // True when this entry aggregates keys that did not fit the usage table.
+  bool overflow = 16;
+}
+
+// Upstream response status classes. Locally generated budget denials are
+// counted in `budget_denials`, not here.
+message EgressResponseCounts {
+  uint64 status_2xx = 1;
+  uint64 status_3xx = 2;
+  uint64 status_4xx = 3;
+  uint64 status_5xx = 4;
+  uint64 status_429 = 5;
+}
+
+// Requests admitted by one L7 rule.
+message EgressRuleHit {
+  string rule_id = 1;
+  uint64 count = 2;
+}
+
+// Severity of an egress usage finding.
+enum EgressFindingSeverity {
+  EGRESS_FINDING_SEVERITY_UNSPECIFIED = 0;
+  EGRESS_FINDING_SEVERITY_LOW = 1;
+  EGRESS_FINDING_SEVERITY_MEDIUM = 2;
+}
+
+// One egress usage finding: budget, novelty, overflow, or drift.
+message EgressUsageFinding {
+  // For example `egress.budget_exceeded`, `egress.new_host`, `egress.drift`.
+  string finding_type = 1;
+  EgressFindingSeverity severity = 2;
+  string policy_key = 3;
+  string endpoint_id = 4;
+  string host = 5;
+  uint32 port = 6;
+  string binary_sha256 = 7;
+  // Budget name for budget findings.
+  string budget = 8;
+  // Counter name for budget and drift findings.
+  string counter = 9;
+  // `deny` or `alert` for budget findings.
+  string action = 10;
+  string detail = 11;
+  google.protobuf.Timestamp observed_time = 12;
+}
+
+// Get recent egress usage of one sandbox.
+message GetEgressUsageRequest {
+  // Workspace scope. Only a named workspace selection is accepted.
+  openshell.datamodel.v1.WorkspaceSelector workspace_scope = 1;
+  // Canonical sandbox name.
+  string sandbox = 2;
+}
+
+// Recent egress usage windows and findings, oldest first.
+message GetEgressUsageResponse {
+  repeated EgressUsageWindow windows = 1;
+  repeated EgressUsageFinding findings = 2;
+}
+
+// One accepted usage window.
+message EgressUsageWindow {
+  google.protobuf.Timestamp window_start = 1;
+  google.protobuf.Duration window_duration = 2;
+  repeated EgressUsageSummary summaries = 3;
+  uint64 dropped_windows = 4;
+}
+
+// Egress usage stream event.
+message EgressUsageUpdate {
+  EgressUsageWindow window = 1;
+  repeated EgressUsageFinding findings = 2;
 }
 
 // Empty acknowledgement for a persisted endpoint status report.
