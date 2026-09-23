@@ -979,7 +979,7 @@ impl PodmanComputeDriver {
                         &identity,
                         child_env,
                         &launch_authentication,
-                        crate::isolation::BootstrapFenceWireFormat::OuterFence,
+                        openshell_sandbox_backend::boundary_protocol::FenceWireFormat::OuterFence,
                     )?;
                     self.client
                         .copy_to_container(
