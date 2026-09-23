@@ -682,10 +682,11 @@ failures without an observed network endpoint, use Base Event.
 
 ## Policy Proposals
 
-When an L4 CONNECT is denied, the proxy emits a `DenialEvent`. The denial
-aggregator batches these events and flushes summaries to the gateway every 10
-seconds (configurable via `OPENSHELL_DENIAL_FLUSH_INTERVAL_SECS`). The gateway
-runs them through the mechanistic mapper, which generates a pending
+When an L4 CONNECT or staged transparent TCP open is denied by policy, the
+proxy emits a `DenialEvent`. The denial aggregator batches these events every 10
+seconds (configurable via `OPENSHELL_DENIAL_FLUSH_INTERVAL_SECS`). The
+supervisor runs them through the mechanistic mapper and submits the summaries
+and proposals to the gateway, which stores a pending
 `NetworkPolicyRule` proposal visible under `openshell rule get --status pending`.
 
 L7 denials (HTTP 403 from method/path rules) are intentionally excluded from

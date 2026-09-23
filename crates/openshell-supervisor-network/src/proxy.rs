@@ -430,6 +430,7 @@ impl ProxyHandle {
                                     let tx = preauthorized_tx.clone();
                                     let dns_store = policy_dns_store.clone();
                                     let opa = opa_engine.clone();
+                                    let dtx = denial_tx.clone();
                                     let backend_gateway = *backend_host_gateway;
                                     let trusted_gateway = *trusted_host_gateway;
                                     tokio::spawn(async move {
@@ -437,6 +438,7 @@ impl ProxyHandle {
                                             connection,
                                             dns_store.as_ref(),
                                             &opa,
+                                            dtx.as_ref(),
                                             backend_gateway,
                                             trusted_gateway,
                                         )
@@ -582,6 +584,7 @@ async fn preauthorize_transparent_open(
     connection: PendingTcpOpen,
     policy_dns_store: Option<&Arc<ResolvedEndpointStore>>,
     opa_engine: &OpaEngine,
+    denial_tx: Option<&mpsc::UnboundedSender<DenialEvent>>,
     backend_host_gateway: Option<IpAddr>,
     trusted_host_gateway: Option<IpAddr>,
 ) -> Option<AcceptedProxyConnection> {
@@ -619,6 +622,18 @@ async fn preauthorize_transparent_open(
     );
     if let NetworkAction::Deny { reason } = &decision.action {
         warn!(%destination, %reason, "Denied staged transparent connection");
+        emit_denial_simple(
+            denial_tx,
+            &host,
+            destination.port(),
+            &decision
+                .binary
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |path| path.display().to_string()),
+            &decision,
+            reason,
+            "connect",
+        );
         emit_staged_transparent_denial(
             destination,
             &binary_identity,
@@ -6652,7 +6667,7 @@ process:
 
         let (allowed, allowed_result) = pending("203.0.113.7:443");
         assert!(
-            preauthorize_transparent_open(allowed, None, &engine, None, None)
+            preauthorize_transparent_open(allowed, None, &engine, None, None, None)
                 .await
                 .is_some()
         );
@@ -6660,7 +6675,7 @@ process:
 
         let (unsafe_destination, unsafe_result) = pending("169.254.169.254:80");
         assert!(
-            preauthorize_transparent_open(unsafe_destination, None, &engine, None, None)
+            preauthorize_transparent_open(unsafe_destination, None, &engine, None, None, None)
                 .await
                 .is_none()
         );
@@ -6670,8 +6685,9 @@ process:
         );
 
         let (denied, denied_result) = pending("203.0.113.8:443");
+        let (denial_tx, mut denial_rx) = mpsc::unbounded_channel();
         assert!(
-            preauthorize_transparent_open(denied, None, &engine, None, None)
+            preauthorize_transparent_open(denied, None, &engine, Some(&denial_tx), None, None)
                 .await
                 .is_none()
         );
@@ -6679,6 +6695,12 @@ process:
             denied_result.await.unwrap(),
             TcpOpenDecision::Denied(TcpOpenDenial::PolicyDenied)
         );
+        let denial = denial_rx
+            .try_recv()
+            .expect("transparent denial is reported");
+        assert_eq!(denial.host, "203.0.113.8");
+        assert_eq!(denial.port, 443);
+        assert_eq!(denial.denial_stage, "connect");
     }
 
     struct FailedMediationSource;

@@ -112,6 +112,8 @@ the managed Podman driver path, Kubernetes database scenarios, and Docker-hosted
 SDK and policy-advisor E2E checks. The managed Podman test gateway receives the
 same run-specific sandbox runtime image as the standalone driver so each round
 uses the image built from its source commit.
+Policy-advisor E2E checks build a dedicated Docker workload with curl and cargo
+at the paths their denial scenarios inspect.
 
 Docker E2E tool-dependent workloads use a dedicated Noble-based fixture,
 separate from the product's minimal default image. The fixture supplies the

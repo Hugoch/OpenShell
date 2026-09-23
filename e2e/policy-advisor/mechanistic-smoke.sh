@@ -31,7 +31,7 @@ RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 SANDBOX="${SANDBOX:-ms-${RUN_ID}}"
 KEEP_SANDBOX="${KEEP_SANDBOX:-0}"
 # Allow override so CI can set a shorter interval via OPENSHELL_DENIAL_FLUSH_INTERVAL_SECS.
-FLUSH_WAIT="${FLUSH_WAIT:-15}"
+FLUSH_WAIT="${FLUSH_WAIT:-45}"
 
 BOLD='\033[1m'
 CYAN='\033[36m'
@@ -95,10 +95,13 @@ create_sandbox() {
 
 trigger_l4_deny() {
     step "Triggering L4 CONNECT deny from inside sandbox"
-    # blocked.invalid is guaranteed unroutable and not in any policy.
-    ssh -F "$SSH_CONFIG" "$SSH_HOST" \
-        "curl -sf --max-time 5 https://blocked.invalid/ || true" >/dev/null 2>&1 || true
-    ok "curl attempted (deny expected)"
+    # Use a public IP so DNS cannot fail before the CONNECT denial is recorded.
+    local output
+    if output="$(ssh -F "$SSH_CONFIG" "$SSH_HOST" \
+        "/usr/bin/curl -kfsS --max-time 10 https://1.1.1.1/" 2>&1)"; then
+        fail "curl unexpectedly reached 1.1.1.1: ${output}"
+    fi
+    ok "curl denied: ${output}"
 }
 
 assert_pending_chunk() {
@@ -107,15 +110,15 @@ assert_pending_chunk() {
     local _i
     for _i in $(seq 1 "$FLUSH_WAIT"); do
         output="$("$OPENSHELL_BIN" rule get "$SANDBOX" --status pending 2>&1)"
-        if printf '%s\n' "$output" | grep -qi "blocked.invalid"; then
+        if printf '%s\n' "$output" | grep -qi "1.1.1.1"; then
             printf '%s\n' "$output" | sed 's/^/  /'
-            ok "pending mechanistic chunk present for blocked.invalid"
+            ok "pending mechanistic chunk present for 1.1.1.1"
             return
         fi
         sleep 1
     done
     printf '%s\n' "$output" | sed 's/^/  /'
-    fail "no pending chunk for blocked.invalid after ${FLUSH_WAIT}s"
+    fail "no pending chunk for 1.1.1.1 after ${FLUSH_WAIT}s"
 }
 
 main() {

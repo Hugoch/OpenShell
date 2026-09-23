@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+FROM nvcr.io/nvidia/base/ubuntu:24.04
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates cargo curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && if getent passwd ubuntu >/dev/null; then userdel ubuntu; fi \
+    && if getent group ubuntu >/dev/null; then groupdel ubuntu; fi \
+    && groupadd --gid 1000 sandbox \
+    && useradd --uid 1000 --gid sandbox --create-home --shell /bin/bash sandbox
+
+USER sandbox:sandbox
+WORKDIR /sandbox

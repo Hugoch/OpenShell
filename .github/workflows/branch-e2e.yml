@@ -318,8 +318,8 @@ jobs:
         [
           {"suite":"typescript-exec","cmd":"mise run e2e:sdk:ts:exec","apt_packages":"","python_proto":false,"mcp":false},
           {"suite":"gateway-no-drivers","cmd":"mise run --no-deps --skip-deps e2e:gateway:no-compute-drivers","apt_packages":"","python_proto":false,"mcp":false},
-          {"suite":"mechanistic-smoke","cmd":"mise run --no-deps --skip-deps e2e:mechanistic-smoke","apt_packages":"openssh-client","python_proto":false,"mcp":false},
-          {"suite":"mechanistic-existing-endpoint","cmd":"mise run --no-deps --skip-deps e2e:mechanistic-existing-endpoint","apt_packages":"openssh-client","python_proto":false,"mcp":false}
+          {"suite":"mechanistic-smoke","cmd":"mise run e2e:mechanistic-smoke","apt_packages":"openssh-client","python_proto":false,"mcp":false},
+          {"suite":"mechanistic-existing-endpoint","cmd":"mise run e2e:mechanistic-existing-endpoint","apt_packages":"openssh-client","python_proto":false,"mcp":false}
         ]
 
   vm-e2e:
