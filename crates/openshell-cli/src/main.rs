@@ -1577,6 +1577,18 @@ enum SandboxCommands {
         output: OutputFormat,
     },
 
+    /// Show recent egress usage and findings of a sandbox.
+    #[command(help_template = LEAF_HELP_TEMPLATE, next_help_heading = "FLAGS")]
+    Usage {
+        /// Sandbox name (defaults to last-used sandbox).
+        #[arg(add = ArgValueCompleter::new(completers::complete_sandbox_names))]
+        name: Option<String>,
+
+        /// Output format.
+        #[arg(short = 'o', long = "output", value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
+    },
+
     /// List sandboxes.
     #[command(help_template = LEAF_HELP_TEMPLATE, next_help_heading = "FLAGS")]
     List {
@@ -3460,6 +3472,17 @@ async fn run_async() -> Result<()> {
                                 endpoint,
                                 &name,
                                 policy_only,
+                                output.as_str(),
+                                &cli.workspace,
+                                &tls,
+                            )
+                            .await?;
+                        }
+                        SandboxCommands::Usage { name, output } => {
+                            let name = resolve_sandbox_name(name, &ctx.name, &cli.workspace)?;
+                            run::sandbox_usage(
+                                endpoint,
+                                &name,
                                 output.as_str(),
                                 &cli.workspace,
                                 &tls,

@@ -1587,6 +1587,17 @@ pub async fn sandbox_get(
     Ok(())
 }
 
+/// Print recent egress usage and findings of one sandbox.
+pub async fn sandbox_usage(
+    server: &str,
+    name: &str,
+    output: &str,
+    workspace: &str,
+    tls: &TlsOptions,
+) -> Result<()> {
+    crate::commands::usage::sandbox_usage(server, name, output, workspace, tls).await
+}
+
 /// Fetch a sandbox by name.
 ///
 /// Policy always comes from [`GetSandboxConfig`] (effective active policy, sandbox
