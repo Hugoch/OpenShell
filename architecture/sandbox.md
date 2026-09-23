@@ -33,6 +33,9 @@ The Podman runtime descriptor pins the supervisor's host-network gateway for
 reserved host aliases: loopback on native Podman, or the configured Podman
 Machine gateway. Policy DNS uses that driver-provided value instead of trusting
 container `/etc/hosts` contents.
+The host-networked Podman supervisor cannot use DNS aliases scoped to a
+separate Podman fixture network; host-backed fixtures use published ports and
+the pinned host alias.
 The sandbox probes HTTP/2 connection liveness every five seconds and closes
 connections that miss a ten-second acknowledgement deadline. Closing a
 connection freezes the owned workload process tree and cancels its stream

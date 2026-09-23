@@ -70,6 +70,9 @@ The runtime descriptor pins the host gateway used by policy DNS: native
 Podman uses the supervisor's host-network loopback, while Podman Machine uses
 the configured host gateway address. The reserved host alias is authorized
 against that pin rather than an untrusted `/etc/hosts` entry.
+Tests that run support containers publish their ports on the host and address
+them through this alias, since network-scoped Podman DNS aliases are unavailable
+to the host-networked supervisor.
 
 The channel contains the sandbox bootstrap and sandbox-side TLS identity only.
 Supervisor private keys and the runtime descriptor stay in the supervisor's private filesystem.

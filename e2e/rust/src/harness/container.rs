@@ -161,12 +161,12 @@ impl ContainerHttpServer {
         let engine = ContainerEngine::from_env()?;
         let host_port = find_free_port();
         let network = e2e_network_name();
-        // A host-networked Docker supervisor cannot use a Docker network's DNS
-        // aliases, but it can route directly to containers on the bridge. Use
-        // the fixture's bridge address instead of overloading the reserved
-        // host alias, which may point at the CI job container. Podman keeps the
-        // shared-network alias path.
-        let use_host_port = network.is_none();
+        // The Podman supervisor uses host networking and cannot resolve DNS
+        // aliases registered only on a fixture's Podman network. Publish the
+        // fixture on the host instead, using the driver's pinned host alias.
+        // A host-networked Docker supervisor can route directly to containers
+        // on its bridge; keep that path when a Docker network is available.
+        let use_host_port = network.is_none() || is_e2e_driver("podman");
         let mut host = if use_host_port {
             "host.openshell.internal".to_string()
         } else {
