@@ -118,6 +118,16 @@ be supplied by a gateway-global policy because it is applied at startup. When a
 global dynamic policy is active, effective-policy reads retain the UI block from
 the sandbox's creation policy.
 
+Live policy updates are also capability-negotiated. A driver that reports
+`supports_live_policy_updates = true` must apply every gateway mutation that can
+change an existing sandbox's effective dynamic policy. A driver that reports
+`false` causes the gateway to reject those mutations before persistence and to
+serialize sandbox creation with global policy and provider changes. Rejected
+mutations include direct replacement or merge, global policy changes while a
+sandbox exists, policy-advisor approval or undo, provider attach or detach, and
+updates to a provider profile used by a running sandbox. An omitted capability
+retains the legacy `true` behavior for compatibility with existing drivers.
+
 The gateway records driver identity and version from the startup capability
 response. Elevated gateway info reports that initialized driver snapshot instead
 of re-querying drivers on each request.
@@ -281,6 +291,19 @@ while queued does not leave a delete armed. After that commitment point, the
 owned task prevents cancellation from stranding a mutation. A gateway restart
 does not start a persisted `Deleting` operation. If the backend completed the
 delete, reconciliation removes the row; otherwise it can remain `Deleting`.
+
+The prune sweep retains a `Completed` sandbox and a settled `Error` sandbox
+(a crashed main process, or any other terminal failure not specifically about
+the compute resource itself) even when the driver reports it missing: both
+are audit records with no live resource to reclaim, and deleting one out from
+under a concurrent `GetSandbox`/`ListSandboxes`/`DeleteSandbox` caller would
+be a silent race, not a cleanup. An `Error` sandbox whose condition reports
+the compute resource itself as missing -- set either by startup recovery
+finding a previously-known sandbox already gone, or by this same sweep
+transitioning a `Stopping`/`Stopped`/`Starting` sandbox to `Error` on an
+earlier pass -- is not retained this way: it is exactly the orphaned resource
+this sweep exists to reclaim, so it keeps flowing through the normal
+delete-and-cleanup path above.
 
 ## Runtime Summary
 

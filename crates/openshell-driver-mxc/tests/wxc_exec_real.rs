@@ -659,58 +659,6 @@ fn probe_processcontainer(wxc: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-/// Probe the released binary's live `network.proxy` support separately from
-/// ordinary `ProcessContainer` support. Some builds accept the proxy JSON during
-/// `--dry-run` but return `ERROR_INVALID_PARAMETER` from the live launcher.
-fn probe_processcontainer_proxy(wxc: &PathBuf) -> Result<(), String> {
-    let (_tempdir, temp_path) = temp_fixture();
-    let proxy_listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .map_err(|error| format!("failed to reserve proxy probe port: {error}"))?;
-    let proxy_port = proxy_listener
-        .local_addr()
-        .map_err(|error| format!("failed to read proxy probe port: {error}"))?
-        .port();
-    let config = serde_json::json!({
-        "version": "0.6.0-alpha",
-        "containerId": "probe-pc-proxy",
-        "containment": "processcontainer",
-        "process": {
-            "commandLine": "C:\\Windows\\System32\\cmd.exe /c exit 0",
-            "cwd": temp_path,
-            "timeout": 30_000,
-        },
-        "filesystem": {
-            "readwritePaths": [temp_path],
-        },
-        "processContainer": {
-            "leastPrivilege": false,
-        },
-        "network": {
-            "defaultPolicy": "block",
-            "proxy": { "localhost": proxy_port },
-        },
-    });
-
-    let json = serde_json::to_string(&config).unwrap();
-    let b64 = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
-    let output = Command::new(wxc)
-        .arg("--config-base64")
-        .arg(&b64)
-        .output()
-        .map_err(|error| format!("wxc-exec proxy probe failed to spawn: {error}"))?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    Err(format!(
-        "live network.proxy probe returned exit {}: stdout={} stderr={}",
-        output.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    ))
-}
-
 /// Probe the `isolation_session` backend.
 ///
 /// Attempts a `provision` phase. Returns `Ok(sandbox_id)` when live, or
@@ -1013,11 +961,6 @@ async fn pc_https_egress_reads_injected_ca_bundle() {
         eprintln!("SKIP: processcontainer not live: {reason}");
         return;
     }
-    if let Err(reason) = probe_processcontainer_proxy(&wxc) {
-        eprintln!("SKIP: processcontainer network.proxy not live: {reason}");
-        return;
-    }
-
     let system_root = std::env::var("SYSTEMROOT").expect("SYSTEMROOT must be set on Windows");
     let cmd = PathBuf::from(&system_root).join("System32").join("cmd.exe");
     let curl = PathBuf::from(system_root).join("System32").join("curl.exe");
@@ -1029,10 +972,14 @@ async fn pc_https_egress_reads_injected_ca_bundle() {
     let output_dir = tempfile::tempdir().expect("HTTPS output directory");
     let output_path = output_dir.path().join("example.html");
     let certificate_path = output_dir.path().join("peer-certificate.txt");
+    let post_response_path = output_dir.path().join("post-response.json");
+    let post_status_path = output_dir.path().join("post-status.txt");
     let diagnostic_path = output_dir.path().join("https-diagnostic.txt");
     let output_dir_string = output_dir.path().to_string_lossy().into_owned();
     let output_path_string = output_path.to_string_lossy().into_owned();
     let certificate_path_string = certificate_path.to_string_lossy().into_owned();
+    let post_response_path_string = post_response_path.to_string_lossy().into_owned();
+    let post_status_path_string = post_status_path.to_string_lossy().into_owned();
     let diagnostic_path_string = diagnostic_path.to_string_lossy().into_owned();
     let cmd_string = cmd.to_string_lossy().into_owned();
     // Schannel's revocation lookup targets are intentionally outside this
@@ -1046,8 +993,15 @@ async fn pc_https_egress_reads_injected_ca_bundle() {
          --cacert \"%CURL_CA_BUNDLE%\" \
          https://example.com/ --output \"{output_path_string}\" \
          --write-out \"%{{certs}}\" 1>\"{certificate_path_string}\" \
+         2>>\"{diagnostic_path_string}\" && \
+         \"{}\" --silent --show-error --ssl-no-revoke \
+         --cacert \"%CURL_CA_BUNDLE%\" --request POST \
+         --header \"Content-Type: application/json\" --data \"{{}}\" \
+         https://example.com/ --output \"{post_response_path_string}\" \
+         --write-out \"%{{http_code}}\" 1>\"{post_status_path_string}\" \
          2>>\"{diagnostic_path_string}\"",
-        curl.display()
+        curl.display(),
+        curl.display(),
     );
     let command = vec![
         cmd_string.clone(),
@@ -1156,6 +1110,184 @@ async fn pc_https_egress_reads_injected_ca_bundle() {
         peer_certificate.contains("OpenShell Sandbox CA"),
         "HTTPS response must use a certificate issued by the host proxy CA"
     );
+    let post_status = std::fs::read_to_string(post_status_path).expect("POST status output");
+    assert_eq!(
+        post_status.trim(),
+        "403",
+        "read-only policy must deny HTTPS POST"
+    );
+    let post_response =
+        std::fs::read_to_string(post_response_path).expect("POST denial response body");
+    assert!(
+        post_response.contains("policy_denied")
+            || post_response.contains("no matching L7 allow rule"),
+        "POST denial must come from the OpenShell L7 policy: {post_response}"
+    );
+}
+
+/// Prove that host-proxy binary policy follows the process that owns each TCP
+/// connection, rather than the sandbox entry command. This deliberately uses
+/// L4 CONNECT policy so the assertion is independent of TLS/L7 enforcement.
+#[tokio::test]
+#[ignore = "requires real wxc-exec and outbound HTTPS"]
+async fn pc_proxy_scopes_network_policy_to_socket_owner() {
+    let Some(wxc) = wxc_path() else {
+        eprintln!("SKIP: wxc-exec not found");
+        return;
+    };
+    if let Err(reason) = probe_processcontainer(&wxc) {
+        eprintln!("SKIP: processcontainer not live: {reason}");
+        return;
+    }
+
+    // QueryFullProcessImageNameW returns this Win32 spelling on the Windows
+    // test image. Keep the spelling exact here; path and case normalization
+    // are covered separately.
+    let cmd = PathBuf::from(r"C:\Windows\System32\cmd.exe");
+    let curl = PathBuf::from(r"C:\Windows\System32\curl.exe");
+    if !cmd.exists() || !curl.exists() {
+        eprintln!(
+            "SKIP: expected Windows binaries are absent (cmd={}, curl={})",
+            cmd.display(),
+            curl.display()
+        );
+        return;
+    }
+
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    run_proxy_binary_scope_case(&wxc, "pc-owner-allow-child", &cmd, &curl, &curl, true).await;
+    run_proxy_binary_scope_case(&wxc, "pc-owner-deny-child", &cmd, &curl, &cmd, false).await;
+}
+
+async fn run_proxy_binary_scope_case(
+    wxc: &Path,
+    sandbox_id: &str,
+    cmd: &Path,
+    curl: &Path,
+    allowed_binary: &Path,
+    expect_allowed: bool,
+) {
+    let output_dir = tempfile::tempdir().expect("proxy scope output directory");
+    let output_path = output_dir.path().join("example.html");
+    let diagnostic_path = output_dir.path().join("curl-diagnostic.txt");
+    let output_dir_string = output_dir.path().to_string_lossy().into_owned();
+    let command = vec![
+        cmd.to_string_lossy().into_owned(),
+        "/d".to_string(),
+        "/c".to_string(),
+        format!(
+            "echo proxy-scope 1>\"{}\" && \"{}\" --fail --silent --show-error --ssl-no-revoke --cacert \"%CURL_CA_BUNDLE%\" https://example.com/ --output \"{}\" 2>>\"{}\"",
+            diagnostic_path.display(),
+            curl.display(),
+            output_path.display(),
+            diagnostic_path.display()
+        ),
+    ];
+    let serde_json::Value::Object(driver_config) = serde_json::json!({
+        "command": command,
+        "cwd": output_dir_string,
+    }) else {
+        unreachable!();
+    };
+    let policy = SandboxPolicy {
+        version: 1,
+        filesystem: Some(FilesystemPolicy {
+            include_workdir: false,
+            read_only: Vec::new(),
+            read_write: vec![output_dir_string],
+        }),
+        network_policies: std::collections::HashMap::from([(
+            "https_example".to_string(),
+            NetworkPolicyRule {
+                name: "https-example".to_string(),
+                endpoints: vec![NetworkEndpoint {
+                    host: "example.com".to_string(),
+                    ports: vec![443],
+                    ..Default::default()
+                }],
+                binaries: vec![NetworkBinary {
+                    path: allowed_binary.to_string_lossy().into_owned(),
+                }],
+            },
+        )]),
+        ..Default::default()
+    };
+    let sandbox = DriverSandbox {
+        id: sandbox_id.to_string(),
+        name: sandbox_id.to_string(),
+        spec: Some(DriverSandboxSpec {
+            template: Some(DriverSandboxTemplate {
+                driver_config: Some(
+                    openshell_core::proto_struct::json_object_to_struct(driver_config)
+                        .expect("driver config"),
+                ),
+                ..Default::default()
+            }),
+            policy: Some(policy),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let backend = MxcComputeBackend::new(MxcComputeConfig {
+        wxc_exec_path: wxc.to_string_lossy().into_owned(),
+        egress_proxy: true,
+        egress_proxy_addr: "127.0.0.1:18080".to_string(),
+        ..Default::default()
+    });
+    backend
+        .create_sandbox(&sandbox)
+        .await
+        .expect("real proxy-scope sandbox create accepted");
+
+    let mut terminal_condition = None;
+    for _ in 0..600 {
+        if let Some(observed) = backend.get_sandbox(sandbox_id).await
+            && let Some(condition) = observed
+                .status
+                .and_then(|status| status.conditions.into_iter().find(|c| c.r#type == "Ready"))
+            && matches!(
+                condition.reason.as_str(),
+                "AgentCompleted" | "ExecFailed" | "ProvisionFailed"
+            )
+        {
+            terminal_condition = Some(condition);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let condition = terminal_condition.expect("proxy-scope sandbox should terminate");
+    let diagnostic = std::fs::read_to_string(&diagnostic_path)
+        .unwrap_or_else(|error| format!("failed to read curl diagnostic: {error}"));
+    backend
+        .delete_sandbox(sandbox_id, sandbox_id)
+        .await
+        .expect("delete completed proxy-scope sandbox");
+
+    if expect_allowed {
+        assert_eq!(
+            condition.reason, "AgentCompleted",
+            "declared child binary must be allowed: {}; diagnostic: {diagnostic}",
+            condition.message
+        );
+        assert!(
+            std::fs::metadata(&output_path).is_ok_and(|metadata| metadata.len() > 0),
+            "allowed curl response should be non-empty; diagnostic: {diagnostic}"
+        );
+    } else {
+        assert_eq!(
+            condition.reason, "ExecFailed",
+            "entry-command grant must not be inherited by curl: {}; diagnostic: {diagnostic}",
+            condition.message
+        );
+        assert!(
+            diagnostic.contains("403"),
+            "undeclared curl child should receive proxy 403; diagnostic: {diagnostic}"
+        );
+        assert!(
+            !output_path.exists(),
+            "denied curl child must not write an HTTPS response"
+        );
+    }
 }
 
 /// Write to a path OUTSIDE the granted dir; assert exit non-zero and file absent.

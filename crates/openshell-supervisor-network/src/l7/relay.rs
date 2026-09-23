@@ -371,6 +371,7 @@ fn build_credential_resolution_event(
 
 fn build_credential_endpoint_mismatch_finding(ctx: &L7EvalContext) -> openshell_ocsf::OcsfEvent {
     crate::l7::build_credential_endpoint_mismatch_finding(
+        openshell_ocsf::ctx::ctx(),
         &ctx.policy_name,
         &ctx.host,
         None,
@@ -2935,6 +2936,7 @@ fn evaluate_l7_request_once(
             "path": ctx.binary_path,
             "ancestors": ctx.ancestors,
             "cmdline_paths": ctx.cmdline_paths,
+            "match_paths": engine.binary_match_paths(),
         },
         "request": {
             "method": request.action,

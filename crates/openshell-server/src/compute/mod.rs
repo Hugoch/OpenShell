@@ -382,6 +382,9 @@ pub struct ComputeDriverInfoSnapshot {
     /// Whether this configured driver instance completely enforces the portable
     /// UI policy contract.
     pub supports_ui_policy: bool,
+    /// Whether this driver can apply policy changes after sandbox creation.
+    /// `None` preserves the behavior of older external drivers.
+    pub supports_live_policy_updates: Option<bool>,
 }
 
 /// Interval between store-vs-backend reconciliation sweeps.
@@ -743,6 +746,7 @@ impl ComputeRuntime {
             rootfs_tar_staging_dir: capabilities.rootfs_tar_staging_dir,
             rootfs_tar_max_bytes: capabilities.rootfs_tar_max_bytes,
             supports_ui_policy: capabilities.supports_ui_policy,
+            supports_live_policy_updates: capabilities.supports_live_policy_updates,
         };
         let default_image = capabilities.default_image;
         let gateway_listener_requirements = match driver
@@ -922,6 +926,15 @@ impl ComputeRuntime {
     #[must_use]
     pub fn supports_sandbox_authentication(&self) -> bool {
         self.driver_info.supports_sandbox_authentication
+    }
+
+    /// Whether operator-authored policy updates can reach an already-created
+    /// sandbox. Unspecified preserves compatibility with older drivers.
+    #[must_use]
+    pub(crate) fn supports_live_policy_updates(&self) -> bool {
+        self.driver_info
+            .supports_live_policy_updates
+            .unwrap_or(true)
     }
 
     pub(crate) async fn authenticate_sandbox(&self, credential: &str) -> Result<String, Status> {
@@ -3875,9 +3888,33 @@ impl ComputeRuntime {
 
         let sandbox = decode_sandbox_record(&current_record)?;
         let phase = SandboxPhase::try_from(sandbox.phase()).unwrap_or(SandboxPhase::Unknown);
-        if phase == SandboxPhase::Completed || is_failed_main_process_result(&sandbox) {
+        if phase == SandboxPhase::Completed
+            || (phase == SandboxPhase::Error && !is_missing_compute_resource_reason(&sandbox))
+            || is_failed_main_process_result(&sandbox)
+        {
             // A terminal canonical process may legitimately have removed its
             // transient compute object. Keep the durable command result.
+            //
+            // A settled Error record (crash detection, an explicit
+            // non-resource failure, etc.) is the same kind of terminal state
+            // with no live compute resource to reclaim -- deleting it outright
+            // instead of leaving it in place silently races a concurrent
+            // GetSandbox/ListSandboxes/DeleteSandbox caller. A driver whose
+            // registry never rehydrates after a restart (in-process-only
+            // state, e.g. MXC) reports every previously-known sandbox as
+            // "missing" on the very first sweep after startup, even ones
+            // already correctly marked Error by earlier crash detection, so
+            // this is reached far more than the "orphaned compute resource"
+            // case this pruning otherwise exists for.
+            //
+            // This must NOT exempt an Error record whose reason specifically
+            // says the compute resource itself is missing
+            // (`is_missing_compute_resource_reason`) -- those are exactly
+            // this sweep's intended target (see that function's doc comment),
+            // set either by startup recovery or by this same sweep transitioning
+            // Stopping/Stopped/Starting below. Exempting them too would leave
+            // orphaned names and gateway-owned records in place indefinitely
+            // and skip the idempotent driver cleanup for volumes/secrets.
             return Ok(());
         }
         if matches!(
@@ -4037,6 +4074,38 @@ fn is_failed_main_process_result(sandbox: &Sandbox) -> bool {
                         && condition.status.eq_ignore_ascii_case("false")
                         && condition.reason == "MainProcessFailed"
                 })
+        })
+}
+
+/// Ready-condition reasons the gateway uses to mark an Error-phase sandbox
+/// specifically because its compute resource was found missing, rather than
+/// because a running process crashed or exited: `BackendResourceMissing` and
+/// `StartFailed` come from gateway-startup recovery
+/// (`resume_sandboxes_at_startup`) finding a `NotFound`/other backend error
+/// for a previously-known sandbox, and `ComputeResourceMissing` comes from
+/// `prune_missing_sandbox` itself transitioning a Stopping/Stopped/Starting
+/// sandbox to Error the first time its resource is found missing.
+///
+/// These reasons mark exactly the sandboxes `prune_missing_sandbox`'s orphan
+/// cleanup exists to reclaim -- an Error phase alone must not exempt them
+/// from that sweep's delete-and-cleanup path the way a settled, no-resource-
+/// expected Error record (a crashed main process, an explicit non-resource
+/// failure) is exempted, or orphaned names and gateway-owned records would
+/// never get pruned and idempotent driver cleanup for volumes/secrets would
+/// never run.
+const MISSING_COMPUTE_RESOURCE_REASONS: [&str; 3] = [
+    "BackendResourceMissing",
+    "StartFailed",
+    "ComputeResourceMissing",
+];
+
+fn is_missing_compute_resource_reason(sandbox: &Sandbox) -> bool {
+    sandbox
+        .status
+        .as_ref()
+        .and_then(|status| status.conditions.iter().find(|c| c.r#type == "Ready"))
+        .is_some_and(|condition| {
+            MISSING_COMPUTE_RESOURCE_REASONS.contains(&condition.reason.as_str())
         })
 }
 
@@ -5001,6 +5070,7 @@ impl ComputeDriver for NoopTestDriver {
                 rootfs_tar_staging_dir: String::new(),
                 rootfs_tar_max_bytes: 0,
                 supports_ui_policy: false,
+                supports_live_policy_updates: None,
             },
         ))
     }
@@ -5126,7 +5196,12 @@ pub async fn new_test_runtime(store: Arc<Store>) -> ComputeRuntime {
 
 #[cfg(test)]
 pub async fn new_test_runtime_for_driver(store: Arc<Store>, driver_name: &str) -> ComputeRuntime {
-    new_test_runtime_with_driver(store, driver_name, Arc::new(NoopTestDriver::default())).await
+    let mut runtime =
+        new_test_runtime_with_driver(store, driver_name, Arc::new(NoopTestDriver::default())).await;
+    if driver_name == "mxc" {
+        runtime.driver_info.supports_live_policy_updates = Some(false);
+    }
+    runtime
 }
 
 #[cfg(test)]
@@ -5149,6 +5224,7 @@ pub async fn new_test_runtime_with_driver(
             rootfs_tar_staging_dir: String::new(),
             rootfs_tar_max_bytes: 0,
             supports_ui_policy: false,
+            supports_live_policy_updates: None,
         },
         telemetry_compute_driver: TelemetryComputeDriver::custom(),
         driver_process: None,
@@ -5473,6 +5549,7 @@ mod tests {
                 rootfs_tar_staging_dir: String::new(),
                 rootfs_tar_max_bytes: 0,
                 supports_ui_policy: false,
+                supports_live_policy_updates: None,
             }))
         }
 
@@ -5839,6 +5916,7 @@ mod tests {
                 rootfs_tar_staging_dir: String::new(),
                 rootfs_tar_max_bytes: 0,
                 supports_ui_policy: false,
+                supports_live_policy_updates: None,
             }))
         }
 
@@ -6053,6 +6131,7 @@ mod tests {
                 rootfs_tar_staging_dir: String::new(),
                 rootfs_tar_max_bytes: 0,
                 supports_ui_policy: false,
+                supports_live_policy_updates: None,
             },
             telemetry_compute_driver: TelemetryComputeDriver::custom(),
             driver_process: None,
@@ -9370,6 +9449,130 @@ mod tests {
             driver.delete_requests(),
             vec![("sb-1".to_string(), "sandbox-a".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn prune_missing_sandbox_keeps_error_phase_records() {
+        // Regression test: a driver whose registry never rehydrates after a
+        // restart (in-process-only state, e.g. MXC) reports every
+        // previously-known sandbox as missing on the first sweep after
+        // startup -- including ones already correctly, terminally marked
+        // Error by earlier crash detection. The sweep must not delete those;
+        // it must treat Error the same as the existing Completed exemption
+        // and leave the durable record in place.
+        let driver = ControlledDriver::new();
+        driver.set_get_outcome(ControlledGetOutcome::Missing);
+        let runtime = test_runtime(driver.clone()).await;
+        let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Error);
+        runtime.store.put_message(&sandbox).await.unwrap();
+
+        runtime
+            .reconcile_store_with_backend(Duration::ZERO)
+            .await
+            .unwrap();
+
+        let retained = runtime
+            .store
+            .get_message::<Sandbox>("sb-1")
+            .await
+            .unwrap()
+            .expect("Error-phase sandbox record must survive the prune sweep");
+        assert_eq!(retained.phase(), SandboxPhase::Error as i32);
+        assert_eq!(driver.delete_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn prune_missing_sandbox_still_reclaims_backend_resource_missing_records() {
+        // Regression test for a review finding on the Error-phase exemption
+        // above: BackendResourceMissing is the reason gateway-startup
+        // recovery uses (see `resume_sandboxes_at_startup`) when a
+        // previously-known sandbox's backend resource is already gone. The
+        // Error-phase exemption must not swallow this case -- it is exactly
+        // the "orphaned compute resource" this sweep exists to reclaim, so
+        // the record and its driver-owned resources must still be pruned.
+        let driver = ControlledDriver::new();
+        driver.set_get_outcome(ControlledGetOutcome::Missing);
+        let runtime = test_runtime(driver.clone()).await;
+        let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Error);
+        let name = sandbox.object_name().to_string();
+        upsert_ready_condition(
+            &mut sandbox.status,
+            &name,
+            SandboxCondition {
+                r#type: "Ready".to_string(),
+                status: "False".to_string(),
+                reason: "BackendResourceMissing".to_string(),
+                message: "Sandbox compute resource disappeared while the gateway was offline"
+                    .to_string(),
+                last_transition_time: String::new(),
+            },
+        );
+        runtime.store.put_message(&sandbox).await.unwrap();
+
+        runtime
+            .reconcile_store_with_backend(Duration::ZERO)
+            .await
+            .unwrap();
+
+        assert!(
+            runtime
+                .store
+                .get_message::<Sandbox>("sb-1")
+                .await
+                .unwrap()
+                .is_none(),
+            "BackendResourceMissing must not be exempted from pruning"
+        );
+        tokio::time::timeout(Duration::from_secs(1), driver.delete_started.notified())
+            .await
+            .expect("background driver cleanup did not run");
+        assert_eq!(driver.delete_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn prune_missing_sandbox_still_reclaims_compute_resource_missing_records() {
+        // Regression test for the same review finding: ComputeResourceMissing
+        // is the reason this same sweep sets when it first finds a
+        // Stopping/Stopped/Starting sandbox's resource missing (see below).
+        // A later sweep must still reclaim it once the retention window
+        // passes, not treat the Error phase it left behind as settled.
+        let driver = ControlledDriver::new();
+        driver.set_get_outcome(ControlledGetOutcome::Missing);
+        let runtime = test_runtime(driver.clone()).await;
+        let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Error);
+        let name = sandbox.object_name().to_string();
+        upsert_ready_condition(
+            &mut sandbox.status,
+            &name,
+            SandboxCondition {
+                r#type: "Ready".to_string(),
+                status: "False".to_string(),
+                reason: "ComputeResourceMissing".to_string(),
+                message: "The compute driver could not find the retained sandbox resource; delete the sandbox to clean up its remaining state"
+                    .to_string(),
+                last_transition_time: String::new(),
+            },
+        );
+        runtime.store.put_message(&sandbox).await.unwrap();
+
+        runtime
+            .reconcile_store_with_backend(Duration::ZERO)
+            .await
+            .unwrap();
+
+        assert!(
+            runtime
+                .store
+                .get_message::<Sandbox>("sb-1")
+                .await
+                .unwrap()
+                .is_none(),
+            "ComputeResourceMissing must not be exempted from pruning"
+        );
+        tokio::time::timeout(Duration::from_secs(1), driver.delete_started.notified())
+            .await
+            .expect("background driver cleanup did not run");
+        assert_eq!(driver.delete_calls(), 1);
     }
 
     #[tokio::test]

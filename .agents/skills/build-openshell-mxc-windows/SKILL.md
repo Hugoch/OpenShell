@@ -163,10 +163,22 @@ exclusive on a single host (each rejects the other architecture -- see the
 table below): run `windows:test:mxc-real:x64` on an x64 host, or
 `windows:test:mxc-real:arm64` on an ARM64 host, as part of validating this
 subsystem -- run the one matching your host architecture, not both, and not
-neither. Both are skip-safe (they print a SKIP reason and exit 0 when
-`wxc-exec` or the matching backend isn't available), so running the
-arch-appropriate task is always safe even without real MXC hardware. Neither
+neither. Both print a SKIP reason and exit 0 when `wxc-exec` or the matching
+backend is unavailable. Once the host proves that ProcessContainer is live,
+however, required capabilities are authoritative: rejection of
+`network.proxy` or another enforcement failure fails the task. Running the
+architecture-appropriate task is therefore safe without real MXC hardware but
+must not be described as wholly skip-safe on supported hardware. Neither task
 is part of `windows:ci`'s ordered contract, so invoke it explicitly.
+
+For GB300 Windows ARM64 qualification, do not use the skip-safe developer task
+as release evidence. `windows:test:mxc-gb300:arm64` runs the required
+ProcessContainer subset and fails on any required `SKIP`.
+`windows:qualify:mxc:gb300:contract` validates the static coverage matrix, and
+`windows:qualify:mxc:gb300` runs the complete source, host, build/test, policy
+E2E, and OpenClaw gate. Its inputs and evidence contract are documented in
+`crates/openshell-driver-mxc/qualification/README.md`. Native-x64 NemoClaw and
+x64 Windows results never satisfy this ARM64 contract.
 
 For full validation, detect the Windows host architecture first and choose the
 native lane dynamically:
@@ -257,6 +269,9 @@ crypto dependency builds.
 | `windows:test:unsupported:arm64` | Re-runs the same focused contracts natively on ARM64. Rejects non-ARM64 hosts. |
 | `windows:test:mxc-real:x64` | Runs the serial, ignored real-`wxc-exec` integration suite natively on x64 through the MSVC wrapper. Rejects non-x64 hosts. |
 | `windows:test:mxc-real:arm64` | Runs the same real-`wxc-exec` suite natively on ARM64. Rejects non-ARM64 hosts. |
+| `windows:test:mxc-gb300:arm64` | Runs the required native ARM64 ProcessContainer subset and fails when a test skips. |
+| `windows:qualify:mxc:gb300:contract` | Validates the required/optional/unsupported/architecture-constrained GB300 matrix. |
+| `windows:qualify:mxc:gb300` | Runs the fail-closed GB300 ARM64 gate and validates hash-bound evidence. |
 | `windows:artifacts` | Reports size and SHA256 for release artifacts that exist. |
 | `windows:ci` | Runs the full ordered x64-host Windows CI lane, plus ARM64 check/build when not skipped. |
 

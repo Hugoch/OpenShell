@@ -394,11 +394,16 @@ async fn handle_create_sandbox_inner(
             .authorize(&token, &workspace, &subject)?;
     }
 
-    let _sandbox_sync_guard = if spec.providers.is_empty() {
-        None
-    } else {
-        Some(state.compute.sandbox_sync_guard().await)
-    };
+    // Drivers without live policy updates need an atomic boundary between
+    // create-time policy resolution and mutations that affect existing sandboxes.
+    // Provider-backed creates also serialize with profile mutation so the initial
+    // policy snapshot cannot miss a concurrent profile update before persistence.
+    let _sandbox_sync_guard =
+        if !state.compute.supports_live_policy_updates() || !spec.providers.is_empty() {
+            Some(state.compute.sandbox_sync_guard().await)
+        } else {
+            None
+        };
 
     // Validate provider names exist (fail fast).
     for name in &spec.providers {
@@ -1119,6 +1124,14 @@ pub(super) async fn handle_attach_sandbox_provider(
         .as_ref()
         .ok_or_else(|| Status::internal("sandbox spec is missing"))?;
 
+    if !spec
+        .providers
+        .iter()
+        .any(|name| name == &request.provider_name)
+    {
+        super::policy::require_live_policy_update_support(state)?;
+    }
+
     // Pre-check: fail fast if already at MAX_PROVIDERS limit (avoid spurious CAS conflicts)
     // Note: This is an optimization; the CAS closure rechecks after dedupe in case of races
     if spec.providers.len() >= MAX_PROVIDERS
@@ -1256,6 +1269,14 @@ pub(super) async fn handle_detach_sandbox_provider(
         .spec
         .as_ref()
         .ok_or_else(|| Status::internal("sandbox spec is missing"))?;
+
+    if spec
+        .providers
+        .iter()
+        .any(|name| name == &request.provider_name)
+    {
+        super::policy::require_live_policy_update_support(state)?;
+    }
     let mut candidate_spec = spec.clone();
     candidate_spec
         .providers
@@ -3877,6 +3898,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mxc_rejects_provider_attachment_and_detachment_before_persistence() {
+        let state = test_server_state_with_driver("mxc").await;
+        state
+            .store
+            .put_message(&test_provider("work-github", "github"))
+            .await
+            .unwrap();
+        state
+            .store
+            .put_message(&test_sandbox("attach-target", Vec::new()))
+            .await
+            .unwrap();
+
+        let attach_error = handle_attach_sandbox_provider(
+            &state,
+            authed_request(AttachSandboxProviderRequest {
+                sandbox_name: "attach-target".to_string(),
+                provider_name: "work-github".to_string(),
+                expected_resource_version: 0,
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+            }),
+        )
+        .await
+        .expect_err("MXC cannot apply provider attachment to an existing sandbox");
+        assert_eq!(attach_error.code(), tonic::Code::FailedPrecondition);
+        assert!(attach_error.message().contains("delete and recreate"));
+        let attach_target = state
+            .store
+            .get_message_by_name::<Sandbox>("default", "attach-target")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(attach_target.spec.unwrap().providers.is_empty());
+
+        state
+            .store
+            .put_message(&test_sandbox(
+                "detach-target",
+                vec!["work-github".to_string()],
+            ))
+            .await
+            .unwrap();
+        let detach_error = handle_detach_sandbox_provider(
+            &state,
+            authed_request(DetachSandboxProviderRequest {
+                sandbox_name: "detach-target".to_string(),
+                provider_name: "work-github".to_string(),
+                expected_resource_version: 0,
+                workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+            }),
+        )
+        .await
+        .expect_err("MXC cannot apply provider detachment to an existing sandbox");
+        assert_eq!(detach_error.code(), tonic::Code::FailedPrecondition);
+        assert!(detach_error.message().contains("delete and recreate"));
+        let detach_target = state
+            .store
+            .get_message_by_name::<Sandbox>("default", "detach-target")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            detach_target.spec.unwrap().providers,
+            vec!["work-github".to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn attach_sandbox_provider_uses_configured_provider_profile_sources() {
         let state = test_server_state_with_user_only_github_profile().await;
         state
@@ -4897,6 +4986,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mxc_provider_free_create_waits_for_sandbox_sync_guard() {
+        let state = test_server_state_with_driver("mxc").await;
+
+        let guard = state.compute.sandbox_sync_guard().await;
+        let task_state = state.clone();
+        let task = tokio::spawn(async move {
+            handle_create_sandbox(
+                &task_state,
+                authed_request(CreateSandboxRequest {
+                    name: "guarded-create".to_string(),
+                    spec: Some(SandboxSpec::default()),
+                    labels: HashMap::new(),
+                    annotations: HashMap::new(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                    await_main_process_attachment: false,
+                    workload_template_name: String::new(),
+                }),
+            )
+            .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            !task.is_finished(),
+            "provider-free sandbox create should wait for sandbox sync guard"
+        );
+        drop(guard);
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("create should finish after guard release")
+            .expect("join create task")
+            .expect("create should succeed")
+            .into_inner();
+        assert!(
+            response.sandbox.unwrap().spec.unwrap().providers.is_empty(),
+            "the synchronization test must exercise a provider-free create"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_update_driver_create_does_not_wait_for_sandbox_sync_guard() {
+        let state = test_server_state().await;
+
+        let guard = state.compute.sandbox_sync_guard().await;
+        let task_state = state.clone();
+        let task = tokio::spawn(async move {
+            handle_create_sandbox(
+                &task_state,
+                authed_request(CreateSandboxRequest {
+                    name: "concurrent-create".to_string(),
+                    spec: Some(SandboxSpec::default()),
+                    labels: HashMap::new(),
+                    annotations: HashMap::new(),
+                    workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+                    await_main_process_attachment: false,
+                    workload_template_name: String::new(),
+                }),
+            )
+            .await
+        });
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("live-update-capable create must not wait for the sync guard")
+            .expect("join create task")
+            .expect("create should succeed")
+            .into_inner();
+        drop(guard);
+
+        assert!(
+            response.sandbox.unwrap().spec.unwrap().providers.is_empty(),
+            "the concurrency test must exercise a provider-free create"
+        );
+    }
+
+    #[tokio::test]
     async fn create_sandbox_with_providers_waits_for_sandbox_sync_guard() {
         let state = test_server_state().await;
         state
@@ -4911,7 +5077,7 @@ mod tests {
             handle_create_sandbox(
                 &task_state,
                 authed_request(CreateSandboxRequest {
-                    name: "guarded-create".to_string(),
+                    name: "provider-create".to_string(),
                     spec: Some(SandboxSpec {
                         providers: vec!["work-github".to_string()],
                         ..Default::default()

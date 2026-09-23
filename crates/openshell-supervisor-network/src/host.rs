@@ -22,7 +22,7 @@ use openshell_core::proposals::AgentProposals;
 use openshell_core::proto::SandboxPolicy as ProtoSandboxPolicy;
 use openshell_core::provider_credentials::ProviderCredentialState;
 use openshell_ocsf::{
-    ConfigStateChangeBuilder, SeverityId, StateId, StatusId, ctx::ctx as ocsf_ctx, ocsf_emit,
+    ConfigStateChangeBuilder, EventContext, SeverityId, StateId, StatusId, ocsf_emit,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -61,14 +61,14 @@ pub struct HostProxyConfig {
     pub bind_addr: SocketAddr,
     /// Network-only policy produced by the compute driver's policy split.
     pub policy: ProtoSandboxPolicy,
-    /// Static process identity used when the platform cannot recover the
-    /// socket-owning sandbox process. Policy binaries must match this path for
-    /// L4/L7 allow rules to pass.
-    pub binary_path: PathBuf,
     /// Per-sandbox client authentication. Host-side MXC proxies must set this
     /// so another sandbox cannot borrow this proxy's identity and policy.
     pub client_auth: HostProxyClientAuth,
+    /// Stable sandbox identifier used to attribute host-proxy OCSF events.
+    /// Required and non-empty for every host-side proxy.
     pub sandbox_id: Option<String>,
+    /// Sandbox display name used to attribute host-proxy OCSF events.
+    /// Required and non-empty for every host-side proxy.
     pub sandbox_name: Option<String>,
     pub openshell_endpoint: Option<String>,
     pub provider_credentials: Option<ProviderCredentialState>,
@@ -99,6 +99,36 @@ impl HostProxyHandle {
     }
 }
 
+fn host_proxy_event_context(config: &HostProxyConfig) -> Result<EventContext> {
+    let sandbox_id = config
+        .sandbox_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| miette::miette!("host proxy requires a non-empty sandbox_id"))?;
+    let sandbox_name = config
+        .sandbox_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| miette::miette!("host proxy requires a non-empty sandbox_name"))?;
+
+    Ok(EventContext {
+        sandbox_id: sandbox_id.to_string(),
+        sandbox_name: sandbox_name.to_string(),
+        container_image: String::new(),
+        hostname: std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .ok()
+            .map(|hostname| hostname.trim().to_string())
+            .filter(|hostname| !hostname.is_empty())
+            .unwrap_or_else(|| "openshell-gateway".to_string()),
+        product_version: env!("CARGO_PKG_VERSION").to_string(),
+        proxy_ip: config.bind_addr.ip(),
+        proxy_port: config.bind_addr.port(),
+    })
+}
+
 /// Start a host-side proxy for one sandbox.
 ///
 /// Linux supervisor mode should continue to use `run::run_networking`; this API
@@ -117,6 +147,7 @@ pub async fn start_host_proxy(config: HostProxyConfig) -> Result<HostProxyHandle
         ));
     }
 
+    let event_context = host_proxy_event_context(&config)?;
     let engine = Arc::new(OpaEngine::from_proto(&config.policy)?);
     let (_workspace_tx, workspace_rx) = tokio::sync::watch::channel(String::new());
     let policy_local_ctx = Arc::new(PolicyLocalContext::new(
@@ -147,7 +178,7 @@ pub async fn start_host_proxy(config: HostProxyConfig) -> Result<HostProxyHandle
                             let cert_cache = CertCache::new(ca);
                             let state = Arc::new(ProxyTlsState::new(cert_cache, upstream_config));
                             ocsf_emit!(
-                                ConfigStateChangeBuilder::new(ocsf_ctx())
+                                ConfigStateChangeBuilder::new(&event_context)
                                     .severity(SeverityId::Informational)
                                     .status(StatusId::Success)
                                     .state(StateId::Enabled, "enabled")
@@ -160,7 +191,7 @@ pub async fn start_host_proxy(config: HostProxyConfig) -> Result<HostProxyHandle
                         }
                         Err(e) => {
                             ocsf_emit!(
-                                    ConfigStateChangeBuilder::new(ocsf_ctx())
+                                    ConfigStateChangeBuilder::new(&event_context)
                                         .severity(SeverityId::High)
                                         .status(StatusId::Failure)
                                         .state(StateId::Disabled, "disabled")
@@ -174,7 +205,7 @@ pub async fn start_host_proxy(config: HostProxyConfig) -> Result<HostProxyHandle
                     },
                     Err(e) => {
                         ocsf_emit!(
-                            ConfigStateChangeBuilder::new(ocsf_ctx())
+                            ConfigStateChangeBuilder::new(&event_context)
                                 .severity(SeverityId::High)
                                 .status(StatusId::Failure)
                                 .state(StateId::Disabled, "disabled")
@@ -189,7 +220,7 @@ pub async fn start_host_proxy(config: HostProxyConfig) -> Result<HostProxyHandle
             }
             Err(e) => {
                 ocsf_emit!(
-                    ConfigStateChangeBuilder::new(ocsf_ctx())
+                    ConfigStateChangeBuilder::new(&event_context)
                         .severity(SeverityId::High)
                         .status(StatusId::Failure)
                         .state(StateId::Disabled, "disabled")
@@ -203,7 +234,7 @@ pub async fn start_host_proxy(config: HostProxyConfig) -> Result<HostProxyHandle
         },
         Err(e) => {
             ocsf_emit!(
-                ConfigStateChangeBuilder::new(ocsf_ctx())
+                ConfigStateChangeBuilder::new(&event_context)
                     .severity(SeverityId::High)
                     .status(StatusId::Failure)
                     .state(StateId::Disabled, "disabled")
@@ -215,10 +246,10 @@ pub async fn start_host_proxy(config: HostProxyConfig) -> Result<HostProxyHandle
             (None, None, None)
         }
     };
-    let identity_mode = ProxyIdentityMode::static_binary_with_client_auth(
-        config.binary_path,
-        Some(config.client_auth.expected_proxy_authorization),
-    )?;
+    let identity_mode = ProxyIdentityMode::windows_with_client_auth(Some(
+        config.client_auth.expected_proxy_authorization,
+    ))
+    .with_event_context(event_context);
     let proxy = ProxyHandle::start_with_bind_addr(
         &proxy_policy,
         Some(config.bind_addr),
@@ -256,14 +287,13 @@ mod tests {
 
     use super::*;
 
-    fn test_config(bind_addr: SocketAddr, binary_path: PathBuf) -> HostProxyConfig {
+    fn test_config(bind_addr: SocketAddr) -> HostProxyConfig {
         HostProxyConfig {
             bind_addr,
             policy: ProtoSandboxPolicy {
                 version: 1,
                 ..Default::default()
             },
-            binary_path,
             client_auth: HostProxyClientAuth::basic("openshell", "test-secret"),
             sandbox_id: Some("sandbox-123".to_string()),
             sandbox_name: Some("agent-box".to_string()),
@@ -273,6 +303,29 @@ mod tests {
             denial_tx: None,
             activity_tx: None,
         }
+    }
+
+    #[test]
+    fn host_proxy_event_context_uses_configured_sandbox_identity() {
+        let bind_addr = "127.0.0.1:18080".parse().unwrap();
+        let config = test_config(bind_addr);
+
+        let context = host_proxy_event_context(&config).unwrap();
+
+        assert_eq!(context.sandbox_id, "sandbox-123");
+        assert_eq!(context.sandbox_name, "agent-box");
+        assert_eq!(context.proxy_ip, bind_addr.ip());
+        assert_eq!(context.proxy_port, bind_addr.port());
+    }
+
+    #[test]
+    fn host_proxy_event_context_rejects_missing_sandbox_identity() {
+        let mut config = test_config("127.0.0.1:18080".parse().unwrap());
+        config.sandbox_id = Some(" ".to_string());
+
+        let error = host_proxy_event_context(&config).unwrap_err();
+
+        assert!(error.to_string().contains("non-empty sandbox_id"));
     }
 
     async fn proxy_request(addr: SocketAddr, headers: &[&str]) -> String {
@@ -307,7 +360,9 @@ mod tests {
         let mut client = TcpStream::connect(addr).await.unwrap();
         client.write_all(request.as_bytes()).await.unwrap();
         let mut response = Vec::new();
-        tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut response))
+        // The first authenticated CONNECT performs a full executable hash for
+        // TOFU identity binding; debug test binaries can be hundreds of MB.
+        tokio::time::timeout(Duration::from_secs(10), client.read_to_end(&mut response))
             .await
             .unwrap()
             .unwrap();
@@ -316,11 +371,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_loopback_bind_addr() {
-        let result = start_host_proxy(test_config(
-            ([192, 0, 2, 1], 0).into(),
-            PathBuf::from("missing-agent.exe"),
-        ))
-        .await;
+        let result = start_host_proxy(test_config(([192, 0, 2, 1], 0).into())).await;
 
         let Err(err) = result else {
             panic!("host proxy should reject non-loopback bind addresses");
@@ -333,10 +384,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_middleware_policy_without_registry() {
-        let mut config = test_config(
-            ([127, 0, 0, 1], 0).into(),
-            PathBuf::from("missing-agent.exe"),
-        );
+        let mut config = test_config(([127, 0, 0, 1], 0).into());
         config.policy.network_middlewares.insert(
             "redactor".into(),
             NetworkMiddlewareConfig {
@@ -365,15 +413,9 @@ mod tests {
     #[tokio::test]
     async fn starts_loopback_proxy_and_serves_policy_local() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let binary = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(binary.path(), b"agent").unwrap();
-
-        let handle = start_host_proxy(test_config(
-            ([127, 0, 0, 1], 0).into(),
-            binary.path().to_path_buf(),
-        ))
-        .await
-        .unwrap();
+        let handle = start_host_proxy(test_config(([127, 0, 0, 1], 0).into()))
+            .await
+            .unwrap();
 
         let addr = handle.http_addr().expect("proxy should report bound addr");
         assert!(addr.ip().is_loopback());
@@ -413,9 +455,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_sandbox_credentials_reject_missing_wrong_cross_and_duplicate_auth() {
-        let binary = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(binary.path(), b"agent").unwrap();
-
         let auth_a = HostProxyClientAuth::basic("openshell", "sandbox-a-secret");
         let auth_b = HostProxyClientAuth::basic("openshell", "sandbox-b-secret");
         // Node's EnvHttpProxyAgent currently emits the field name in lower
@@ -429,11 +468,11 @@ mod tests {
             auth_b.expected_proxy_authorization
         );
 
-        let mut config_a = test_config(([127, 0, 0, 1], 0).into(), binary.path().to_path_buf());
+        let mut config_a = test_config(([127, 0, 0, 1], 0).into());
         config_a.client_auth = auth_a;
         let proxy_a = start_host_proxy(config_a).await.unwrap();
 
-        let mut config_b = test_config(([127, 0, 0, 1], 0).into(), binary.path().to_path_buf());
+        let mut config_b = test_config(([127, 0, 0, 1], 0).into());
         config_b.client_auth = auth_b;
         let proxy_b = start_host_proxy(config_b).await.unwrap();
 
