@@ -181,18 +181,34 @@ async fn budget_denies_requests_over_its_rate_and_usage_reports_exact_bytes() {
         r#"
 import socket
 
+def read_response(sock):
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(65536)
+        if not chunk:
+            return data
+        data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    length = 0
+    for line in head.split(b"\r\n")[1:]:
+        name, _, value = line.partition(b":")
+        if name.strip().lower() == b"content-length":
+            length = int(value.strip())
+    while len(body) < length:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        body += chunk
+    return head + b"\r\n\r\n" + body
+
 allowed = 0
 denied = 0
-for _ in range(10):
+for index in range(10):
     with socket.create_connection(({host:?}, {port}), timeout=10) as sock:
         sock.sendall(b"GET /data HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n")
-        response = b""
-        while True:
-            chunk = sock.recv(65536)
-            if not chunk:
-                break
-            response += chunk
+        response = read_response(sock)
     status = response.split(b"\r\n", 1)[0]
+    print(f"request {{index}}: {{status!r}}", flush=True)
     if b" 200 " in status:
         allowed += 1
     elif b" 429 " in status and b"budget_exceeded" in response and b"Retry-After:" in response:
