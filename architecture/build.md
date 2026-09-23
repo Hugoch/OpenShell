@@ -114,6 +114,8 @@ same run-specific sandbox runtime image as the standalone driver so each round
 uses the image built from its source commit.
 Policy-advisor E2E checks build a dedicated Docker workload with curl and cargo
 at the paths their denial scenarios inspect.
+The Docker gateway wrapper exports its resolved sandbox image to the test
+command, so SDK scenarios create sandboxes from the same image the gateway uses.
 
 Docker E2E tool-dependent workloads use a dedicated Noble-based fixture,
 separate from the product's minimal default image. The fixture supplies the
