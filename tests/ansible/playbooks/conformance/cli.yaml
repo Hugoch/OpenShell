@@ -9,12 +9,28 @@
     - name: Wait for SSH
       ansible.builtin.wait_for_connection:
 
+    - name: Detect container runtime
+      ansible.builtin.include_role:
+        name: tmachine_container_runtime
+
     - name: Install conformance test dependencies
       become: true
       ansible.builtin.package:
         name:
           - git
+          - iproute2
+          - iptables
         state: present
+
+    - name: Install Docker supervisor reconnect helper
+      become: true
+      ansible.builtin.copy:
+        src: ../../files/disconnect-docker-supervisor-session
+        dest: /usr/local/bin/disconnect-docker-supervisor-session
+        owner: root
+        group: root
+        mode: "0755"
+      when: tmachine_container_runtime_name == 'docker'
 
     - name: Create OpenShell conformance test directory
       become: true
@@ -70,6 +86,9 @@
           - --no-fail-fast
       environment:
         OPENSHELL_BIN: "{{ openshell_cli.stdout }}"
+        OPENSHELL_RELAY_RECONNECT_HELPER: >-
+          {{ '/usr/local/bin/disconnect-docker-supervisor-session'
+             if tmachine_container_runtime_name == 'docker' else '' }}
       register: conformance_result
       changed_when: false
       failed_when: false
