@@ -423,7 +423,9 @@ stays correct throughout because a non-owner relays to the owner.
 File upload and download use tar-over-SSH through the same relay path. A gateway
 pod termination drops the active SSH proxy byte stream, so the CLI retries the
 whole sync operation with a fresh SSH session instead of attempting mid-stream
-resume.
+resume. After a transport interruption, the bounded retry also tolerates a
+brief sandbox-not-ready response while the supervisor reconnects. An initial
+sandbox-not-ready response still fails immediately.
 
 Gateway peer RPCs authenticate with Kubernetes ServiceAccount identity rather
 than a shared secret. Helm mounts a projected, pod-bound token with audience

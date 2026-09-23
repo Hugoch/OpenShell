@@ -44,7 +44,7 @@ const FORWARD_LISTENER_CONNECT_TIMEOUT: Duration = Duration::from_millis(200);
 /// command has already reported its terminal result.
 const TERMINAL_RELAY_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINAL_RELAY_REGISTRATION_INTERVAL: Duration = Duration::from_millis(50);
-const SYNC_RETRY_ATTEMPTS: usize = 4;
+const SYNC_RETRY_ATTEMPTS: usize = 8;
 const SYNC_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug)]
@@ -1288,10 +1288,15 @@ where
     Fut: Future<Output = Result<()>>,
 {
     let mut attempt = 1;
+    let mut saw_transport_failure = false;
     loop {
         match run().await {
             Ok(()) => return Ok(()),
-            Err(error) if attempt < SYNC_RETRY_ATTEMPTS && sync_error_is_retryable(&error) => {
+            Err(error)
+                if attempt < SYNC_RETRY_ATTEMPTS
+                    && sync_error_is_retryable_after_disruption(&error, saw_transport_failure) =>
+            {
+                saw_transport_failure |= sync_error_is_retryable(&error);
                 tracing::warn!(
                     operation,
                     attempt,
@@ -1305,6 +1310,16 @@ where
             Err(error) => return Err(error),
         }
     }
+}
+
+fn sync_error_is_not_ready(error: &Report) -> bool {
+    format!("{error:?}")
+        .to_ascii_lowercase()
+        .contains("sandbox is not ready")
+}
+
+fn sync_error_is_retryable_after_disruption(error: &Report, saw_transport_failure: bool) -> bool {
+    sync_error_is_retryable(error) || (saw_transport_failure && sync_error_is_not_ready(error))
 }
 
 fn sync_error_is_retryable(error: &Report) -> bool {
@@ -1866,6 +1881,36 @@ mod tests {
     fn sync_error_retry_filter_rejects_validation_failures() {
         let error = miette::miette!("sandbox source path '/etc/passwd' resolves outside /sandbox");
         assert!(!sync_error_is_retryable(&error));
+    }
+
+    #[test]
+    fn sync_error_retry_filter_requires_prior_transport_failure_for_readiness() {
+        let error = miette::miette!("sandbox is not ready");
+        assert!(!sync_error_is_retryable_after_disruption(&error, false));
+        assert!(sync_error_is_retryable_after_disruption(&error, true));
+        let validation_error = miette::miette!("sandbox source path is invalid");
+        assert!(!sync_error_is_retryable_after_disruption(
+            &validation_error,
+            true
+        ));
+    }
+
+    #[tokio::test]
+    async fn sync_retries_not_ready_after_transport_break() {
+        let mut attempts = 0;
+        retry_sandbox_sync("download", || {
+            attempts += 1;
+            async move {
+                match attempts {
+                    1 => Err(miette::miette!("connection reset by peer")),
+                    2 => Err(miette::miette!("sandbox is not ready")),
+                    _ => Ok(()),
+                }
+            }
+        })
+        .await
+        .expect("sync should recover after supervisor readiness returns");
+        assert_eq!(attempts, 3);
     }
 
     #[test]

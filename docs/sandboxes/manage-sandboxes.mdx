@@ -764,6 +764,11 @@ Download files from the sandbox to your host:
 openshell sandbox download my-sandbox output ./local
 ```
 
+If a gateway connection drops during a transfer, the CLI retries the whole
+upload or download with a fresh sandbox connection. It can also wait briefly
+for the sandbox to become ready again after a gateway restart. A sandbox that
+is already stopped still returns an error immediately.
+
 When the sandbox-side source is a single file, the destination follows `cp`-style placement: if the destination already exists as a directory or ends with `/`, the file lands inside it as `<dest>/<basename>`; otherwise the file is written at the exact destination path.
 
 The CLI discovers the sandbox's canonical working directory and only allows
