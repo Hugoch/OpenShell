@@ -991,6 +991,16 @@ async fn handle_transparent_tcp_connection(
     let connector = mapping.connector_for(&endpoint_id).await.map_err(|error| {
         miette::miette!("transparent TCP pinned destination is invalid: {error}")
     })?;
+    let connection_usage = match relay::admit_connection_usage(&opa_engine, &decision) {
+        Ok(usage) => usage,
+        Err(denial) => {
+            emit_transparent_policy_denial(&decision, workload_addr, &host, port);
+            emit_activity(&activity_tx, true, "budget_exceeded");
+            debug!(budget = %denial.budget, host = %host, port, "transparent TCP budget exceeded");
+            return Ok(());
+        }
+    };
+    let _close_event = crate::usage::CloseEventGuard(Some(connection_usage.clone()));
     let mut ctx = relay::http_context(
         &decision,
         None,
@@ -1004,6 +1014,7 @@ async fn handle_transparent_tcp_connection(
         relay::RelaySignals {
             activity: activity_tx.clone(),
             endpoint_observation: None,
+            usage: Some(connection_usage.clone()),
         },
     );
     let middleware_gate = middleware_uninspectable_gate(&opa_engine, &ctx)?;
@@ -1016,7 +1027,7 @@ async fn handle_transparent_tcp_connection(
     }
     let approved_real_ip_candidates = connector.addrs().to_vec();
     generation_guard.ensure_current()?;
-    let mut upstream =
+    let upstream =
         dial_transparent_upstream(&upstream_proxy, &host, port, &approved_real_ip_candidates)
             .await
             .into_diagnostic()?;
@@ -1081,6 +1092,7 @@ async fn handle_transparent_tcp_connection(
         }
     ));
     emit_activity(&activity_tx, false, "transparent_tcp");
+    let mut upstream = crate::usage::CountingStream::new(upstream, connection_usage.cell());
     relay::relay_tcp(&mut client, &mut upstream, &generation_guard, &ctx).await
 }
 

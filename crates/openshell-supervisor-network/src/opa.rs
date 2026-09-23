@@ -10297,6 +10297,8 @@ network_policies:
             process: None,
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: std::collections::HashMap::default(),
+            usage_monitoring: None,
         };
 
         let pid = std::process::id(); // accessible root, leaf paths absent
@@ -10980,6 +10982,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: std::collections::HashMap::default(),
+            usage_monitoring: None,
         };
 
         // Build engine with our PID (symlink resolution will work via /proc/self/root/)
@@ -11143,6 +11147,8 @@ process:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: std::collections::HashMap::default(),
+            usage_monitoring: None,
         };
 
         // Initial load at pid=0 — no symlink expansion
