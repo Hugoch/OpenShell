@@ -6,13 +6,18 @@ on:
   push:
     branches:
       - "pull-request/[0-9]+"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      stability_campaign:
+        description: Run all Linux E2E lanes, including optional Kubernetes suites
+        type: boolean
+        default: false
 
 permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !inputs.stability_campaign }}
 
 jobs:
   pr_metadata:
@@ -40,6 +45,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           LABELS_JSON: ${{ steps.gate.outputs.labels_json }}
+          STABILITY_CAMPAIGN: ${{ inputs.stability_campaign }}
         shell: bash
         run: |
           set -euo pipefail
@@ -62,8 +68,13 @@ jobs:
             *)
               run_core_e2e=true
               run_gpu_e2e=true
-              run_kubernetes_ha_e2e=false
-              run_kubernetes_credential_drivers_e2e=false
+              if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$STABILITY_CAMPAIGN" = "true" ]; then
+                run_kubernetes_ha_e2e=true
+                run_kubernetes_credential_drivers_e2e=true
+              else
+                run_kubernetes_ha_e2e=false
+                run_kubernetes_credential_drivers_e2e=false
+              fi
               ;;
           esac
           if [ "$run_core_e2e" = "true" ] || [ "$run_gpu_e2e" = "true" ] || [ "$run_kubernetes_ha_e2e" = "true" ] || [ "$run_kubernetes_credential_drivers_e2e" = "true" ]; then
@@ -345,6 +356,7 @@ jobs:
     with:
       image-tag: ${{ github.sha }}
       conformance-artifact-prefix: openshell-conformance
+      runner-matrix: ${{ inputs.stability_campaign && '[{"name":"linux-arm64","runner":"linux-arm64-gpu-l4-latest-1","experimental":false},{"name":"linux-amd64","runner":"linux-amd64-gpu-rtxpro6000-latest-1","experimental":false}]' || '[{"name":"linux-arm64","runner":"linux-arm64-gpu-l4-latest-1","experimental":false},{"name":"linux-amd64","runner":"linux-amd64-gpu-rtxpro6000-latest-1","experimental":false},{"name":"wsl-amd64","runner":"wsl-amd64-gpu-rtxpro6000-latest-1","experimental":true}]' }}
 
   kubernetes-e2e:
     needs: [pr_metadata, build-binaries, build-images]

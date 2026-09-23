@@ -102,6 +102,12 @@ with GNU libc and uses the same glibc 2.28 compatibility floor as the gateway.
 
 ## Container Builds
 
+The branch E2E workflow composes reusable integration, Docker, Podman, VM,
+Kubernetes, and GPU jobs from commit-addressed build artifacts. Its manual
+stability mode adds the normally optional Kubernetes HA and credential-driver
+lanes and limits GPU jobs to Linux runners. Sequential repeated runs can test
+one immutable candidate commit without changing PR or merge-queue gates.
+
 Docker E2E tool-dependent workloads use a dedicated Noble-based fixture,
 separate from the product's minimal default image. The fixture supplies the
 test identity and tools, with Python aligned to the host test runner for
