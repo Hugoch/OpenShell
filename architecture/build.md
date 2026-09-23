@@ -117,9 +117,9 @@ at the paths their denial scenarios inspect.
 The Docker gateway wrapper exports its resolved sandbox image to the test
 command, so SDK scenarios create sandboxes from the same image the gateway uses.
 
-Docker E2E tool-dependent workloads use a dedicated Noble-based fixture,
-separate from the product's minimal default image. The fixture supplies the
-test identity and tools, with Python aligned to the host test runner for
+Docker and Podman E2E workloads that need tools use a dedicated Noble-based
+fixture separate from the product's minimal default image. It supplies the
+non-root test identity and tools, with Python aligned to the host test runner for
 serialized callable compatibility. Default-image coverage retains the product
 image. Other compute-driver test lanes retain their existing workload fixtures.
 

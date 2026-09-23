@@ -48,5 +48,9 @@ if [ -n "${OPENSHELL_GATEWAY_ENDPOINT:-}" ] && [ -z "${OPENSHELL_BIN:-}" ]; then
   export OPENSHELL_BIN="${ROOT}/target/debug/openshell"
 fi
 
+if [ -n "${E2E_FEATURES}" ]; then
+  CONTAINER_ENGINE=podman bash "${ROOT}/tasks/scripts/e2e-build-workload.sh"
+fi
+
 exec "${ROOT}/e2e/with-podman-gateway.sh" \
   bash "${BASH_SOURCE[0]}" "${RUN_WITH_GATEWAY_COMMAND}"
