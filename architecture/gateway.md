@@ -441,6 +441,10 @@ avoiding a database poll per client stream. SQLite deployments do not run the
 poller because they are single-replica and the local bus already sees every
 write.
 
+After a newly created sandbox starts, another replica can briefly report
+`Provisioning` until the shared status update is visible. Clients that switch
+replicas must wait for `Ready` before starting an exec session.
+
 Mutations whose invariants span sandbox, provider-profile, policy, or provider
 records take a process-local mutex and a shared PostgreSQL advisory lock. The
 database session remains dedicated to the request and closes when the guard is

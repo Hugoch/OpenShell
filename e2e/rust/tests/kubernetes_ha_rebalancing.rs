@@ -272,41 +272,49 @@ async fn exec_through_pod(
 ) -> Result<(), String> {
     let port_forward = PortForward::start(kube, pod).await?;
     let endpoint = format!("http://127.0.0.1:{}", port_forward.port);
+    let readiness_deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+    loop {
+        let mut cmd = openshell_cmd();
+        cmd.arg("--gateway-endpoint")
+            .arg(&endpoint)
+            .args([
+                "sandbox",
+                "exec",
+                "--name",
+                sandbox_name,
+                "--no-tty",
+                "--",
+                "printf",
+                "%s",
+                marker,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = cmd
+            .output()
+            .await
+            .map_err(|err| format!("failed to spawn openshell exec via {pod}: {err}"))?;
 
-    let mut cmd = openshell_cmd();
-    cmd.arg("--gateway-endpoint")
-        .arg(&endpoint)
-        .args([
-            "sandbox",
-            "exec",
-            "--name",
-            sandbox_name,
-            "--no-tty",
-            "--",
-            "printf",
-            "%s",
-            marker,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let output = cmd
-        .output()
-        .await
-        .map_err(|err| format!("failed to spawn openshell exec via {pod}: {err}"))?;
-
-    let combined = strip_ansi(&format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    ));
-    if !output.status.success() || !combined.contains(marker) {
+        let combined = strip_ansi(&format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+        if output.status.success() && combined.contains(marker) {
+            return Ok(());
+        }
+        if !output.status.success()
+            && combined.contains("is not ready (phase: Provisioning)")
+            && tokio::time::Instant::now() < readiness_deadline
+        {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
         return Err(format!(
             "exec through {pod} ({endpoint}) failed with exit {:?}; expected marker {marker:?}; output:\n{combined}",
             output.status.code()
         ));
     }
-
-    Ok(())
 }
 
 async fn exec_through_configured_gateway(sandbox_name: &str, marker: &str) -> Result<(), String> {
