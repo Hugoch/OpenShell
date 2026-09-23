@@ -4934,6 +4934,157 @@ network_budgets:
         assert_eq!(summary.rule_hits[0].1, 2);
     }
 
+    fn usage_test_context(
+        engine: &OpaEngine,
+        base: L7EvalContext,
+    ) -> (L7EvalContext, crate::usage::ConnectionUsage) {
+        let usage = crate::usage::ConnectionUsage::admit_connection(
+            engine.usage(),
+            crate::usage::ConnectionMeta {
+                host: base.host.clone(),
+                port: base.port,
+                binary_path: base.binary_path.clone(),
+                binary_sha256: "sha".into(),
+                reported_policy: base.policy_name.clone(),
+                l4_policies: vec![base.policy_name.clone()],
+                endpoint_id: "l4".into(),
+                started: std::time::Instant::now(),
+            },
+            false,
+        )
+        .unwrap();
+        (
+            L7EvalContext {
+                usage: Some(usage.clone()),
+                ..base
+            },
+            usage,
+        )
+    }
+
+    #[test]
+    fn audit_forwarded_request_is_charged_to_l4_policies() {
+        let data = r"
+network_policies:
+  api:
+    name: api
+    endpoints:
+      - host: api.example.test
+        port: 8080
+        protocol: rest
+        enforcement: audit
+        rules:
+          - allow:
+              method: GET
+              path: /v1/**
+    binaries:
+      - { path: /usr/bin/curl }
+";
+        let engine = OpaEngine::from_strings(TEST_POLICY, data).unwrap();
+        let tunnel_engine = engine
+            .clone_engine_for_tunnel(engine.current_generation())
+            .unwrap();
+        let (ctx, _usage) = usage_test_context(
+            &engine,
+            L7EvalContext {
+                host: "api.example.test".into(),
+                port: 8080,
+                policy_name: "api".into(),
+                binary_path: "/usr/bin/curl".into(),
+                ..Default::default()
+            },
+        );
+        let request = L7RequestInfo {
+            action: "DELETE".into(),
+            target: "/v1/items".into(),
+            query_params: std::collections::HashMap::new(),
+            graphql: None,
+            jsonrpc: None,
+        };
+        let (allowed, _) = evaluate_l7_request(&tunnel_engine, &ctx, &request).unwrap();
+        assert!(!allowed, "no rule allows DELETE");
+        admit_l7_usage(&tunnel_engine, &ctx, &request, allowed, "api#0").unwrap();
+
+        let snapshot = engine.usage().drain_window();
+        let summary = snapshot
+            .summaries
+            .iter()
+            .find(|summary| summary.requests == 1)
+            .expect("audit-forwarded request is charged");
+        assert_eq!(summary.key.policy_key, "api");
+        assert_eq!(
+            summary.rule_hits,
+            [(
+                openshell_core::egress_usage::AUDIT_FORWARDED_RULE_ID.to_string(),
+                1
+            )]
+        );
+    }
+
+    #[test]
+    fn allowed_request_reports_matching_rule_and_policies() {
+        let data = r"
+network_policies:
+  b_api:
+    name: b_api
+    endpoints:
+      - host: api.example.test
+        port: 8080
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow:
+              method: GET
+              path: /v1/**
+          - allow:
+              method: POST
+              path: /v1/**
+    binaries:
+      - { path: /usr/bin/curl }
+  a_api:
+    name: a_api
+    endpoints:
+      - host: api.example.test
+        port: 8080
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+    binaries:
+      - { path: /usr/bin/curl }
+";
+        let engine = OpaEngine::from_strings(TEST_POLICY, data).unwrap();
+        let tunnel_engine = engine
+            .clone_engine_for_tunnel(engine.current_generation())
+            .unwrap();
+        let ctx = L7EvalContext {
+            host: "api.example.test".into(),
+            port: 8080,
+            policy_name: "a_api".into(),
+            binary_path: "/usr/bin/curl".into(),
+            ..Default::default()
+        };
+        let get = L7RequestInfo {
+            action: "GET".into(),
+            target: "/v1/items".into(),
+            query_params: std::collections::HashMap::new(),
+            graphql: None,
+            jsonrpc: None,
+        };
+        let facts = l7_usage_facts(&tunnel_engine, &ctx, &get).unwrap();
+        assert_eq!(facts.policies, ["a_api", "b_api"]);
+        assert_eq!(facts.rule_ids.len(), 2, "{:?}", facts.rule_ids);
+        assert!(facts.rule_ids.iter().any(|id| id == "preset:read-only:GET"));
+        assert!(facts.rule_ids.iter().any(|id| id.starts_with("rule:v1:")));
+
+        let post = L7RequestInfo {
+            action: "POST".into(),
+            ..get
+        };
+        let facts = l7_usage_facts(&tunnel_engine, &ctx, &post).unwrap();
+        assert_eq!(facts.policies, ["b_api"], "only b_api allows POST");
+        assert_eq!(facts.rule_ids.len(), 1);
+    }
+
     fn mcp_test_relay_context() -> (L7EndpointConfig, TunnelPolicyEngine, L7EvalContext) {
         let data = r"
 network_policies:

@@ -194,6 +194,11 @@ path = "tests/proxy_egress_pipeline.rs"
 required-features = ["e2e-host-gateway"]
 
 [[test]]
+name = "egress_usage"
+path = "tests/egress_usage.rs"
+required-features = ["e2e-host-gateway"]
+
+[[test]]
 name = "workspace_namespace_managed"
 path = "tests/workspace_namespace_managed.rs"
 required-features = ["e2e-kubernetes-workspace-managed"]
