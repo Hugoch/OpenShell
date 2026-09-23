@@ -277,6 +277,12 @@ the shared raw byte relay after the existing adapter gates. Forward HTTP retains
 its guarded single-request relay while sharing authorization, request context,
 policy-pinning, and destination boundaries.
 Adapter-specific response and OCSF event shapes remain at the protocol boundary.
+HTTP response framing and connection persistence are separate decisions. After
+forwarding a complete closing response (explicit `Connection: close` or HTTP/1.0
+without keep-alive), the relay flushes and shuts down downstream writes before
+ending the exchange, including TLS close notification. Response middleware
+preserves this lifetime rule; persistent responses remain eligible for reuse.
+
 An explicit `protocol: tcp` endpoint with a valid DNS hostname opts into native
 DNS and transparent TCP when the selected runtime advertises that substrate.
 Hostless `allowed_ips` and literal-IP selectors remain available only to the
