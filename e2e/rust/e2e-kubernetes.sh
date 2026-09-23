@@ -58,6 +58,12 @@ test_filter=()
 if [ -n "${OPENSHELL_E2E_KUBE_TEST:-}" ]; then
   test_filter+=(--test "${OPENSHELL_E2E_KUBE_TEST}")
 fi
+test_threads=()
+if [ "${OPENSHELL_E2E_KUBE_TEST:-}" = "kubernetes_ha_rebalancing" ]; then
+  # These tests scale and roll the same deployment. Nextest starts each test
+  # in its own process, so their in-process mutex cannot serialize them.
+  test_threads+=(--test-threads 1)
+fi
 
 is_operator_workspace_mode() {
   [[ ",${E2E_FEATURES}," == *",e2e-kubernetes-workspace-operator,"* ]]
@@ -99,6 +105,7 @@ run_e2e() {
     --target-dir "${ROOT}/e2e/rust/target" \
     --manifest-path "${ROOT}/e2e/rust/Cargo.toml" \
     --features "${E2E_FEATURES}" \
+    ${test_threads[@]+"${test_threads[@]}"} \
     ${test_filter[@]+"${test_filter[@]}"}
 }
 

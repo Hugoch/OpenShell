@@ -112,6 +112,9 @@ the managed Podman driver path, Kubernetes database scenarios, and Docker-hosted
 SDK and policy-advisor E2E checks. The managed Podman test gateway receives the
 same run-specific sandbox runtime image as the standalone driver so each round
 uses the image built from its source commit.
+The Kubernetes HA test binary runs one test at a time because its scenarios
+scale and roll the same gateway deployment, and separate Nextest processes do
+not share their in-process lock.
 Policy-advisor E2E checks build a dedicated Docker workload with curl and cargo
 at the paths their denial scenarios inspect.
 The Docker gateway wrapper exports its resolved sandbox image to the test
