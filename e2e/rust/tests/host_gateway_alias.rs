@@ -353,7 +353,7 @@ async fn sandbox_receives_eof_after_closing_http_response() {
             port,
             task: tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
-                openshell_core::net::set_tcp_nodelay_best_effort(&stream);
+                stream.set_nodelay(true).expect("disable Nagle on fixture");
                 let mut request = Vec::new();
                 while !request.ends_with(b"\r\n\r\n") {
                     request.push(stream.read_u8().await.unwrap());
