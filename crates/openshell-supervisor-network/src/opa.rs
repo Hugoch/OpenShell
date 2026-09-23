@@ -1519,6 +1519,9 @@ fn redacted_policy_violation_category(violation: &PolicyViolation) -> &'static s
         PolicyViolation::MiddlewareTlsSkipConflict { .. } => {
             "middleware conflicts with TLS inspection"
         }
+        PolicyViolation::InvalidNetworkBudget { .. } => "invalid network budget",
+        PolicyViolation::TooManyNetworkBudgets { .. } => "network budget limit exceeded",
+        PolicyViolation::InvalidUsageMonitoring { .. } => "invalid usage monitoring configuration",
         PolicyViolation::MissingMcpVersions { .. } => "missing MCP protocol version",
         PolicyViolation::McpOptionsOnNonMcpEndpoint { .. } => "MCP options require MCP protocol",
         PolicyViolation::UnsupportedMcpVersion { .. } => "unsupported MCP protocol version",
@@ -3294,6 +3297,8 @@ mod tests {
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         }
     }
 
@@ -4998,6 +5003,8 @@ process:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
         let engine = OpaEngine::from_proto_with_pid_and_binary_identity_required(&proto, 0, false)
             .expect("engine from relaxed proto");
@@ -5536,6 +5543,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
 
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
@@ -5607,6 +5616,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
 
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
@@ -5683,6 +5694,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
 
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
@@ -7223,6 +7236,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
 
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
@@ -7280,6 +7295,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
 
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
@@ -7338,6 +7355,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
 
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
@@ -7398,6 +7417,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
 
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
@@ -7457,6 +7478,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
 
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
@@ -8968,6 +8991,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
         let engine = OpaEngine::from_proto(&proto).expect("engine from proto");
         let input = NetworkInput {
@@ -9038,6 +9063,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
         let engine = OpaEngine::from_proto(&proto).expect("Failed to create engine from proto");
 
@@ -9268,6 +9295,8 @@ network_policies:
             }),
             network_policies,
             network_middlewares: std::collections::HashMap::default(),
+            network_budgets: Default::default(),
+            usage_monitoring: None,
         };
         let engine = OpaEngine::from_proto(&proto).unwrap();
         // Port 443

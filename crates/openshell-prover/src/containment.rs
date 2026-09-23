@@ -92,6 +92,9 @@ pub fn parse_policy_str(source: &str) -> Result<ContainmentPolicy, ParsePolicyEr
         landlock,
         process,
         network_middlewares,
+        // Budgets and usage monitoring limit volume, not reachability.
+        network_budgets: _,
+        usage_monitoring: _,
     } = document;
     Ok(ContainmentPolicy {
         filesystem_policy,

@@ -1054,6 +1054,8 @@ const HANDLED_TOPLEVEL: &[&str] = &[
     "process",
     "network_policies",
     "network_middlewares",
+    "network_budgets",
+    "usage_monitoring",
 ];
 
 /// Per-rule keys under each network_policies entry that the mapper handles.

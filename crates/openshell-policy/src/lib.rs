@@ -9,6 +9,7 @@
 //! `openshell-policy-schema`; this crate adapts that representation to the
 //! runtime protobuf model and owns runtime-dependent validation.
 
+mod budgets;
 mod compose;
 mod l7_validate;
 mod merge;
@@ -503,6 +504,8 @@ fn to_proto(raw: PolicyFile) -> Result<SandboxPolicy> {
     let network_middlewares = middleware::into_proto(raw.network_middlewares)
         .into_diagnostic()
         .wrap_err("failed to convert network middleware config")?;
+    let network_budgets = budgets::into_proto(raw.network_budgets);
+    let usage_monitoring = budgets::monitoring_into_proto(raw.usage_monitoring);
 
     let network_policies = raw
         .network_policies
@@ -624,6 +627,8 @@ fn to_proto(raw: PolicyFile) -> Result<SandboxPolicy> {
         }),
         network_policies,
         network_middlewares,
+        network_budgets,
+        usage_monitoring,
     })
 }
 
@@ -796,6 +801,8 @@ fn from_proto(policy: &SandboxPolicy) -> Result<PolicyFile> {
         .collect::<Result<BTreeMap<_, _>>>()?;
 
     let network_middlewares = middleware::from_proto(&policy.network_middlewares);
+    let network_budgets = budgets::from_proto(&policy.network_budgets);
+    let usage_monitoring = budgets::monitoring_from_proto(policy.usage_monitoring.as_ref());
 
     Ok(PolicyFile {
         // Proto3 scalar fields do not preserve presence. Treat zero as an
@@ -811,6 +818,8 @@ fn from_proto(policy: &SandboxPolicy) -> Result<PolicyFile> {
         process,
         network_policies,
         network_middlewares,
+        network_budgets,
+        usage_monitoring,
     })
 }
 
@@ -1004,6 +1013,8 @@ pub fn restrictive_default_policy() -> SandboxPolicy {
         process: None,
         network_policies: HashMap::new(),
         network_middlewares: HashMap::default(),
+        network_budgets: HashMap::default(),
+        usage_monitoring: None,
     }
 }
 
@@ -1091,6 +1102,12 @@ pub enum PolicyViolation {
     InvalidMiddlewareConfig { name: String, reason: String },
     /// Too many middleware configurations are attached to one policy.
     TooManyMiddlewareConfigs { count: usize },
+    /// A network budget is structurally invalid.
+    InvalidNetworkBudget { name: String, reason: String },
+    /// Too many network budgets are attached to one policy.
+    TooManyNetworkBudgets { count: usize },
+    /// The usage monitoring settings are invalid.
+    InvalidUsageMonitoring { reason: String },
     /// Two middleware configurations use the same execution order.
     DuplicateMiddlewareOrder {
         order: i32,
@@ -1260,6 +1277,19 @@ impl fmt::Display for PolicyViolation {
                     "too many middleware configs ({count} > {})",
                     openshell_core::middleware::MAX_MIDDLEWARE_CONFIGS
                 )
+            }
+            Self::InvalidNetworkBudget { name, reason } => {
+                write!(f, "network budget '{name}' is invalid: {reason}")
+            }
+            Self::TooManyNetworkBudgets { count } => {
+                write!(
+                    f,
+                    "too many network budgets ({count} > {})",
+                    openshell_core::egress_usage::MAX_NETWORK_BUDGETS
+                )
+            }
+            Self::InvalidUsageMonitoring { reason } => {
+                write!(f, "usage_monitoring is invalid: {reason}")
             }
             Self::DuplicateMiddlewareOrder {
                 order,
@@ -1674,6 +1704,7 @@ fn validate_sandbox_policy_with_mcp_presence(
     }
 
     violations.extend(middleware::validate(policy));
+    violations.extend(budgets::validate(policy));
 
     if violations.is_empty() {
         Ok(())
@@ -3678,6 +3709,8 @@ network_policies:
             landlock: None,
             network_policies: HashMap::new(),
             network_middlewares: HashMap::default(),
+            network_budgets: HashMap::default(),
+            usage_monitoring: None,
         };
         assert!(validate_sandbox_policy(&policy).is_ok());
     }
@@ -4136,6 +4169,8 @@ network_policies:
             landlock: None,
             network_policies: HashMap::new(),
             network_middlewares: HashMap::default(),
+            network_budgets: HashMap::default(),
+            usage_monitoring: None,
         };
         assert!(validate_sandbox_policy(&policy).is_ok());
     }
@@ -4152,6 +4187,8 @@ network_policies:
             landlock: None,
             network_policies: HashMap::new(),
             network_middlewares: HashMap::default(),
+            network_budgets: HashMap::default(),
+            usage_monitoring: None,
         };
         assert!(validate_sandbox_policy(&policy).is_ok());
     }
@@ -4224,6 +4261,8 @@ network_policies:
             landlock: None,
             network_policies: HashMap::new(),
             network_middlewares: HashMap::default(),
+            network_budgets: HashMap::default(),
+            usage_monitoring: None,
         };
         assert!(validate_sandbox_policy(&policy).is_ok());
     }

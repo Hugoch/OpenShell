@@ -17,6 +17,7 @@ pub mod denial;
 pub mod driver_mounts;
 pub mod driver_utils;
 pub mod dynamic_string_allowlist;
+pub mod egress_usage;
 pub mod endpoint_path;
 pub mod endpoint_status;
 pub mod error;

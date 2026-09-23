@@ -159,6 +159,14 @@ pub struct PolicyDocument {
     pub network_policies: BTreeMap<String, NetworkPolicyRule>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub network_middlewares: BTreeMap<String, NetworkMiddleware>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub network_budgets: BTreeMap<String, NetworkBudget>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_optional_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub usage_monitoring: Option<UsageMonitoring>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -457,6 +465,70 @@ pub struct MiddlewareEndpointSelector {
     pub exclude: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkBudget {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policies: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requests_per_minute: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connections_per_minute: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_out_per_hour: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_in_per_hour: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub on_exceed: NetworkBudgetAction,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkBudgetAction {
+    #[default]
+    Alert,
+    Deny,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsageMonitoring {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_optional_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub novelty: Option<UsageNovelty>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_optional_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub drift: Option<UsageDrift>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsageNovelty {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learning_period_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsageDrift {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_requests: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_bytes: Option<u64>,
+}
+
 // Signature dictated by serde's `skip_serializing_if`.
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero(value: &u16) -> bool {
@@ -662,6 +734,8 @@ fn inspect_document(root: &serde_yml::Value) -> InspectionResult {
             "process",
             "network_policies",
             "network_middlewares",
+            "network_budgets",
+            "usage_monitoring",
         ],
     )?
     else {
@@ -717,6 +791,38 @@ fn inspect_document(root: &serde_yml::Value) -> InspectionResult {
             )?;
             // `config` is deliberately an open user-data map.
         }
+    }
+
+    for (name, budget) in open_map(root.get("network_budgets")) {
+        inspect_closed(
+            budget,
+            &join("network_budgets", name),
+            &[
+                "policies",
+                "hosts",
+                "requests_per_minute",
+                "connections_per_minute",
+                "bytes_out_per_hour",
+                "bytes_in_per_hour",
+                "on_exceed",
+            ],
+        )?;
+    }
+
+    if let Some(monitoring) = root.get("usage_monitoring")
+        && let Some(monitoring) =
+            inspect_closed(monitoring, "usage_monitoring", &["novelty", "drift"])?
+    {
+        inspect_named(
+            monitoring.get("novelty"),
+            "usage_monitoring.novelty",
+            &["learning_period_seconds"],
+        )?;
+        inspect_named(
+            monitoring.get("drift"),
+            "usage_monitoring.drift",
+            &["enabled", "ratio", "min_requests", "min_bytes"],
+        )?;
     }
     Ok(())
 }
@@ -1197,6 +1303,22 @@ mod tests {
                 "network_middlewares.audit.endpoints.future",
             ),
             (
+                "version: 1\nnetwork_budgets: { hub: { future: true } }\n",
+                "network_budgets.hub.future",
+            ),
+            (
+                "version: 1\nusage_monitoring: { future: true }\n",
+                "usage_monitoring.future",
+            ),
+            (
+                "version: 1\nusage_monitoring: { novelty: { future: true } }\n",
+                "usage_monitoring.novelty.future",
+            ),
+            (
+                "version: 1\nusage_monitoring: { drift: { future: true } }\n",
+                "usage_monitoring.drift.future",
+            ),
+            (
                 "version: 1\nnetwork_policies: { api: { endpoints: [{ host: example.com, port: 443, credential_binding: { provider: p, future: true } }] } }\n",
                 "network_policies.api.endpoints[0].credential_binding.future",
             ),
@@ -1396,5 +1518,46 @@ network_policies:
             Some(&["GET", "WEBSOCKET_TEXT"][..])
         );
         assert_eq!(expand_access_preset("rest", "unknown"), None);
+    }
+
+    #[test]
+    fn parses_network_budgets_and_usage_monitoring() {
+        let yaml = "version: 1
+network_budgets:
+  hub:
+    policies: [model_hub]
+    hosts: [huggingface.co]
+    requests_per_minute: 120
+    bytes_in_per_hour: 1024
+    on_exceed: deny
+  total: { bytes_out_per_hour: 10 }
+usage_monitoring:
+  novelty: { learning_period_seconds: 60 }
+  drift: { enabled: true, ratio: 5, min_requests: 10, min_bytes: 1000 }
+";
+        let policy = parse_policy(yaml).expect("policy parses");
+        let hub = &policy.network_budgets["hub"];
+        assert_eq!(hub.policies, ["model_hub"]);
+        assert_eq!(hub.requests_per_minute, Some(120));
+        assert_eq!(hub.connections_per_minute, None);
+        assert_eq!(hub.on_exceed, NetworkBudgetAction::Deny);
+        assert_eq!(
+            policy.network_budgets["total"].on_exceed,
+            NetworkBudgetAction::Alert
+        );
+        let monitoring = policy
+            .usage_monitoring
+            .clone()
+            .expect("usage_monitoring is set");
+        assert_eq!(
+            monitoring
+                .novelty
+                .and_then(|novelty| novelty.learning_period_seconds),
+            Some(60)
+        );
+        assert_eq!(monitoring.drift.and_then(|drift| drift.ratio), Some(5));
+
+        let round_trip = parse_policy(&serialize_policy(&policy).unwrap()).unwrap();
+        assert_eq!(round_trip.network_budgets, policy.network_budgets);
     }
 }
