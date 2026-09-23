@@ -7,7 +7,7 @@ use crate::builders::EventContext;
 use crate::enums::{ActionId, ActivityId, DispositionId, SeverityId, StatusId};
 use crate::events::base_event::BaseEventData;
 use crate::events::{NetworkActivityEvent, OcsfEvent};
-use crate::objects::{Actor, ConnectionInfo, Endpoint, FirewallRule};
+use crate::objects::{Actor, ConnectionInfo, Endpoint, FirewallRule, NetworkTraffic};
 
 /// Builder for Network Activity [4001] events.
 pub struct NetworkActivityBuilder<'a, EndpointState = MissingNetworkEndpoint> {
@@ -24,6 +24,8 @@ pub struct NetworkActivityBuilder<'a, EndpointState = MissingNetworkEndpoint> {
     firewall_rule: Option<FirewallRule>,
     connection_info: Option<ConnectionInfo>,
     observation_point_id: Option<u8>,
+    cumulative_traffic: Option<NetworkTraffic>,
+    duration_ms: Option<i64>,
     message: Option<String>,
     status_detail: Option<String>,
     unmapped: Option<serde_json::Map<String, serde_json::Value>>,
@@ -73,6 +75,8 @@ impl<'a> NetworkActivityBuilder<'a, MissingNetworkEndpoint> {
             firewall_rule: None,
             connection_info: None,
             observation_point_id: None,
+            cumulative_traffic: None,
+            duration_ms: None,
             message: None,
             status_detail: None,
             unmapped: None,
@@ -132,6 +136,8 @@ impl<'a, EndpointState> NetworkActivityBuilder<'a, EndpointState> {
             firewall_rule: self.firewall_rule,
             connection_info: self.connection_info,
             observation_point_id: self.observation_point_id,
+            cumulative_traffic: self.cumulative_traffic,
+            duration_ms: self.duration_ms,
             message: self.message,
             status_detail: self.status_detail,
             unmapped: self.unmapped,
@@ -158,6 +164,8 @@ impl<'a, EndpointState> NetworkActivityBuilder<'a, EndpointState> {
             firewall_rule: self.firewall_rule,
             connection_info: self.connection_info,
             observation_point_id: self.observation_point_id,
+            cumulative_traffic: self.cumulative_traffic,
+            duration_ms: self.duration_ms,
             message: self.message,
             status_detail: self.status_detail,
             unmapped: self.unmapped,
@@ -179,6 +187,13 @@ impl<'a, EndpointState> NetworkActivityBuilder<'a, EndpointState> {
     #[must_use]
     pub fn observation_point(mut self, id: u8) -> Self {
         self.observation_point_id = Some(id);
+        self
+    }
+    /// Set flow totals and duration for a close event.
+    #[must_use]
+    pub fn cumulative_traffic(mut self, traffic: NetworkTraffic, duration_ms: i64) -> Self {
+        self.cumulative_traffic = Some(traffic);
+        self.duration_ms = Some(duration_ms);
         self
     }
     #[must_use]
@@ -296,6 +311,8 @@ impl NetworkActivityBuilder<'_, HasNetworkEndpoint> {
             disposition: self.disposition,
             observation_point_id: self.observation_point_id,
             is_src_dst_assignment_known: Some(true),
+            cumulative_traffic: self.cumulative_traffic,
+            duration: self.duration_ms,
         })
     }
 }
@@ -333,5 +350,39 @@ mod tests {
         assert_eq!(json["container"]["name"], "my-sandbox");
         assert_eq!(json["device"]["hostname"], "sandbox-abc123");
         assert_eq!(json["is_src_dst_assignment_known"], true);
+    }
+
+    #[test]
+    fn close_event_carries_cumulative_traffic_and_duration() {
+        use crate::validation::schema::{
+            load_class_schema, load_object_schema, validate_required_fields,
+        };
+
+        let ctx = test_sandbox_context();
+        let event = NetworkActivityBuilder::new(&ctx)
+            .activity(ActivityId::Close)
+            .action(ActionId::Allowed)
+            .disposition(DispositionId::Allowed)
+            .status(StatusId::Success)
+            .dst_endpoint(Endpoint::from_domain("api.example.com", 443))
+            .cumulative_traffic(NetworkTraffic::new(512, 4096), 1500)
+            .message("CLOSE api.example.com:443")
+            .build();
+
+        let json = event.to_json().unwrap();
+        assert_eq!(json["activity_name"], "Close");
+        assert_eq!(json["cumulative_traffic"]["bytes_out"], 512);
+        assert_eq!(json["cumulative_traffic"]["bytes_in"], 4096);
+        assert_eq!(json["duration"], 1500);
+        validate_required_fields(&json, &load_class_schema("network_activity"));
+        validate_required_fields(
+            &json["cumulative_traffic"],
+            &load_object_schema("network_traffic"),
+        );
+        let class = load_class_schema("network_activity");
+        assert_eq!(
+            class["attributes"]["cumulative_traffic"]["object_type"],
+            "network_traffic"
+        );
     }
 }

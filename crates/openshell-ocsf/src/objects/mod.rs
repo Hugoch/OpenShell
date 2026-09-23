@@ -14,6 +14,7 @@ mod finding;
 mod firewall_rule;
 mod http;
 mod metadata;
+mod network_traffic;
 mod process;
 
 pub use ai_model::AiModel;
@@ -27,4 +28,5 @@ pub use finding::{Evidence, FindingInfo, Remediation};
 pub use firewall_rule::FirewallRule;
 pub use http::{HttpRequest, HttpResponse, Url};
 pub use metadata::{Metadata, Product};
+pub use network_traffic::NetworkTraffic;
 pub use process::{Actor, Process};

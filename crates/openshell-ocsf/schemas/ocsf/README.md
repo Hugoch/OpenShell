@@ -20,12 +20,12 @@ for offline test validation.
 - `device_config_state_change` [5019]
 - `base_event` [0]
 
-### Objects (17)
+### Objects (18)
 
 - `metadata`, `network_endpoint`, `network_proxy`, `process`, `actor`
 - `device`, `container`, `product`, `firewall_rule`, `finding_info`
 - `evidences`, `http_request`, `http_response`, `url`, `attack`
-- `remediation`, `connection_info`, `ai_model`
+- `remediation`, `connection_info`, `ai_model`, `network_traffic`
 
 ### Profiles (1)
 
@@ -46,7 +46,8 @@ done
 
 for object in metadata network_endpoint network_proxy process actor device \
               container product firewall_rule finding_info evidences \
-              http_request http_response url attack remediation connection_info; do
+              http_request http_response url attack remediation connection_info \
+              network_traffic; do
   curl -s "https://schema.ocsf.io/api/${VERSION}/objects/${object}" \
     | python3 -m json.tool > "objects/${object}.json"
 done
