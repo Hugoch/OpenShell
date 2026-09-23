@@ -16,6 +16,7 @@ depends = [
   "test:gateway-config",
   "test:e2e-parity",
   "test:packaging-assets",
+  "test:qualification-summary",
   "test:codex-security-release-range",
   "test:docs-website",
 ]
@@ -53,6 +54,12 @@ hide = true
 description = "Run static packaging asset tests"
 run = "tasks/scripts/test-packaging-assets.sh"
 run_windows = "echo Skipping test:packaging-assets: Linux service and RPM assets do not apply on Windows."
+hide = true
+
+["test:qualification-summary"]
+description = "Test release qualification summary generation"
+run = "tasks/scripts/test-qualification-summary.sh"
+run_windows = "echo Skipping test:qualification-summary: the release workflow runs on Unix hosts."
 hide = true
 
 ["test:codex-security-release-range"]
