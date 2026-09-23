@@ -109,7 +109,9 @@ lanes and limits GPU jobs to Linux runners. Each dispatch gets its own image
 tag and concurrency key, including in the integration runner, allowing bounded parallel runs against one immutable
 candidate commit without changing PR or merge-queue gates. Stability mode adds
 the managed Podman driver path, Kubernetes database scenarios, and Docker-hosted
-SDK and policy-advisor E2E checks.
+SDK and policy-advisor E2E checks. The managed Podman test gateway receives the
+same run-specific sandbox runtime image as the standalone driver so each round
+uses the image built from its source commit.
 
 Docker E2E tool-dependent workloads use a dedicated Noble-based fixture,
 separate from the product's minimal default image. The fixture supplies the

@@ -72,6 +72,7 @@ e2e_write_podman_gateway_config() {
   local podman_socket=${15}
   local oidc_mode=${16}
   local oidc_issuer=${17}
+  local sandbox_runtime_image=${18:-}
   local configured_with_tls option_profile
 
   case "${OPENSHELL_E2E_PODMAN_OPTION_PROFILE:-}" in
@@ -151,10 +152,15 @@ e2e_write_podman_gateway_config() {
         if [ "${external_driver}" = "1" ]; then
           printf 'socket_path = %s\n' "$(e2e_podman_toml_string "${driver_socket}")"
         else
+          if [ -z "${sandbox_runtime_image}" ]; then
+            echo "ERROR: schema v2 managed Podman requires a sandbox runtime image." >&2
+            return 2
+          fi
           printf 'allow_driver_config = true\n'
           printf 'network_name = %s\n' "$(e2e_podman_toml_string "${network_name}")"
           printf 'gateway_port = %s\n' "${gateway_port}"
           printf 'default_image = %s\n' "$(e2e_podman_toml_string "${sandbox_image}")"
+          printf 'sandbox_runtime_image = %s\n' "$(e2e_podman_toml_string "${sandbox_runtime_image}")"
           printf 'image_pull_policy = "if_not_present"\n'
           if [ "${option_profile}" = "podman-options" ]; then
             printf 'sandbox_pids_limit = 31\n'
