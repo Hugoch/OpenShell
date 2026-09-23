@@ -107,7 +107,9 @@ Kubernetes, and GPU jobs from commit-addressed build artifacts. Its manual
 stability mode adds the normally optional Kubernetes HA and credential-driver
 lanes and limits GPU jobs to Linux runners. Each dispatch gets its own image
 tag and concurrency key, allowing bounded parallel runs against one immutable
-candidate commit without changing PR or merge-queue gates.
+candidate commit without changing PR or merge-queue gates. Stability mode adds
+the managed Podman driver path, Kubernetes database scenarios, and Docker-hosted
+SDK and policy-advisor E2E checks.
 
 Docker E2E tool-dependent workloads use a dedicated Noble-based fixture,
 separate from the product's minimal default image. The fixture supplies the

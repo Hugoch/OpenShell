@@ -37,7 +37,9 @@ push-triggered workflow jobs themselves.
 To repeat the full non-Windows E2E matrix on a fixed commit, manually dispatch
 `Branch E2E Checks` from that commit's branch with `stability_campaign=true`.
 This enables the Kubernetes HA and credential-driver jobs and runs GPU E2E on
-Linux ARM64 and AMD64. It excludes the experimental WSL GPU job. The standard
+Linux ARM64 and AMD64. Stability mode also runs managed Podman, Kubernetes
+database scenarios, TypeScript interactive exec, mechanistic policy checks, and
+the gateway-without-drivers contract. It excludes the experimental WSL GPU job. The standard
 PR and merge-queue E2E selection is unchanged. Each campaign dispatch gets a
 unique concurrency key and runtime-image tag, so up to five runs can execute
 at once without sharing mutable image tags. Dispatch ten runs in two waves of
