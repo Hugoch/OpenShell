@@ -415,7 +415,7 @@ func TestListGateways_MultipleGateways(t *testing.T) {
 		require.NoError(t, os.MkdirAll(gwDir, 0o755))
 	}
 
-	gateways, err := ListGateways()
+	gateways, err := listGateways(filepath.Join(tmp, "system"))
 	require.NoError(t, err)
 	assert.Len(t, gateways, 3)
 
@@ -433,9 +433,26 @@ func TestListGateways_EmptyDirs(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 
-	gateways, err := ListGateways()
+	gateways, err := listGateways(filepath.Join(tmp, "system"))
 	require.NoError(t, err)
 	assert.Empty(t, gateways)
+}
+
+func TestListGateways_SystemConfig(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "user"))
+	systemBase := filepath.Join(tmp, "system")
+	require.NoError(t, os.MkdirAll(filepath.Join(systemBase, "gateways", "shared"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "user", "openshell", "gateways", "shared"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(systemBase, "gateways", "system-only"), 0o755))
+
+	gateways, err := listGateways(systemBase)
+	require.NoError(t, err)
+	require.Len(t, gateways, 2)
+	assert.Equal(t, "shared", gateways[0].Name)
+	assert.Equal(t, SourceUser, gateways[0].Source)
+	assert.Equal(t, "system-only", gateways[1].Name)
+	assert.Equal(t, SourceSystem, gateways[1].Source)
 }
 
 func TestListGateways_ActiveStatus(t *testing.T) {
@@ -448,7 +465,7 @@ func TestListGateways_ActiveStatus(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(tmp, "openshell"), "active_gateway", "beta")
 
-	gateways, err := ListGateways()
+	gateways, err := listGateways(filepath.Join(tmp, "system"))
 	require.NoError(t, err)
 	assert.Len(t, gateways, 2)
 

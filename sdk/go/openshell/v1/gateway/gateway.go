@@ -114,6 +114,10 @@ func loadConfigInternal(name string) (*Config, error) {
 //
 // ListGateways is safe for concurrent use from multiple goroutines.
 func ListGateways() ([]Info, error) {
+	return listGateways(systemConfigBase)
+}
+
+func listGateways(systemConfigDir string) ([]Info, error) {
 	seen := make(map[string]bool)
 	var result []Info
 
@@ -135,7 +139,7 @@ func ListGateways() ([]Info, error) {
 		}
 	}
 
-	sysNames, listErr := listGatewayDirs(systemConfigBase)
+	sysNames, listErr := listGatewayDirs(systemConfigDir)
 	if listErr != nil {
 		return nil, listErr
 	}
