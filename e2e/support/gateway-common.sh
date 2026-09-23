@@ -44,6 +44,22 @@ e2e_pick_port() {
   python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'
 }
 
+e2e_pick_port_excluding() {
+  local candidate reserved attempt
+  for ((attempt = 0; attempt < 32; attempt++)); do
+    candidate="$(e2e_pick_port)"
+    for reserved in "$@"; do
+      if [ "${candidate}" = "${reserved}" ]; then
+        continue 2
+      fi
+    done
+    printf '%s\n' "${candidate}"
+    return 0
+  done
+  echo "ERROR: could not find an unused e2e port after 32 attempts" >&2
+  return 1
+}
+
 e2e_generate_pki() {
   local gateway_bin=$1
   local pki_dir=$2

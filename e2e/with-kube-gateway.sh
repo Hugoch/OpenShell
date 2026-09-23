@@ -863,7 +863,7 @@ start_grpc_portforward() {
 # targets grpc only, and the health endpoint is not the SSH path so port-forward
 # is fine for it. Prints the log and returns non-zero on failure.
 start_health_portforward() {
-  HEALTH_LOCAL_PORT="$(e2e_pick_port)"
+  HEALTH_LOCAL_PORT="$(e2e_pick_port_excluding "${LOCAL_PORT:-}")"
   local workload_ref
   workload_ref="$(kube_workload_ref "${RELEASE_NAME}")"
   echo "Starting kubectl port-forward ${workload_ref} ${HEALTH_LOCAL_PORT}:health..."

@@ -526,7 +526,7 @@ if ! ensure_sandbox_image_available "${SANDBOX_IMAGE}"; then
 fi
 
 HOST_PORT=$(e2e_pick_port)
-HEALTH_PORT=$(e2e_pick_port)
+HEALTH_PORT=$(e2e_pick_port_excluding "${HOST_PORT}")
 STATE_DIR="${XDG_STATE_HOME}"
 mkdir -p "${STATE_DIR}"
 JWT_DIR="${STATE_DIR}/jwt"

@@ -666,7 +666,7 @@ e2e_generate_pki "${GATEWAY_BIN}" "${PKI_DIR}" "host.containers.internal"
 export OPENSHELL_E2E_GATEWAY_CA_CERT="${PKI_DIR}/ca.crt"
 
 HOST_PORT=$(e2e_pick_port)
-HEALTH_PORT=$(e2e_pick_port)
+HEALTH_PORT=$(e2e_pick_port_excluding "${HOST_PORT}")
 PRIMARY_BIND_IP="127.0.0.1"
 CLI_ENDPOINT_HOST="127.0.0.1"
 HEALTH_ENDPOINT_HOST="127.0.0.1"

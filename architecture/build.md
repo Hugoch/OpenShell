@@ -115,6 +115,9 @@ uses the image built from its source commit.
 The Kubernetes HA test binary runs one test at a time because its scenarios
 scale and roll the same gateway deployment, and separate Nextest processes do
 not share their in-process lock.
+Gateway E2E wrappers select distinct API and health ports before starting a
+gateway or port forward; the OS can otherwise return the same ephemeral port
+for two successive selections.
 Policy-advisor E2E checks build a dedicated Docker workload with curl and cargo
 at the paths their denial scenarios inspect.
 The Docker gateway wrapper exports its resolved sandbox image to the test
