@@ -169,8 +169,13 @@ func TestConverterCoversAllProtoFields_SandboxPolicy(t *testing.T) {
 		"landlock":            true,
 		"network_middlewares": true,
 	}
+	// Egress usage budgets and monitoring have no Go domain types yet.
+	skipped := fieldSet{
+		"network_budgets":  true,
+		"usage_monitoring": true,
+	}
 
-	assertAllFieldsCovered(t, (&sandboxpb.SandboxPolicy{}).ProtoReflect().Descriptor(), handled, nil)
+	assertAllFieldsCovered(t, (&sandboxpb.SandboxPolicy{}).ProtoReflect().Descriptor(), handled, skipped)
 }
 
 func TestConverterCoversAllProtoFields_NetworkMiddlewareConfig(t *testing.T) {
