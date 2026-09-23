@@ -297,9 +297,10 @@ through the proposal loop instead of treating the denial as terminal.
 2. **Build and validate the candidate.** The gateway first canonicalizes a
    mechanistic proposal against the live effective policy. If an endpoint is
    already governed by an inspected or provider-owned contract, the candidate
-   preserves that contract and adds only the proposed sandbox binary. Provider
-   rules are immutable inputs; the sandbox contribution is stored as an
-   overlay. The gateway then performs the same merge, policy validation,
+   preserves that contract and adds only the proposed sandbox binary. A new
+   binary gets a separate overlay rule, leaving the existing sandbox or
+   provider rule intact. The gateway then performs the same merge, policy
+   validation,
    provider composition, credential preflight, and prover evaluation that the
    candidate would encounter when applied. Each chunk stores the resulting
    effective candidate, its hashes, any application error, and a review token

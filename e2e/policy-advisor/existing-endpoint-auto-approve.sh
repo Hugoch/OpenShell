@@ -72,7 +72,7 @@ done
 
 printf '%s\n' "$RULE_OUTPUT"
 grep -q "Status: approved" <<<"$RULE_OUTPUT"
-grep -q "Rule: cargo_registry" <<<"$RULE_OUTPUT"
+grep -q "Rule: allow_index_crates_io_443" <<<"$RULE_OUTPUT"
 grep -q "Prover: prover: no new findings" <<<"$RULE_OUTPUT"
 if grep -q "Application:" <<<"$RULE_OUTPUT"; then
     echo "auto-approved chunk unexpectedly retained an application error" >&2
@@ -80,6 +80,8 @@ if grep -q "Application:" <<<"$RULE_OUTPUT"; then
 fi
 
 POLICY_OUTPUT="$($OPENSHELL_BIN policy get "$SANDBOX" --full 2>&1 | strip_ansi)"
+grep -q '^  allow_index_crates_io_443:' <<<"$POLICY_OUTPUT"
+grep -q '^  cargo_registry:' <<<"$POLICY_OUTPUT"
 grep -q "protocol: rest" <<<"$POLICY_OUTPUT"
 grep -q "access: read-only" <<<"$POLICY_OUTPUT"
 grep -q "/usr/bin/cargo" <<<"$POLICY_OUTPUT"
