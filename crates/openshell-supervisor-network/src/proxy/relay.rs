@@ -471,8 +471,14 @@ network_policies:
                 },
             );
             request.request_default_port = Some(80);
-            let context = prepare_http_relay(Some(&route), &engine, &decision, &request)
-                .expect("current policy generation should prepare the relay");
+            let context = prepare_http_relay(
+                Some(&route),
+                &engine,
+                &decision,
+                &request,
+                openshell_ocsf::ctx::ctx(),
+            )
+            .expect("current policy generation should prepare the relay");
             relay_http_stream(&mut relay_client, &mut relay_upstream, context).await
         });
 

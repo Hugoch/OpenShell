@@ -7,7 +7,7 @@ pub(crate) mod destination;
 mod egress;
 mod relay;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::identity::BinaryIdentityCache;
 use crate::l7::EndpointObserver;
 use crate::l7::tls::ProxyTlsState;
@@ -175,11 +175,19 @@ pub(crate) enum ProxyIdentityMode {
         identity_cache: Arc<BinaryIdentityCache>,
         entrypoint_pid: Arc<AtomicU32>,
     },
-    /// Host-side mode for platforms where procfs socket ownership is
-    /// unavailable. MXC uses this on Windows: every connection redirected to
-    /// the per-sandbox listener is evaluated as the configured sandbox agent
-    /// identity.
-    #[cfg(any(not(target_os = "linux"), test))]
+    /// Windows host-side mode: bind each request to the process that owns the
+    /// workload side of the accepted TCP connection.
+    #[cfg(target_os = "windows")]
+    Windows {
+        identity_cache: Arc<BinaryIdentityCache>,
+        required_proxy_authorization: Option<Arc<str>>,
+        /// Per-sandbox context for host-side proxies. The process-wide OCSF
+        /// context cannot identify one sandbox when a gateway hosts many.
+        event_context: Option<Arc<EventContext>>,
+    },
+    /// Static fallback for platforms without socket-owner resolution and for
+    /// tests that need to inject a deterministic identity.
+    #[cfg(any(not(any(target_os = "linux", target_os = "windows")), test))]
     Static {
         binary_path: PathBuf,
         binary_sha256: String,
@@ -202,12 +210,21 @@ impl ProxyIdentityMode {
         }
     }
 
-    #[cfg(any(not(target_os = "linux"), test))]
+    #[cfg(target_os = "windows")]
+    pub(crate) fn windows_with_client_auth(required_proxy_authorization: Option<Arc<str>>) -> Self {
+        Self::Windows {
+            identity_cache: Arc::new(BinaryIdentityCache::new()),
+            required_proxy_authorization,
+            event_context: None,
+        }
+    }
+
+    #[cfg(any(not(any(target_os = "linux", target_os = "windows")), test))]
     pub(crate) fn static_binary(path: impl Into<PathBuf>) -> Result<Self> {
         Self::static_binary_with_client_auth(path, None)
     }
 
-    #[cfg(any(not(target_os = "linux"), test))]
+    #[cfg(any(not(any(target_os = "linux", target_os = "windows")), test))]
     pub(crate) fn static_binary_with_client_auth(
         path: impl Into<PathBuf>,
         required_proxy_authorization: Option<Arc<str>>,
@@ -225,8 +242,10 @@ impl ProxyIdentityMode {
     #[cfg(target_os = "windows")]
     pub(super) fn with_event_context(mut self, context: EventContext) -> Self {
         match &mut self {
-            #[cfg(target_os = "linux")]
-            Self::Procfs { .. } => {}
+            Self::Windows { event_context, .. } => {
+                *event_context = Some(Arc::new(context));
+            }
+            #[cfg(test)]
             Self::Static { event_context, .. } => {
                 *event_context = Some(Arc::new(context));
             }
@@ -236,7 +255,12 @@ impl ProxyIdentityMode {
 
     fn event_context(&self) -> &EventContext {
         match self {
-            #[cfg(any(not(target_os = "linux"), test))]
+            #[cfg(target_os = "windows")]
+            Self::Windows {
+                event_context: Some(context),
+                ..
+            } => context,
+            #[cfg(any(not(any(target_os = "linux", target_os = "windows")), test))]
             Self::Static {
                 event_context: Some(context),
                 ..
@@ -249,7 +273,12 @@ impl ProxyIdentityMode {
         match self {
             #[cfg(target_os = "linux")]
             Self::Procfs { .. } => None,
-            #[cfg(any(not(target_os = "linux"), test))]
+            #[cfg(target_os = "windows")]
+            Self::Windows {
+                required_proxy_authorization,
+                ..
+            } => required_proxy_authorization.as_deref(),
+            #[cfg(any(not(any(target_os = "linux", target_os = "windows")), test))]
             Self::Static {
                 required_proxy_authorization,
                 ..
@@ -263,7 +292,9 @@ impl ProxyIdentityMode {
             Self::Procfs { entrypoint_pid, .. } => {
                 entrypoint_pid.load(std::sync::atomic::Ordering::Acquire)
             }
-            #[cfg(any(not(target_os = "linux"), test))]
+            #[cfg(target_os = "windows")]
+            Self::Windows { .. } => 0,
+            #[cfg(any(not(any(target_os = "linux", target_os = "windows")), test))]
             Self::Static { .. } => 0,
         }
     }
@@ -2989,6 +3020,86 @@ fn sidecar_topology_enabled() -> bool {
         .is_ok_and(|value| value == SIDECAR_SUPERVISOR_TOPOLOGY)
 }
 
+#[cfg(target_os = "windows")]
+fn authorize_egress_intent_windows(
+    connection: crate::procfs::WorkloadProxyTcpConnection,
+    engine: &OpaEngine,
+    identity_cache: &BinaryIdentityCache,
+    intent: EgressIntent,
+) -> EgressDecision {
+    let deny = |reason: String, binary: Option<PathBuf>, binary_pid: Option<u32>| EgressDecision {
+        intent: intent.clone(),
+        action: NetworkAction::Deny { reason },
+        policy_generation: engine.current_generation(),
+        identity: ProcessIdentityEvidence::Unavailable(IdentityUnavailableReason::LookupFailed),
+        endpoint: EndpointDecision::default(),
+        binary,
+        binary_pid,
+        ancestors: Vec::new(),
+        cmdline_paths: Vec::new(),
+        binary_match_paths: Vec::new(),
+    };
+
+    let (binary_path, binary_pid) =
+        match crate::windows_process::resolve_tcp_peer_identity(connection) {
+            Ok(identity) => identity,
+            Err(error) => {
+                return deny(
+                    format!("failed to resolve Windows proxy peer identity: {error}"),
+                    None,
+                    None,
+                );
+            }
+        };
+    let binary_sha256 = match identity_cache.verify_or_cache(&binary_path) {
+        Ok(hash) => hash,
+        Err(error) => {
+            return deny(
+                format!("binary integrity check failed: {error}"),
+                Some(binary_path),
+                Some(binary_pid),
+            );
+        }
+    };
+    let input = crate::opa::NetworkInput {
+        host: intent.destination.host.clone(),
+        port: intent.destination.port,
+        binary_path: binary_path.clone(),
+        binary_sha256,
+        ancestors: Vec::new(),
+        cmdline_paths: Vec::new(),
+    };
+
+    match engine.authorize_egress(&input) {
+        Ok(authorization) => EgressDecision {
+            intent,
+            action: authorization.action.clone(),
+            policy_generation: authorization.generation,
+            identity: ProcessIdentityEvidence::Available,
+            endpoint: EndpointDecision::from_authorization(&authorization),
+            binary: Some(binary_path),
+            binary_pid: Some(binary_pid),
+            ancestors: Vec::new(),
+            cmdline_paths: Vec::new(),
+            binary_match_paths: authorization.binary_match_paths.clone(),
+        },
+        Err(error) => EgressDecision {
+            intent,
+            action: NetworkAction::Deny {
+                reason: format!("policy evaluation error: {error}"),
+            },
+            policy_generation: engine.current_generation(),
+            identity: ProcessIdentityEvidence::Available,
+            endpoint: EndpointDecision::default(),
+            binary: Some(binary_path),
+            binary_pid: Some(binary_pid),
+            ancestors: Vec::new(),
+            cmdline_paths: Vec::new(),
+            binary_match_paths: Vec::new(),
+        },
+    }
+}
+
 fn evaluate_endpoint_only_opa(engine: &OpaEngine, intent: EgressIntent) -> EgressDecision {
     let input = crate::opa::NetworkInput {
         host: intent.destination.host.clone(),
@@ -3039,7 +3150,7 @@ fn authorize_egress_intent(
     identity_mode: &ProxyIdentityMode,
     intent: EgressIntent,
 ) -> EgressDecision {
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let _ = &connection;
 
     if !crate::opa::network_binary_identity_required() {
@@ -3058,7 +3169,11 @@ fn authorize_egress_intent(
             entrypoint_pid,
             intent,
         ),
-        #[cfg(any(not(target_os = "linux"), test))]
+        #[cfg(target_os = "windows")]
+        ProxyIdentityMode::Windows { identity_cache, .. } => {
+            authorize_egress_intent_windows(connection, engine, identity_cache, intent)
+        }
+        #[cfg(any(not(any(target_os = "linux", target_os = "windows")), test))]
         ProxyIdentityMode::Static {
             binary_path,
             binary_sha256,
@@ -7399,6 +7514,16 @@ network_policies:
         validate_required_fields(&sandbox_b, &schema);
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_socket_owner_identity_keeps_per_proxy_sandbox_attribution() {
+        let identity = ProxyIdentityMode::windows_with_client_auth(None)
+            .with_event_context(proxy_event_context("sandbox-a-id", "sandbox-a"));
+
+        assert_eq!(identity.event_context().sandbox_id, "sandbox-a-id");
+        assert_eq!(identity.event_context().sandbox_name, "sandbox-a");
+    }
+
     #[test]
     fn forward_l7_parse_rejection_ocsf_includes_denial_context() {
         let event = build_forward_l7_parse_rejection_ocsf_event(
@@ -7768,6 +7893,8 @@ network_policies:
             }
             #[cfg(target_os = "linux")]
             ProxyIdentityMode::Procfs { .. } => panic!("expected static identity mode"),
+            #[cfg(target_os = "windows")]
+            ProxyIdentityMode::Windows { .. } => panic!("expected static identity mode"),
         }
     }
 
