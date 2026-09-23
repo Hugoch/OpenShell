@@ -638,9 +638,9 @@ sandbox workload directly. The relay supports:
 
 - Attachment to the canonical main process through the `openshell-main` SSH
   subsystem. The supervisor owns its retained PTY or pipes, a 1 MiB replay
-  buffer, and a single stdin lease across client disconnects. Ctrl-C from an
-  attachment without the stdin lease closes only that viewer. The input
-  owner forwards Ctrl-C to the process.
+  buffer, and a single stdin lease across client disconnects. Ctrl-C interrupts
+  the foreground process. For read-only attachments, Ctrl-C only exits the
+  current viewer.
 - Independent interactive shell sessions.
 - Command execution. Commands run through a login shell (`bash -lc`) by default,
   so the first of the user's `.bash_profile`, `.bash_login`, or `.profile` is
