@@ -345,10 +345,12 @@ openshell sandbox connect my-sandbox --editor vscode
 
 Attaches to the sandbox's existing canonical main process. Disconnecting leaves
 that process running; reconnecting targets the same process instance and replays
-recent output. Use `sandbox exec --tty -- /bin/bash -l` for a new shell. Press
-`Ctrl-P`, then `Ctrl-Q` to disconnect without terminating main. `Ctrl-C` retains
-its normal terminal behavior and interrupts the foreground process. Configure
-VS Code Remote-SSH with:
+recent output. If an established SSH transport is interrupted, such as when a
+laptop sleeps and wakes, the CLI retries transient failures for up to 60 seconds
+and reattaches to that same process. Use `sandbox exec --tty -- /bin/bash -l`
+for a new shell. Press `Ctrl-P`, then `Ctrl-Q` to disconnect without terminating
+main. `Ctrl-C` retains its normal terminal behavior and interrupts the
+foreground process. Configure VS Code Remote-SSH with:
 
 ```bash
 openshell sandbox ssh-config my-sandbox >> ~/.ssh/config
