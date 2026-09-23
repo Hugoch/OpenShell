@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 #[cfg(test)]
 use std::io::Read;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 
 use openshell_core::ComputeDriverError;
@@ -197,12 +198,14 @@ pub struct RestartMetadata {
 
 /// The shared volume contains only sandbox credentials. Supervisor credentials,
 /// gateway authorization, and the restart copy never enter that volume.
+#[allow(clippy::too_many_arguments)]
 pub fn bootstrap_archives(
     sandbox_id: &str,
     container_id: &str,
     generation: &str,
     identity: &ResolvedWorkloadIdentity,
     allow_extra_supplementary_groups: bool,
+    host_gateway_ip: &str,
     child_env: HashMap<String, String>,
     launch_authentication: &openshell_core::jwt::SandboxLaunchAuthentication,
 ) -> Result<BootstrapArchives, ComputeDriverError> {
@@ -277,7 +280,15 @@ pub fn bootstrap_archives(
             server_name: tls.server_name,
             trust_anchor_pem: tls.trust_anchor_pem,
         },
-        host_gateway_ip: None,
+        // The supervisor uses the host network namespace. On native Podman,
+        // loopback reaches host services; Podman Machine uses the configured
+        // gateway address instead. Pin this trusted backend value so policy DNS
+        // can authorize the reserved alias without trusting /etc/hosts.
+        host_gateway_ip: Some(if host_gateway_ip.is_empty() {
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        } else {
+            host_gateway_ip.parse::<IpAddr>().map_err(invalid)?
+        }),
         resource_claims,
         workload_identity: identity.clone(),
         outer_fence,
@@ -511,6 +522,7 @@ mod tests {
             "generation-1",
             &identity,
             false,
+            "",
             child_env.clone(),
             &authentication,
         )
@@ -551,6 +563,10 @@ mod tests {
         assert_eq!(config.boundary_id, runtime_descriptor.boundary_id);
         assert_eq!(config.session_id, runtime_descriptor.session_id);
         assert_eq!(config.outer_fence, runtime_descriptor.outer_fence);
+        assert_eq!(
+            runtime_descriptor.host_gateway_ip,
+            Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        );
         assert_eq!(config.workload_identity, identity);
         runtime_descriptor
             .outer_fence

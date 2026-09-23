@@ -27,6 +27,7 @@ See [resource admission configuration](../../docs/reference/gateway-config.mdx#e
 | Seccomp | Runtime default plus sandbox-installed filters | Runtime default |
 | Network | `none`; loopback only | Podman host network |
 | Gateway JWT and upstream credentials | Never mounted | Podman secrets |
+| DNS resolver file | Read-only Podman secret naming `127.0.0.53` | Podman host resolver |
 | User volumes and CDI devices | Workload only | Never mounted |
 | Channel | Private named volume, writable | Same volume, read-only |
 
@@ -61,7 +62,14 @@ mediation carries TCP and DNS through one authenticated gRPC connection.
 DNS remains supervisor-mediated; general UDP is unsupported. The driver sets
 `net.ipv4.ip_unprivileged_port_start=0` in the isolated workload network
 namespace so the sandbox's loopback DNS relay can bind port 53 without a
-capability. No nftables or nested network namespace setup runs in the sandbox.
+capability. Podman supplies an empty `/etc/resolv.conf` with `network=none`, so
+the driver mounts a per-sandbox, read-only resolver file through Podman secrets.
+This points libc at the sandbox's loopback DNS relay without adding a network
+interface. No nftables or nested network namespace setup runs in the sandbox.
+The runtime descriptor pins the host gateway used by policy DNS: native
+Podman uses the supervisor's host-network loopback, while Podman Machine uses
+the configured host gateway address. The reserved host alias is authorized
+against that pin rather than an untrusted `/etc/hosts` entry.
 
 The channel contains the sandbox bootstrap and sandbox-side TLS identity only.
 Supervisor private keys and the runtime descriptor stay in the supervisor's private filesystem.

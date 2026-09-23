@@ -185,6 +185,24 @@ async fn cleanup_sandbox_token_secret(client: &PodmanClient, secret_name: &str) 
     }
 }
 
+async fn create_sandbox_dns_secret(
+    client: &PodmanClient,
+    sandbox_id: &str,
+) -> Result<String, ComputeDriverError> {
+    let name = container::dns_secret_name(sandbox_id);
+    client
+        .create_secret(&name, b"nameserver 127.0.0.53\n")
+        .await
+        .map_err(ComputeDriverError::from)?;
+    Ok(name)
+}
+
+async fn cleanup_sandbox_dns_secret(client: &PodmanClient, secret_name: &str) {
+    if let Err(error) = client.remove_secret(secret_name).await {
+        warn!(secret = %secret_name, %error, "Failed to remove Podman sandbox DNS secret");
+    }
+}
+
 /// Read the operator's proxy credentials file and stage it as a per-sandbox
 /// Podman secret, so the credentials reach the supervisor through a root-only
 /// mount rather than the container environment.
@@ -1004,8 +1022,8 @@ impl PodmanComputeDriver {
             ));
         }
 
-        // Create workspace volume and per-sandbox token secret.
-        let (token_secret_name, proxy_auth_secret_name) = async {
+        // Create workspace volume and per-sandbox secrets.
+        let (token_secret_name, proxy_auth_secret_name, dns_secret_name) = async {
             let phase_status = openshell_otel::ErrorStatusGuard::current();
             let result = async {
                 self.client
@@ -1033,7 +1051,21 @@ impl PodmanComputeDriver {
                             return Err(e);
                         }
                     };
-                Ok((token_secret_name, proxy_auth_secret_name))
+                let dns_secret_name =
+                    match create_sandbox_dns_secret(&self.client, &sandbox.id).await {
+                        Ok(name) => name,
+                        Err(error) => {
+                            let _ = self.client.remove_volume(&vol_name).await;
+                            if let Some(secret) = token_secret_name.as_deref() {
+                                cleanup_sandbox_token_secret(&self.client, secret).await;
+                            }
+                            if let Some(secret) = proxy_auth_secret_name.as_deref() {
+                                cleanup_sandbox_proxy_auth_secret(&self.client, secret).await;
+                            }
+                            return Err(error);
+                        }
+                    };
+                Ok((token_secret_name, proxy_auth_secret_name, dns_secret_name))
             }
             .await;
             phase_status.finish(result)
@@ -1046,7 +1078,7 @@ impl PodmanComputeDriver {
         ))
         .await?;
 
-        // Clean up the volume and both per-sandbox secrets on any failure past
+        // Clean up the volume and per-sandbox secrets on any failure past
         // this point.
         let channel_owned = std::sync::atomic::AtomicBool::new(false);
         let cleanup_created = || async {
@@ -1060,6 +1092,7 @@ impl PodmanComputeDriver {
             if let Some(secret) = proxy_auth_secret_name.as_deref() {
                 cleanup_sandbox_proxy_auth_secret(&self.client, secret).await;
             }
+            cleanup_sandbox_dns_secret(&self.client, &dns_secret_name).await;
         };
 
         // Prepare and create the container.
@@ -1162,6 +1195,7 @@ impl PodmanComputeDriver {
                         crate::isolation::userns_preserves_host_groups(
                             self.config.userns.as_deref(),
                         ),
+                        &runtime_config.host_gateway_ip,
                         child_env,
                         &launch_authentication,
                     )?;
@@ -1505,6 +1539,7 @@ impl PodmanComputeDriver {
                 generation.as_str(),
                 &restart_metadata.workload_identity,
                 crate::isolation::userns_preserves_host_groups(self.config.userns.as_deref()),
+                &self.config.host_gateway_ip,
                 restart_metadata.child_env,
                 &launch_authentication,
             )?;
@@ -1575,6 +1610,7 @@ impl PodmanComputeDriver {
             }
             cleanup_sandbox_token_secret(&self.client, &container::token_secret_name(sandbox_id))
                 .await;
+            cleanup_sandbox_dns_secret(&self.client, &container::dns_secret_name(sandbox_id)).await;
             cleanup_sandbox_proxy_auth_secret(
                 &self.client,
                 &container::proxy_auth_secret_name(sandbox_id),
@@ -1617,6 +1653,7 @@ impl PodmanComputeDriver {
             );
         }
         cleanup_sandbox_token_secret(&self.client, &container::token_secret_name(sandbox_id)).await;
+        cleanup_sandbox_dns_secret(&self.client, &container::dns_secret_name(sandbox_id)).await;
         cleanup_sandbox_proxy_auth_secret(
             &self.client,
             &container::proxy_auth_secret_name(sandbox_id),
@@ -3486,6 +3523,7 @@ mod tests {
         if proxy_secret {
             responses.push(StubResponse::new(StatusCode::CREATED, "{}"));
         }
+        responses.push(StubResponse::new(StatusCode::CREATED, "{}")); // DNS resolver secret
         responses.extend([
             image_response("sha256:sandbox-runtime"),
             created_response("sandbox-runtime-extractor"),
@@ -3581,6 +3619,7 @@ mod tests {
                     StubResponse::new(StatusCode::NO_CONTENT, ""), // channel
                     StubResponse::new(StatusCode::NO_CONTENT, ""), // workspace
                     StubResponse::new(StatusCode::NO_CONTENT, ""), // proxy secret
+                    StubResponse::new(StatusCode::NO_CONTENT, ""), // DNS secret
                 ])
                 .collect(),
         );
@@ -3627,6 +3666,7 @@ mod tests {
                     StubResponse::new(StatusCode::NO_CONTENT, ""), // channel
                     StubResponse::new(StatusCode::NO_CONTENT, ""), // workspace
                     StubResponse::new(StatusCode::NO_CONTENT, ""), // proxy secret
+                    StubResponse::new(StatusCode::NO_CONTENT, ""), // DNS secret
                 ])
                 .collect(),
         );
@@ -3668,6 +3708,7 @@ mod tests {
                 StubResponse::new(StatusCode::OK, "[]"),       // list_containers (not found)
                 StubResponse::new(StatusCode::NO_CONTENT, ""), // remove volume
                 StubResponse::new(StatusCode::NO_CONTENT, ""), // remove token secret
+                StubResponse::new(StatusCode::NO_CONTENT, ""), // remove DNS secret
                 StubResponse::new(StatusCode::NO_CONTENT, ""), // remove proxy-auth secret
             ],
         );

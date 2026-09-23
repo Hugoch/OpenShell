@@ -27,6 +27,12 @@ TCP Service, or VM vsock channel. Independent bidirectional `Exchange` RPCs
 carry lifecycle, exec, TCP, and forwarding traffic, while one persistent
 bidirectional `Mediate` RPC carries multiplexed DNS traffic. General application
 UDP is unsupported; UDP DNS remains mediated by the supervisor.
+An isolated Podman workload receives a read-only loopback resolver file because
+Podman's `network=none` mode otherwise supplies an empty resolver file.
+The Podman runtime descriptor pins the supervisor's host-network gateway for
+reserved host aliases: loopback on native Podman, or the configured Podman
+Machine gateway. Policy DNS uses that driver-provided value instead of trusting
+container `/etc/hosts` contents.
 The sandbox probes HTTP/2 connection liveness every five seconds and closes
 connections that miss a ten-second acknowledgement deadline. Closing a
 connection freezes the owned workload process tree and cancels its stream

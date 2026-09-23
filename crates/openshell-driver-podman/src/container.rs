@@ -52,6 +52,7 @@ const VOLUME_PREFIX: &str = "openshell-sandbox-";
 
 /// Secret name prefix for per-sandbox gateway JWTs.
 const TOKEN_SECRET_PREFIX: &str = "openshell-token-";
+const DNS_SECRET_PREFIX: &str = "openshell-dns-";
 const PROXY_AUTH_SECRET_PREFIX: &str = "openshell-proxy-auth-";
 const TLS_CA_SECRET_PREFIX: &str = "openshell-tls-ca-";
 const TLS_CERT_SECRET_PREFIX: &str = "openshell-tls-cert-";
@@ -185,6 +186,12 @@ pub fn volume_name(sandbox_id: &str) -> String {
 #[must_use]
 pub fn token_secret_name(sandbox_id: &str) -> String {
     format!("{TOKEN_SECRET_PREFIX}{sandbox_id}")
+}
+
+/// Build the per-sandbox Podman secret name for the isolated workload resolver.
+#[must_use]
+pub fn dns_secret_name(sandbox_id: &str) -> String {
+    format!("{DNS_SECRET_PREFIX}{sandbox_id}")
 }
 
 /// Build the per-sandbox Podman secret name for the corporate proxy credentials.
@@ -1539,6 +1546,16 @@ pub fn build_isolation_specs(
     workload.hostadd.clear();
     workload.secret_env.clear();
     workload.secrets.clear();
+    // Podman writes an empty resolv.conf for network=none and rejects a DNS
+    // server in that mode. Mount a server-side file so libc can reach the
+    // sandbox's loopback DNS stub without giving the workload a network.
+    workload.secrets.push(SecretMount {
+        source: dns_secret_name(&input.sandbox.id),
+        target: "/etc/resolv.conf".into(),
+        uid: 0,
+        gid: 0,
+        mode: 0o444,
+    });
     workload.healthconfig.test = vec!["NONE".into()];
     workload
         .mounts
@@ -1776,7 +1793,7 @@ mod tests {
         std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
     #[test]
-    fn isolated_pair_keeps_privileges_network_and_secrets_out_of_workload() {
+    fn isolated_pair_keeps_privileges_network_and_credentials_out_of_workload() {
         let sandbox = DriverSandbox {
             id: "pair".into(),
             name: "agent".into(),
@@ -1907,7 +1924,6 @@ mod tests {
         assert!(specs.supervisor.portmappings.is_empty());
         assert!(specs.workload.env.is_empty());
         assert_eq!(specs.workload.unsetenv, vec!["LD_PRELOAD", "HTTP_PROXY"]);
-        assert!(specs.workload.secrets.is_empty());
         assert!(
             specs
                 .workload
@@ -1938,6 +1954,10 @@ mod tests {
         assert_eq!(specs.supervisor.secrets.len(), 1);
         assert_eq!(specs.supervisor.secrets[0].source, "jwt");
         assert_eq!(specs.supervisor.secrets[0].uid, 1000);
+        assert_eq!(specs.workload.secrets.len(), 1);
+        assert_eq!(specs.workload.secrets[0].source, dns_secret_name("pair"));
+        assert_eq!(specs.workload.secrets[0].target, "/etc/resolv.conf");
+        assert_eq!(specs.workload.secrets[0].mode, 0o444);
         assert_eq!(specs.supervisor.volumes.len(), 1);
         assert!(specs.workload.volumes[0].options.contains(&"rw".into()));
         assert!(!specs.workload.volumes[0].options.contains(&"nocopy".into()));
