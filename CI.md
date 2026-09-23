@@ -42,7 +42,9 @@ database scenarios, TypeScript interactive exec, mechanistic policy checks, and
 the gateway-without-drivers contract. It excludes the experimental WSL GPU job. The standard
 PR and merge-queue E2E selection is unchanged. Each campaign dispatch gets a
 unique concurrency key and runtime-image tag, so up to five runs can execute
-at once without sharing mutable image tags. Dispatch ten runs in two waves of
+at once without sharing mutable image tags. The reusable integration runner
+also keys its conformance, feature, and driver jobs by run ID in stability mode;
+ordinary PR runs retain their existing cancellation behavior. Dispatch ten runs in two waves of
 five, retain each run ID and per-job result, and count failures and skips.
 Run `mise run test` once on the same commit before the E2E rounds.
 

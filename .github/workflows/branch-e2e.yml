@@ -242,6 +242,7 @@ jobs:
     uses: ./.github/workflows/integration-runner.yml
     with:
       category: conformance
+      stability-campaign: ${{ inputs.stability_campaign }}
       source-sha: ${{ needs.prepare-integration.outputs.source_sha }}
       integration-inputs-artifact-id: ${{ needs.prepare-integration.outputs.integration_inputs_artifact_id }}
       test-matrix: >-
@@ -261,6 +262,7 @@ jobs:
     uses: ./.github/workflows/integration-runner.yml
     with:
       category: feature-specific
+      stability-campaign: ${{ inputs.stability_campaign }}
       source-sha: ${{ needs.prepare-integration.outputs.source_sha }}
       integration-inputs-artifact-id: ${{ needs.prepare-integration.outputs.integration_inputs_artifact_id }}
       test-matrix: >-
@@ -279,6 +281,7 @@ jobs:
     uses: ./.github/workflows/integration-runner.yml
     with:
       category: driver-specific
+      stability-campaign: ${{ inputs.stability_campaign }}
       source-sha: ${{ needs.prepare-integration.outputs.source_sha }}
       integration-inputs-artifact-id: ${{ needs.prepare-integration.outputs.integration_inputs_artifact_id }}
       test-matrix: >-
