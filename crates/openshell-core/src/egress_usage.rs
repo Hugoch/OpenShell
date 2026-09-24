@@ -21,10 +21,10 @@ pub const DEFAULT_LEARNING_PERIOD: Duration = Duration::from_mins(10);
 /// Default drift ratio above the baseline.
 pub const DEFAULT_DRIFT_RATIO: u32 = 10;
 
-/// Default minimum requests in a window before a request counter can drift.
+/// Default smallest request baseline that drift compares against.
 pub const DEFAULT_DRIFT_MIN_REQUESTS: u64 = 100;
 
-/// Default minimum bytes in a window before a byte counter can drift.
+/// Default smallest byte baseline that drift compares against.
 pub const DEFAULT_DRIFT_MIN_BYTES: u64 = 100 * 1024 * 1024;
 
 /// Usage table entries per sandbox, excluding overflow entries.

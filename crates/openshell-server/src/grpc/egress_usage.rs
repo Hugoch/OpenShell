@@ -100,8 +100,13 @@ struct Baseline {
     bytes_out: f64,
     bytes_in: f64,
     errors: f64,
+    /// Windows seen, with or without traffic. Drift starts after the warmup.
     windows: u64,
     last_active_ms: i64,
+    /// Counters above their drift threshold. A counter reports drift once
+    /// and again only after it returns below the threshold.
+    #[serde(default)]
+    alerting: std::collections::BTreeSet<String>,
 }
 
 /// Persisted drift state of one sandbox.
@@ -179,10 +184,38 @@ fn as_f64(value: u64) -> f64 {
     value as f64
 }
 
-/// Apply one accepted window to the baselines. Every known baseline gets a
-/// window: a baseline without traffic in this window gets zero. Windows that
-/// never arrived (dropped by the supervisor) are gaps and update nothing.
-/// Returns drift findings.
+fn human_bytes(bytes: f64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{value:.0} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn drift_detail(counter: &str, value: u64, reference: f64, ratio: f64) -> String {
+    let (value, reference) = if counter.starts_with("bytes") {
+        (human_bytes(as_f64(value)), human_bytes(reference))
+    } else {
+        (value.to_string(), format!("{reference:.1}"))
+    };
+    format!("{counter} {value} in one window is more than {ratio} times the baseline {reference}")
+}
+
+/// Apply one accepted window to the baselines.
+///
+/// Only windows with traffic for an endpoint update its means, so idle time
+/// does not pull a baseline down to zero. Every window counts toward the
+/// warmup. A counter drifts when its value is more than `ratio` times the
+/// larger of its mean and its floor. It reports once, and again only after
+/// a window below the threshold. Windows that never arrived (dropped by the
+/// supervisor) are gaps and update nothing. Returns drift findings.
 fn apply_window(
     state: &mut PersistedUsageState,
     summaries: &[EgressUsageSummary],
@@ -218,6 +251,7 @@ fn apply_window(
                     errors: as_f64(window.errors),
                     windows: 1,
                     last_active_ms: now_ms,
+                    alerting: std::collections::BTreeSet::new(),
                 },
             );
             continue;
@@ -250,31 +284,33 @@ fn apply_window(
                 ),
             ];
             for (counter, value, mean, floor) in checks {
-                if value > floor && as_f64(value) > settings.ratio * mean {
+                let reference = mean.max(as_f64(floor));
+                if as_f64(value) <= settings.ratio * reference {
+                    baseline.alerting.remove(counter);
+                    continue;
+                }
+                if baseline.alerting.insert(counter.to_string()) {
                     findings.push(EgressUsageFinding {
                         finding_type: "egress.drift".to_string(),
                         severity: EgressFindingSeverity::Medium as i32,
                         policy_key: policy_key.clone(),
                         endpoint_id: endpoint_id.clone(),
                         counter: counter.to_string(),
-                        detail: format!(
-                            "{counter} {value} in one window is more than {} times the baseline {mean:.1}",
-                            settings.ratio
-                        ),
+                        detail: drift_detail(counter, value, reference, settings.ratio),
                         ..Default::default()
                     });
                 }
             }
         }
-        let update = |mean: &mut f64, value: u64| {
-            *mean = (1.0 - EWMA_WEIGHT).mul_add(*mean, EWMA_WEIGHT * as_f64(value));
-        };
-        update(&mut baseline.requests, window.requests);
-        update(&mut baseline.bytes_out, window.bytes_out);
-        update(&mut baseline.bytes_in, window.bytes_in);
-        update(&mut baseline.errors, window.errors);
         baseline.windows += 1;
         if window != EndpointTotals::default() {
+            let update = |mean: &mut f64, value: u64| {
+                *mean = (1.0 - EWMA_WEIGHT).mul_add(*mean, EWMA_WEIGHT * as_f64(value));
+            };
+            update(&mut baseline.requests, window.requests);
+            update(&mut baseline.bytes_out, window.bytes_out);
+            update(&mut baseline.bytes_in, window.bytes_in);
+            update(&mut baseline.errors, window.errors);
             baseline.last_active_ms = now_ms;
         }
     }
@@ -526,34 +562,80 @@ mod tests {
     }
 
     #[test]
-    fn jump_above_ratio_and_floor_is_drift_for_one_window_with_defaults() {
+    fn jump_above_ratio_reports_once_while_it_lasts() {
         let mut state = PersistedUsageState::default();
-        warm(&mut state, 20);
-        let first = apply_window(&mut state, &[summary(2000, 0)], settings(), 0);
+        warm(&mut state, 200);
+        let first = apply_window(&mut state, &[summary(20_000, 0)], settings(), 0);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].counter, "requests");
-        let second = apply_window(&mut state, &[summary(2000, 0)], settings(), 0);
-        assert!(
-            second.is_empty(),
-            "baseline is above one tenth after one window"
+        for _ in 0..5 {
+            assert!(apply_window(&mut state, &[summary(20_000, 0)], settings(), 0).is_empty());
+        }
+    }
+
+    #[test]
+    fn drift_reports_again_after_returning_below_threshold() {
+        let mut state = PersistedUsageState::default();
+        warm(&mut state, 200);
+        assert_eq!(
+            apply_window(&mut state, &[summary(20_000, 0)], settings(), 0).len(),
+            1
+        );
+        // An idle window clears the alert. The first jump raised the mean to
+        // 2180, so the next jump must exceed 21 800 to drift again.
+        apply_window(&mut state, &[], settings(), 0);
+        assert!(apply_window(&mut state, &[summary(20_000, 0)], settings(), 0).is_empty());
+        assert_eq!(
+            apply_window(&mut state, &[summary(300_000, 0)], settings(), 0).len(),
+            1
         );
     }
 
     #[test]
-    fn floor_suppresses_small_absolute_changes() {
+    fn idle_windows_do_not_decay_the_baseline() {
         let mut state = PersistedUsageState::default();
-        warm(&mut state, 1);
-        assert!(apply_window(&mut state, &[summary(50, 0)], settings(), 0).is_empty());
+        apply_window(&mut state, &[summary(100, 0)], settings(), 0);
+        for _ in 0..50 {
+            apply_window(&mut state, &[], settings(), 0);
+        }
+        let baseline = &state.baselines["api|endpoint:v1:api"];
+        assert_eq!(baseline.windows, 51);
+        assert!((baseline.requests - 100.0).abs() < 1e-9);
     }
 
     #[test]
-    fn absent_endpoint_counts_as_zero_window() {
+    fn floor_is_the_smallest_baseline_compared_against() {
         let mut state = PersistedUsageState::default();
-        apply_window(&mut state, &[summary(100, 0)], settings(), 0);
-        apply_window(&mut state, &[], settings(), 0);
-        let baseline = &state.baselines["api|endpoint:v1:api"];
-        assert_eq!(baseline.windows, 2);
-        assert!((baseline.requests - 90.0).abs() < 1e-9);
+        warm(&mut state, 1);
+        // Ten times a tiny baseline, but below ratio times the floor of 100.
+        assert!(apply_window(&mut state, &[summary(500, 0)], settings(), 0).is_empty());
+        assert_eq!(
+            apply_window(&mut state, &[summary(1001, 0)], settings(), 0).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn sustained_transfer_after_idle_time_reports_once() {
+        // The playground case: idle windows, then one 4 GB download counted
+        // over three 10 s windows.
+        let mut state = PersistedUsageState::default();
+        apply_window(&mut state, &[summary(1, 50_000)], settings(), 0);
+        for _ in 0..WARMUP_WINDOWS {
+            apply_window(&mut state, &[], settings(), 0);
+        }
+        let mut findings = Vec::new();
+        for bytes in [143_501_034, 2_109_301_566, 2_048_000_240] {
+            findings.extend(apply_window(
+                &mut state,
+                &[summary(1, bytes)],
+                settings(),
+                0,
+            ));
+        }
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].counter, "bytes_in");
+        assert!(findings[0].detail.contains("MiB"), "{}", findings[0].detail);
     }
 
     #[test]

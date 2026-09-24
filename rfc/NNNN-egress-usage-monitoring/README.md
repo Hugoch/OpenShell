@@ -275,11 +275,12 @@ The gateway computes drift from the usage summaries. It adds the summaries of on
 
 For each endpoint, the gateway keeps an EWMA of `requests`, `bytes_out`, `bytes_in`, and error responses (4xx and 5xx from upstream), with a weight of 0.1 for the new window:
 
-- A window without traffic counts as zero.
-- A window lost in delivery (reported in `dropped_windows`) is a gap. It does not update the baseline.
-- A baseline produces findings only after 30 windows.
-- A counter drifts when its value is more than `ratio` times its baseline and more than the `min_requests` or `min_bytes` floor. The floors stop small absolute changes from producing findings, for example 1 request that becomes 12.
-- Every window updates the baseline, including a window that drifts. With weight `w` and ratio `r`, a sustained jump to a new level produces findings for about `ln(1 - 1/r) / ln(1 - w)` windows. With the defaults (`w = 0.1`, `r = 10`), this is one window: after the first drifting window, the baseline is already more than one tenth of the new level. This is intentional: drift reports a change, and budgets cap a level.
+- Only a window with traffic for an endpoint updates its means. Agent traffic is bursty. If idle windows count as zero, the baseline decays to zero between bursts, and every burst above the floor is drift.
+- Every window, with or without traffic, counts toward the warmup. A baseline produces findings only after 30 windows.
+- A window lost in delivery (reported in `dropped_windows`) is a gap. It does not update the baseline or the warmup.
+- A counter drifts when its value is more than `ratio` times the larger of its mean and its floor (`min_requests` or `min_bytes`). The floor is the smallest baseline that drift compares against, so a small absolute change, for example 1 request that becomes 12, is not drift.
+- A drifting counter reports once. It reports again only after a window in which it is below its threshold. Bytes count in the window when they move, so a long transfer spans several windows, and without this rule one transfer produces a finding in each of them.
+- A window with traffic updates the baseline, including a window that drifts. A lasting new level therefore stops being above the threshold after about `ln(1 - 1/r) / ln(1 - w)` windows, with weight `w` and ratio `r`. This is intentional: drift reports a change, and budgets cap a level.
 
 The gateway keeps at most 256 baselines per sandbox and evicts the least recently updated baseline. It deletes the baselines when it deletes the sandbox. Drift does not cover a sandbox that lives for less than 30 windows.
 

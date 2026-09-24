@@ -88,6 +88,22 @@ fn severity(finding: &EgressUsageFinding) -> &'static str {
     }
 }
 
+/// Host and port for findings about one host; policy and endpoint for
+/// drift findings, which sum every host of an endpoint.
+fn finding_target(finding: &EgressUsageFinding) -> String {
+    if finding.host.is_empty() {
+        let endpoint = finding
+            .endpoint_id
+            .strip_prefix("endpoint:v1:")
+            .map_or(finding.endpoint_id.as_str(), |hash| {
+                &hash[..hash.len().min(12)]
+            });
+        format!("{} endpoint {endpoint}", finding.policy_key)
+    } else {
+        format!("{}:{}", finding.host, finding.port)
+    }
+}
+
 fn to_json(response: &GetEgressUsageResponse) -> serde_json::Value {
     let rows: Vec<_> = aggregate(response)
         .into_iter()
@@ -187,11 +203,10 @@ fn render_table<W: Write>(response: &GetEgressUsageResponse, out: &mut W) -> Res
         for finding in response.findings.iter().rev().take(20) {
             writeln!(
                 out,
-                "  {:<6} {:<24} {}:{} {}",
+                "  {:<6} {:<24} {} {}",
                 severity(finding),
                 finding.finding_type,
-                finding.host,
-                finding.port,
+                finding_target(finding),
                 finding.detail
             )
             .into_diagnostic()?;
@@ -291,5 +306,16 @@ mod tests {
         assert_eq!(value["windows"], 2);
         assert_eq!(value["usage"][0]["requests"], 5);
         assert_eq!(value["findings"][0]["severity"], "MEDIUM");
+    }
+
+    #[test]
+    fn drift_finding_shows_policy_and_endpoint() {
+        let finding = EgressUsageFinding {
+            finding_type: "egress.drift".into(),
+            policy_key: "local_api".into(),
+            endpoint_id: "endpoint:v1:110937c24f048d365ee1".into(),
+            ..Default::default()
+        };
+        assert_eq!(finding_target(&finding), "local_api endpoint 110937c24f04");
     }
 }

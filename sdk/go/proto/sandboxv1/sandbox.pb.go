@@ -1051,11 +1051,10 @@ type UsageDrift struct {
 	Enabled *bool `protobuf:"varint,1,opt,name=enabled,proto3,oneof" json:"enabled,omitempty"`
 	// Ratio above the baseline that produces a finding. Absent means 10.
 	Ratio *uint32 `protobuf:"varint,2,opt,name=ratio,proto3,oneof" json:"ratio,omitempty"`
-	// Minimum requests in a window before a request counter can drift.
-	// Absent means 100.
+	// Smallest request baseline that drift compares against, so a counter
+	// must exceed ratio times this value to drift. Absent means 100.
 	MinRequests *uint64 `protobuf:"varint,3,opt,name=min_requests,json=minRequests,proto3,oneof" json:"min_requests,omitempty"`
-	// Minimum bytes in a window before a byte counter can drift.
-	// Absent means 104857600.
+	// Smallest byte baseline that drift compares against. Absent means 104857600.
 	MinBytes      *uint64 `protobuf:"varint,4,opt,name=min_bytes,json=minBytes,proto3,oneof" json:"min_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
