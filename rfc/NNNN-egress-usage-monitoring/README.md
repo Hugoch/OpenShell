@@ -117,6 +117,8 @@ The supervisor records the connection duration from admission to close. At close
 
 The usage key needs the binary SHA-256. `EgressDecision` (`proxy/egress.rs:144`) carries the binary path but not the hash: the supervisor passes the hash to OPA in `NetworkInput` and then drops it. Phase 1 adds the hash to `EgressDecision`. The L7 evaluation returns `Result<(bool, String)>` today (`l7/relay.rs:2841`), and `L7Decision.matched_rule` is never set. Phase 1 changes the evaluation to return the authorizing policies and the set of rule IDs that allowed the request. A JSON-RPC batch evaluates each call separately (`l7/relay.rs:2852`), and different calls can match different rules, so one request can have more than one rule ID. A request that audit mode forwards without a matching rule records the rule ID `audit_forwarded`, so audit traffic stays visible and budgets still charge it.
 
+Attribution costs one Rego evaluation per L7 request, after the allow decision. The rule `l7_request_attribution` returns a map from each policy key to the IDs of its rules that match the request. It matches rules only, and it does not evaluate the allow decision again. Some variants allow a request without a rule, for example the MCP and GraphQL variants without operation rules. For these requests, the usage goes to the rule ID `endpoint:<endpoint_id>` and to the L4 authorizing policies of the connection.
+
 Raw request paths never enter the usage table. Paths are unbounded, they can contain identifiers or secrets, and path templates go out of date quickly. The policy advisor does not map L7 denials mechanically for the same reason.
 
 ### Reporting
@@ -178,7 +180,11 @@ Reports are additive, so each report must be counted exactly once, including acr
 
 `ReportEgressUsage` is a separate RPC and not a new field on `SubmitPolicyAnalysisRequest`. Usage is not policy analysis, the gateway handles it differently, and a separate RPC keeps its authorization and retention separate.
 
-Operators read usage with a new `GetEgressUsage` RPC and the `openshell sandbox usage <name>` command. The gateway also sends new summaries and findings as `WatchSandbox` events. External detectors use `GetEgressUsage` and `WatchSandbox`. Reading usage requires the same permission as reading sandbox logs.
+Operators read usage with a new `GetEgressUsage` RPC, the `openshell sandbox usage <name>` command, and a usage panel in the terminal UI (key `u` on the sandbox screen). The gateway also sends new summaries and findings as `WatchSandbox` events. External detectors use `GetEgressUsage` and `WatchSandbox`. Reading usage requires the same permission as reading sandbox logs.
+
+In a gateway deployment with more than one replica, the replica that owns the supervisor session of a sandbox owns its usage state: the recent windows, the recent findings, and the drift computation. The gateway already finds this replica with the supervisor session registry for relay traffic. If another replica receives `ReportEgressUsage` or `GetEgressUsage`, it forwards the call to the owner through the peer-only RPCs `PeerReportEgressUsage` and `PeerGetEgressUsage`. The baselines and the highest accepted sequences are in the shared database, so a new owner continues from them after a failover. The recent windows are in memory and start empty on the new owner.
+
+A finding title names the destination and the detail, for example `api.example.com:443 budget 'api-requests' has no requests_per_minute left`. The shorthand log line then carries the useful facts without the structured object.
 
 Structured findings travel in `ReportEgressUsageRequest.findings`, because log push sends the shorthand form of OCSF events, not the structured object (`log_push.rs:60`). The supervisor also emits each finding as an OCSF event, so the local log files and the OCSF JSONL export contain it.
 
@@ -347,13 +353,37 @@ Each phase can merge and ship alone. Phase 1 has value without the other phases.
 3. **Novelty.** Add the `usage_monitoring` section, the novelty sets, and the learning period. Tests: no finding during the learning period, one finding after it, a restart only on an `endpoint_id` change, and set overflow.
 4. **Drift.** Add gateway baselines and drift findings. Tests: no finding before 30 windows, the floors, gaps versus zero windows, and baseline eviction.
 
+### Proof of concept
+
+The branch `poc/egress-usage-monitoring` on `github.com/Hugoch/OpenShell` implements all four phases. An e2e test runs a sandbox through a gateway with a deny budget of 5 requests per minute. The test gets 5 responses with 200 and 5 responses with 429, and `openshell sandbox usage` shows `bytes_in` equal to the upstream response bytes.
+
+The proof of concept uses these simplifications. A production implementation can keep or replace each one:
+
+- The counting wrapper reads the HTTP status class from the first upstream bytes of each response. It does not get the status from the relays.
+- `config_revision` in the summaries is 0. The policy hash identifies the revision.
+- The gateway removes the recent windows of a sandbox when the API deletes the sandbox. It does not remove them when the sandbox disappears without the API.
+- There is no supervisor capability flag. See [Open questions](#open-questions).
+- Count tokens use a mutex for each bucket, not a compare-and-subtract. Byte charges are lock-free.
+
+Ignored benchmarks in `crates/openshell-supervisor-network/src/usage/bench.rs` measure the hot path. The results are medians of 5 rounds on an Apple M-series laptop, in a release build:
+
+| Path | Without accounting | With accounting | Overhead |
+|---|---:|---:|---:|
+| Raw relay, 1 GiB, one byte budget | 16.4 GiB/s | 16.6 GiB/s | in the noise (-2.0% to +0.0% in repeated runs) |
+| Request admission, 0 budgets | | 0.32 µs | |
+| Request admission, 3 budgets | | 0.44 µs | |
+| Rego per L7 request: allow decision and attribution | 90 µs | 62 µs more | |
+| REST relay, keep-alive request, in-memory upstream | 126 µs | 191 µs | +65 µs (+52%) |
+
+The Rego attribution is almost all of the REST overhead. A first attribution rule evaluated the allow decision again and cost 207 µs (+183% on the REST relay). The upstream is in memory, so the relative overhead is a worst case. A real upstream adds network round trips to both columns.
+
 The authored policy schema uses `#[serde(deny_unknown_fields)]` (`openshell-policy-schema/src/lib.rs:137`). A supervisor that does not know `network_budgets` or `usage_monitoring` rejects a policy that contains them. The gateway must not deliver these sections to such a supervisor. The rollout mechanism for this is an open question.
 
 Each phase updates `architecture/sandbox.md`, `architecture/sandbox-limits.md`, and the user documentation under `docs/observability/` and `docs/sandboxes/policies.mdx`. Phase 1 and novelty change no enforcement behavior. Budgets have no effect on a policy without a `network_budgets` section.
 
 ## Risks
 
-- **Hot-path cost.** Each admission does one table lookup, and each copy does atomic additions. Mitigation: no channel and no allocation per copy, and the ledger lookup only for selected budgets. Remaining uncertainty: phase 1 benchmarks measure the cost at high request rates and under contention on one usage key.
+- **Hot-path cost.** Each admission does one table lookup, each copy does atomic additions, and each L7 request does one more Rego evaluation. Mitigation: no channel and no allocation per copy, the ledger lookup only for selected budgets, and an attribution rule that does not evaluate the allow decision again. The [proof of concept](#proof-of-concept) measures a raw relay overhead in the noise, and 65 µs for each L7 request. Remaining uncertainty: the cost under contention on one usage key, and a Rego attribution cost that grows with the number of rules.
 - **Too many findings.** Novelty and drift can produce findings for legal agent behavior, and operators then ignore them. Mitigation: the learning period, the floors, the minimum window count, and one finding per key per type per window. Novelty and drift never deny traffic. Remaining uncertainty: the default values need data from real agent workloads.
 - **Evasion.** An agent can stay under every budget. It can spread traffic across endpoints of different policy keys, and it can misbehave from the start so that novelty learns the misbehavior. Mitigation: sandbox-wide budgets, drift on endpoint totals, and overflow findings. Budgets are the only control that does not depend on history.
 - **Policy complexity.** Budgets add a new policy section. Mitigation: all counters are optional, `on_exceed` defaults to `alert`, and the policy advisor can later propose budgets from observed usage.
@@ -397,7 +427,7 @@ Operators keep the current allow and deny model. Abuse of an allowed endpoint st
 
 - **Version gating.** How does the gateway know that a supervisor supports `network_budgets` and `usage_monitoring` before it delivers them? Is there a capability exchange, or does the gateway use the supervisor version?
 - **Baseline scope.** Is a per-sandbox baseline enough, or do sandboxes created from the same template need a shared baseline? A shared baseline gives short-lived sandboxes drift findings, but it needs a stable template identity and changes the gateway storage model.
-- **Gateway high availability.** In a gateway deployment with more than one replica, which replica owns the baselines of a sandbox, and where do the recent windows live?
+- **Rego attribution cost.** Is 62 µs for each L7 request acceptable, or does the attribution need a Rust rule index that the supervisor builds at policy load?
 - **Budget state for the agent.** Does `policy.local` need a `/v1/usage` route so that an agent can read its remaining budget before it starts a large transfer?
 - **Connections in progress.** Does `on_exceed: deny` need to close long-lived raw tunnels when a byte budget runs out? This needs per-budget cancellation of relays. Today the only mechanism is a policy generation advance, which closes every pinned connection.
 - **Hostname handling.** Do observed hosts need normalization or redaction before they leave the supervisor, for example for hosts that encode data in subdomain labels?
