@@ -523,7 +523,10 @@ fn emit_finding(finding: &UsageFinding) {
         .disposition(disposition)
         .severity(severity)
         .is_alert(finding.severity == FindingSeverity::Medium)
-        .finding_info(FindingInfo::new(finding.finding_type, finding.finding_type))
+        .finding_info(FindingInfo::new(
+            finding.finding_type,
+            &format!("{}:{} {}", finding.host, finding.port, finding.detail),
+        ))
         .evidence_pairs(&[
             ("policy", finding.policy_key.as_str()),
             ("endpoint_id", finding.endpoint_id.as_str()),
