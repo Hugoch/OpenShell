@@ -88,6 +88,8 @@ const (
 	OpenShell_PeerReportProviderReadiness_FullMethodName   = "/openshell.v1.OpenShell/PeerReportProviderReadiness"
 	OpenShell_PeerReportEndpointStatus_FullMethodName      = "/openshell.v1.OpenShell/PeerReportEndpointStatus"
 	OpenShell_PeerGetSandboxProviderStatus_FullMethodName  = "/openshell.v1.OpenShell/PeerGetSandboxProviderStatus"
+	OpenShell_PeerReportEgressUsage_FullMethodName         = "/openshell.v1.OpenShell/PeerReportEgressUsage"
+	OpenShell_PeerGetEgressUsage_FullMethodName            = "/openshell.v1.OpenShell/PeerGetEgressUsage"
 	OpenShell_WatchSandbox_FullMethodName                  = "/openshell.v1.OpenShell/WatchSandbox"
 	OpenShell_SubmitPolicyAnalysis_FullMethodName          = "/openshell.v1.OpenShell/SubmitPolicyAnalysis"
 	OpenShell_GetDraftPolicy_FullMethodName                = "/openshell.v1.OpenShell/GetDraftPolicy"
@@ -289,6 +291,11 @@ type OpenShellClient interface {
 	PeerReportProviderReadiness(ctx context.Context, in *ReportProviderReadinessRequest, opts ...grpc.CallOption) (*ReportProviderReadinessResponse, error)
 	PeerReportEndpointStatus(ctx context.Context, in *ReportEndpointStatusRequest, opts ...grpc.CallOption) (*ReportEndpointStatusResponse, error)
 	PeerGetSandboxProviderStatus(ctx context.Context, in *GetSandboxProviderStatusRequest, opts ...grpc.CallOption) (*GetSandboxProviderStatusResponse, error)
+	// Forward an egress usage report to the replica that owns the sandbox
+	// supervisor session, which keeps its recent windows and watch events.
+	PeerReportEgressUsage(ctx context.Context, in *ReportEgressUsageRequest, opts ...grpc.CallOption) (*ReportEgressUsageResponse, error)
+	// Read the recent egress usage kept by the owning replica.
+	PeerGetEgressUsage(ctx context.Context, in *GetEgressUsageRequest, opts ...grpc.CallOption) (*GetEgressUsageResponse, error)
 	// Watch a sandbox and stream updates.
 	//
 	// This stream can include:
@@ -1028,6 +1035,26 @@ func (c *openShellClient) PeerGetSandboxProviderStatus(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *openShellClient) PeerReportEgressUsage(ctx context.Context, in *ReportEgressUsageRequest, opts ...grpc.CallOption) (*ReportEgressUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportEgressUsageResponse)
+	err := c.cc.Invoke(ctx, OpenShell_PeerReportEgressUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *openShellClient) PeerGetEgressUsage(ctx context.Context, in *GetEgressUsageRequest, opts ...grpc.CallOption) (*GetEgressUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetEgressUsageResponse)
+	err := c.cc.Invoke(ctx, OpenShell_PeerGetEgressUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *openShellClient) WatchSandbox(ctx context.Context, in *WatchSandboxRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SandboxStreamEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &OpenShell_ServiceDesc.Streams[7], OpenShell_WatchSandbox_FullMethodName, cOpts...)
@@ -1407,6 +1434,11 @@ type OpenShellServer interface {
 	PeerReportProviderReadiness(context.Context, *ReportProviderReadinessRequest) (*ReportProviderReadinessResponse, error)
 	PeerReportEndpointStatus(context.Context, *ReportEndpointStatusRequest) (*ReportEndpointStatusResponse, error)
 	PeerGetSandboxProviderStatus(context.Context, *GetSandboxProviderStatusRequest) (*GetSandboxProviderStatusResponse, error)
+	// Forward an egress usage report to the replica that owns the sandbox
+	// supervisor session, which keeps its recent windows and watch events.
+	PeerReportEgressUsage(context.Context, *ReportEgressUsageRequest) (*ReportEgressUsageResponse, error)
+	// Read the recent egress usage kept by the owning replica.
+	PeerGetEgressUsage(context.Context, *GetEgressUsageRequest) (*GetEgressUsageResponse, error)
 	// Watch a sandbox and stream updates.
 	//
 	// This stream can include:
@@ -1663,6 +1695,12 @@ func (UnimplementedOpenShellServer) PeerReportEndpointStatus(context.Context, *R
 }
 func (UnimplementedOpenShellServer) PeerGetSandboxProviderStatus(context.Context, *GetSandboxProviderStatusRequest) (*GetSandboxProviderStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PeerGetSandboxProviderStatus not implemented")
+}
+func (UnimplementedOpenShellServer) PeerReportEgressUsage(context.Context, *ReportEgressUsageRequest) (*ReportEgressUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PeerReportEgressUsage not implemented")
+}
+func (UnimplementedOpenShellServer) PeerGetEgressUsage(context.Context, *GetEgressUsageRequest) (*GetEgressUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PeerGetEgressUsage not implemented")
 }
 func (UnimplementedOpenShellServer) WatchSandbox(*WatchSandboxRequest, grpc.ServerStreamingServer[SandboxStreamEvent]) error {
 	return status.Error(codes.Unimplemented, "method WatchSandbox not implemented")
@@ -2839,6 +2877,42 @@ func _OpenShell_PeerGetSandboxProviderStatus_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OpenShell_PeerReportEgressUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportEgressUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OpenShellServer).PeerReportEgressUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OpenShell_PeerReportEgressUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OpenShellServer).PeerReportEgressUsage(ctx, req.(*ReportEgressUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OpenShell_PeerGetEgressUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEgressUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OpenShellServer).PeerGetEgressUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OpenShell_PeerGetEgressUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OpenShellServer).PeerGetEgressUsage(ctx, req.(*GetEgressUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _OpenShell_WatchSandbox_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchSandboxRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -3412,6 +3486,14 @@ var OpenShell_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PeerGetSandboxProviderStatus",
 			Handler:    _OpenShell_PeerGetSandboxProviderStatus_Handler,
+		},
+		{
+			MethodName: "PeerReportEgressUsage",
+			Handler:    _OpenShell_PeerReportEgressUsage_Handler,
+		},
+		{
+			MethodName: "PeerGetEgressUsage",
+			Handler:    _OpenShell_PeerGetEgressUsage_Handler,
 		},
 		{
 			MethodName: "SubmitPolicyAnalysis",

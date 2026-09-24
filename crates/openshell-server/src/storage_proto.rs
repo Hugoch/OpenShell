@@ -123,7 +123,7 @@ mod tests {
     // no messages or enums and touch no stored type, so the durable and overlap
     // fingerprints below remain unchanged.
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "f4ffe7100d7bed212a57e9afc17adfa98418fb3a3161f03c2d0f0a3da5a4f7ff";
+        "d7d5f578f5c4ff5da7f50dda803782f3d7fd3cabfbcd71af5a89c10b04af138d";
     const DURABLE_SCHEMA_SHA256: &str =
         "14f1aa6d54bc6eef6363e68ad7dbd520a9eba5b9116eb9b8b1bc06a05231d37a";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
@@ -162,8 +162,10 @@ mod tests {
         "openshell.v1.OpenShell/GetSandboxProviderStatus|.openshell.v1.GetSandboxProviderStatusRequest|.openshell.v1.GetSandboxProviderStatusResponse|false|false",
         "openshell.v1.OpenShell/ReportProviderReadiness|.openshell.v1.ReportProviderReadinessRequest|.openshell.v1.ReportProviderReadinessResponse|false|false",
     ];
-    const PEER_OWNER_RPC_SIGNATURES: [&str; 3] = [
+    const PEER_OWNER_RPC_SIGNATURES: [&str; 5] = [
+        "openshell.v1.OpenShell/PeerGetEgressUsage|.openshell.v1.GetEgressUsageRequest|.openshell.v1.GetEgressUsageResponse|false|false",
         "openshell.v1.OpenShell/PeerGetSandboxProviderStatus|.openshell.v1.GetSandboxProviderStatusRequest|.openshell.v1.GetSandboxProviderStatusResponse|false|false",
+        "openshell.v1.OpenShell/PeerReportEgressUsage|.openshell.v1.ReportEgressUsageRequest|.openshell.v1.ReportEgressUsageResponse|false|false",
         "openshell.v1.OpenShell/PeerReportEndpointStatus|.openshell.v1.ReportEndpointStatusRequest|.openshell.v1.ReportEndpointStatusResponse|false|false",
         "openshell.v1.OpenShell/PeerReportProviderReadiness|.openshell.v1.ReportProviderReadinessRequest|.openshell.v1.ReportProviderReadinessResponse|false|false",
     ];

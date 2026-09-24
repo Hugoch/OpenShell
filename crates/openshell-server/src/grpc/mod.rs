@@ -898,6 +898,20 @@ impl OpenShell for OpenShellService {
         policy::handle_peer_report_endpoint_status(&self.state, request).await
     }
 
+    async fn peer_report_egress_usage(
+        &self,
+        request: Request<openshell_core::proto::ReportEgressUsageRequest>,
+    ) -> Result<Response<openshell_core::proto::ReportEgressUsageResponse>, Status> {
+        egress_usage::handle_peer_report_egress_usage(&self.state, request).await
+    }
+
+    async fn peer_get_egress_usage(
+        &self,
+        request: Request<openshell_core::proto::GetEgressUsageRequest>,
+    ) -> Result<Response<openshell_core::proto::GetEgressUsageResponse>, Status> {
+        egress_usage::handle_peer_get_egress_usage(&self.state, request).await
+    }
+
     async fn peer_get_sandbox_provider_status(
         &self,
         request: Request<GetSandboxProviderStatusRequest>,

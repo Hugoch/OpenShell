@@ -1339,6 +1339,40 @@ pub(crate) async fn forward_endpoint_status_to_owner(
         })
 }
 
+pub(crate) async fn forward_egress_usage_report_to_owner(
+    state: &Arc<ServerState>,
+    owner: &crate::supervisor_owner::OwnerRecord,
+    sandbox_id: &str,
+    request: openshell_core::proto::ReportEgressUsageRequest,
+) -> Result<openshell_core::proto::ReportEgressUsageResponse, Status> {
+    let mut client = peer_rpc_client(state, &owner.owner_peer_endpoint).await?;
+    client
+        .peer_report_egress_usage(request)
+        .await
+        .map(Response::into_inner)
+        .inspect_err(|_| {
+            state.peer_routes.evict_channel(&owner.owner_peer_endpoint);
+            state.peer_routes.evict_owner(sandbox_id);
+        })
+}
+
+pub(crate) async fn forward_egress_usage_query_to_owner(
+    state: &Arc<ServerState>,
+    owner: &crate::supervisor_owner::OwnerRecord,
+    sandbox_id: &str,
+    request: openshell_core::proto::GetEgressUsageRequest,
+) -> Result<openshell_core::proto::GetEgressUsageResponse, Status> {
+    let mut client = peer_rpc_client(state, &owner.owner_peer_endpoint).await?;
+    client
+        .peer_get_egress_usage(request)
+        .await
+        .map(Response::into_inner)
+        .inspect_err(|_| {
+            state.peer_routes.evict_channel(&owner.owner_peer_endpoint);
+            state.peer_routes.evict_owner(sandbox_id);
+        })
+}
+
 pub(crate) async fn forward_provider_status_query_to_owner(
     state: &Arc<ServerState>,
     owner: &crate::supervisor_owner::OwnerRecord,

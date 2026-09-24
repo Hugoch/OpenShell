@@ -20,7 +20,7 @@ use openshell_core::egress_usage::{
 use openshell_core::proto::{
     EgressFindingSeverity, EgressUsageFinding, EgressUsageSummary, EgressUsageUpdate,
     EgressUsageWindow, GetEgressUsageRequest, GetEgressUsageResponse, ReportEgressUsageRequest,
-    ReportEgressUsageResponse, SandboxStreamEvent, UsageDrift, sandbox_stream_event,
+    ReportEgressUsageResponse, Sandbox, SandboxStreamEvent, UsageDrift, sandbox_stream_event,
 };
 use serde::{Deserialize, Serialize};
 use tonic::{Request, Response, Status};
@@ -28,7 +28,7 @@ use tonic::{Request, Response, Status};
 use crate::ServerState;
 use crate::auth::principal::Principal;
 use crate::auth::workspace_authz::MinWorkspaceRole;
-use crate::persistence::{ObjectId, PersistenceError, Store, WriteCondition};
+use crate::persistence::{ObjectId, ObjectName, PersistenceError, Store, WriteCondition};
 
 /// Store object type for per-sandbox baselines and accepted sequences.
 pub const EGRESS_USAGE_OBJECT_TYPE: &str = "egress_usage_state";
@@ -409,8 +409,81 @@ pub(super) async fn handle_report_egress_usage(
     )
     .await?;
     let sandbox_id = sandbox.object_id().to_string();
+    if let Some(owner) =
+        crate::supervisor_session::remote_supervisor_owner(state, &sandbox_id).await?
+    {
+        let forwarded = ReportEgressUsageRequest {
+            workspace_scope: Some(openshell_core::proto::workspace_selector(workspace)),
+            name: sandbox.object_name().to_string(),
+            ..report
+        };
+        let response = crate::supervisor_session::forward_egress_usage_report_to_owner(
+            state,
+            &owner,
+            &sandbox_id,
+            forwarded,
+        )
+        .await?;
+        return Ok(Response::new(response));
+    }
+    record_report(state, &workspace, &sandbox, report).await
+}
+
+/// Handle a report that another replica forwarded to this owner replica.
+/// The forwarding replica authenticated the sandbox and resolved its name.
+pub(super) async fn handle_peer_report_egress_usage(
+    state: &Arc<ServerState>,
+    request: Request<ReportEgressUsageRequest>,
+) -> Result<Response<ReportEgressUsageResponse>, Status> {
+    ensure_peer(&request)?;
+    let report = request.into_inner();
+    let (workspace, sandbox) =
+        resolve_for_peer(state, report.workspace_scope.as_ref(), &report.name).await?;
+    record_report(state, &workspace, &sandbox, report).await
+}
+
+fn ensure_peer<T>(request: &Request<T>) -> Result<(), Status> {
+    if matches!(
+        request.extensions().get::<Principal>(),
+        Some(Principal::Peer(_))
+    ) {
+        Ok(())
+    } else {
+        Err(Status::permission_denied(
+            "gateway peer principal is required",
+        ))
+    }
+}
+
+async fn resolve_for_peer(
+    state: &Arc<ServerState>,
+    workspace_scope: Option<&openshell_core::proto::WorkspaceSelector>,
+    name: &str,
+) -> Result<(String, Sandbox), Status> {
+    let workspace = crate::auth::workspace_authz::selected_workspace_name(workspace_scope)?;
+    if name.is_empty() {
+        return Err(Status::invalid_argument("sandbox is required"));
+    }
+    let sandbox = state
+        .store
+        .get_message_by_name::<Sandbox>(workspace, name)
+        .await
+        .map_err(|error| Status::internal(format!("fetch sandbox failed: {error}")))?
+        .ok_or_else(|| Status::not_found("sandbox not found"))?;
+    Ok((workspace.to_string(), sandbox))
+}
+
+/// Add one report to the persisted drift state, the recent windows, and the
+/// watch stream of this replica.
+async fn record_report(
+    state: &Arc<ServerState>,
+    workspace: &str,
+    sandbox: &Sandbox,
+    report: ReportEgressUsageRequest,
+) -> Result<Response<ReportEgressUsageResponse>, Status> {
+    let sandbox_id = sandbox.object_id().to_string();
     let policy =
-        super::policy::current_base_policy_for_sandbox(state.store.as_ref(), &sandbox).await?;
+        super::policy::current_base_policy_for_sandbox(state.store.as_ref(), sandbox).await?;
     let settings = DriftSettings::from_policy(
         policy
             .usage_monitoring
@@ -422,7 +495,7 @@ pub(super) async fn handle_report_egress_usage(
     let mut accepted = false;
     for _ in 0..CAS_ATTEMPTS {
         let (mut persisted, existing) =
-            load_state(state.store.as_ref(), &workspace, &sandbox_id).await?;
+            load_state(state.store.as_ref(), workspace, &sandbox_id).await?;
         if !accept_sequence(
             &mut persisted,
             &report.supervisor_instance_id,
@@ -445,7 +518,7 @@ pub(super) async fn handle_report_egress_usage(
                 EGRESS_USAGE_OBJECT_TYPE,
                 &id,
                 &sandbox_id,
-                &workspace,
+                workspace,
                 &payload,
                 None,
                 condition,
@@ -516,6 +589,32 @@ pub(super) async fn handle_get_egress_usage(
         MinWorkspaceRole::User,
     )
     .await?;
+    if let Some(owner) =
+        crate::supervisor_session::remote_supervisor_owner(state, sandbox.object_id()).await?
+    {
+        let response = crate::supervisor_session::forward_egress_usage_query_to_owner(
+            state,
+            &owner,
+            sandbox.object_id(),
+            request,
+        )
+        .await?;
+        return Ok(Response::new(response));
+    }
+    Ok(Response::new(
+        state.egress_usage.snapshot(sandbox.object_id()),
+    ))
+}
+
+/// Serve recent usage kept by this owner replica to another replica.
+pub(super) async fn handle_peer_get_egress_usage(
+    state: &Arc<ServerState>,
+    request: Request<GetEgressUsageRequest>,
+) -> Result<Response<GetEgressUsageResponse>, Status> {
+    ensure_peer(&request)?;
+    let request = request.into_inner();
+    let (_, sandbox) =
+        resolve_for_peer(state, request.workspace_scope.as_ref(), &request.sandbox).await?;
     Ok(Response::new(
         state.egress_usage.snapshot(sandbox.object_id()),
     ))
@@ -672,5 +771,196 @@ mod tests {
         }
         assert_eq!(state.baselines.len(), MAX_BASELINES);
         assert!(!state.baselines.contains_key("api|endpoint:0"));
+    }
+
+    mod handlers {
+        use super::super::*;
+        use crate::auth::principal::{
+            PeerPrincipal, Principal, SandboxIdentitySource, SandboxPrincipal,
+        };
+        use crate::grpc::test_support::test_server_state;
+        use crate::supervisor_owner::{OWNER_TTL, SupervisorOwnerIndex};
+        use openshell_core::proto::datamodel::v1::ObjectMeta;
+        use openshell_core::proto::{SandboxPhase, SandboxSpec};
+
+        const SANDBOX_ID: &str = "sandbox-usage";
+        const SANDBOX_NAME: &str = "usage";
+
+        async fn state_with_sandbox() -> Arc<ServerState> {
+            let state = test_server_state().await;
+            let mut sandbox = Sandbox {
+                metadata: Some(ObjectMeta {
+                    id: SANDBOX_ID.to_string(),
+                    name: SANDBOX_NAME.to_string(),
+                    workspace: "default".to_string(),
+                    ..Default::default()
+                }),
+                spec: Some(SandboxSpec {
+                    policy: Some(openshell_policy::restrictive_default_policy()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            sandbox.set_phase(SandboxPhase::Ready as i32);
+            state.store.put_message(&sandbox).await.unwrap();
+            state
+        }
+
+        fn report(sequence: u64) -> ReportEgressUsageRequest {
+            ReportEgressUsageRequest {
+                workspace_scope: Some(openshell_core::proto::workspace_selector(
+                    "default".to_string(),
+                )),
+                name: SANDBOX_NAME.to_string(),
+                supervisor_instance_id: "instance-1".to_string(),
+                window_sequence: sequence,
+                summaries: vec![EgressUsageSummary {
+                    policy_key: "api".to_string(),
+                    endpoint_id: "endpoint:v1:api".to_string(),
+                    requests: 3,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+        }
+
+        fn with_principal<T>(inner: T, principal: Principal) -> Request<T> {
+            let mut request = Request::new(inner);
+            request.extensions_mut().insert(principal);
+            request
+        }
+
+        fn sandbox_principal() -> Principal {
+            Principal::Sandbox(SandboxPrincipal {
+                sandbox_id: SANDBOX_ID.to_string(),
+                source: SandboxIdentitySource::BootstrapJwt {
+                    issuer: "openshell-gateway:test-gateway".to_string(),
+                },
+                trust_domain: Some("openshell".to_string()),
+            })
+        }
+
+        fn peer_principal() -> Principal {
+            Principal::Peer(PeerPrincipal {
+                replica_id: "replica-b".to_string(),
+                pod_uid: "pod-b".to_string(),
+            })
+        }
+
+        #[tokio::test]
+        async fn report_on_a_non_owner_replica_is_forwarded_not_recorded() {
+            let state = state_with_sandbox().await;
+            // Another replica owns the supervisor session. It advertises no
+            // peer endpoint, so the forward fails instead of reaching a peer.
+            SupervisorOwnerIndex::new(state.store.clone(), OWNER_TTL)
+                .publish(
+                    SANDBOX_ID,
+                    "session-b",
+                    "instance-b",
+                    1,
+                    "replica-b",
+                    "local://replica-b",
+                )
+                .await
+                .unwrap();
+            let error =
+                handle_report_egress_usage(&state, with_principal(report(1), sandbox_principal()))
+                    .await
+                    .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition, "{error}");
+            assert!(error.message().contains("replica-b"), "{error}");
+            assert!(state.egress_usage.snapshot(SANDBOX_ID).windows.is_empty());
+        }
+
+        #[tokio::test]
+        async fn usage_query_on_a_non_owner_replica_is_forwarded() {
+            let state = state_with_sandbox().await;
+            SupervisorOwnerIndex::new(state.store.clone(), OWNER_TTL)
+                .publish(
+                    SANDBOX_ID,
+                    "session-b",
+                    "instance-b",
+                    1,
+                    "replica-b",
+                    "local://replica-b",
+                )
+                .await
+                .unwrap();
+            let error = handle_get_egress_usage(
+                &state,
+                crate::grpc::test_support::authed_request(GetEgressUsageRequest {
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
+                    sandbox: SANDBOX_NAME.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition, "{error}");
+        }
+
+        #[tokio::test]
+        async fn report_without_a_remote_owner_is_recorded_locally() {
+            let state = state_with_sandbox().await;
+            handle_report_egress_usage(&state, with_principal(report(1), sandbox_principal()))
+                .await
+                .unwrap();
+            assert_eq!(state.egress_usage.snapshot(SANDBOX_ID).windows.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn peer_handlers_require_a_peer_principal() {
+            let state = state_with_sandbox().await;
+            let report_error = handle_peer_report_egress_usage(
+                &state,
+                with_principal(report(1), sandbox_principal()),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(report_error.code(), tonic::Code::PermissionDenied);
+            let get_error = handle_peer_get_egress_usage(
+                &state,
+                Request::new(GetEgressUsageRequest {
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
+                    sandbox: SANDBOX_NAME.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(get_error.code(), tonic::Code::PermissionDenied);
+        }
+
+        #[tokio::test]
+        async fn forwarded_report_is_kept_by_the_owner_and_accepted_once() {
+            let state = state_with_sandbox().await;
+            for _ in 0..2 {
+                handle_peer_report_egress_usage(
+                    &state,
+                    with_principal(report(7), peer_principal()),
+                )
+                .await
+                .unwrap();
+            }
+            let usage = handle_peer_get_egress_usage(
+                &state,
+                with_principal(
+                    GetEgressUsageRequest {
+                        workspace_scope: Some(openshell_core::proto::workspace_selector(
+                            "default".to_string(),
+                        )),
+                        sandbox: SANDBOX_NAME.to_string(),
+                    },
+                    peer_principal(),
+                ),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(usage.windows.len(), 1, "a repeated report is added once");
+            assert_eq!(usage.windows[0].summaries[0].requests, 3);
+        }
     }
 }

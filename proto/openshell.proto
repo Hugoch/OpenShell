@@ -639,6 +639,22 @@ service OpenShell {
     };
   }
 
+  // Forward an egress usage report to the replica that owns the sandbox
+  // supervisor session, which keeps its recent windows and watch events.
+  rpc PeerReportEgressUsage(ReportEgressUsageRequest)
+      returns (ReportEgressUsageResponse) {
+    option (openshell.options.v1.authorization) = {
+      auth_mode: "peer"
+    };
+  }
+
+  // Read the recent egress usage kept by the owning replica.
+  rpc PeerGetEgressUsage(GetEgressUsageRequest) returns (GetEgressUsageResponse) {
+    option (openshell.options.v1.authorization) = {
+      auth_mode: "peer"
+    };
+  }
+
   // Watch a sandbox and stream updates.
   //
   // This stream can include:
