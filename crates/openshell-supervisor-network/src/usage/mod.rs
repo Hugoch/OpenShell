@@ -718,3 +718,6 @@ impl Drop for CloseEventGuard {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bench;

@@ -3183,23 +3183,6 @@ pub(crate) struct L7UsageFacts {
     pub(crate) rule_ids: Vec<String>,
 }
 
-fn string_set(value: &regorus::Value, field: &str) -> Vec<String> {
-    let mut values: Vec<String> = match &value[field] {
-        regorus::Value::Set(set) => set
-            .iter()
-            .filter_map(|item| item.as_string().ok().map(ToString::to_string))
-            .collect(),
-        regorus::Value::Array(array) => array
-            .iter()
-            .filter_map(|item| item.as_string().ok().map(ToString::to_string))
-            .collect(),
-        _ => Vec::new(),
-    };
-    values.sort();
-    values.dedup();
-    values
-}
-
 fn l7_usage_facts_once(
     engine: &TunnelPolicyEngine,
     ctx: &L7EvalContext,
@@ -3211,13 +3194,29 @@ fn l7_usage_facts_once(
         .lock()
         .map_err(|_| miette!("OPA engine lock poisoned"))?;
     crate::opa::set_regorus_input(&mut engine, input)?;
-    let usage = engine
-        .eval_rule("data.openshell.sandbox.l7_request_usage".into())
+    let attribution = engine
+        .eval_rule("data.openshell.sandbox.l7_request_attribution".into())
         .map_err(|e| miette!("{e}"))?;
-    Ok(L7UsageFacts {
-        policies: string_set(&usage, "policies"),
-        rule_ids: string_set(&usage, "rule_ids"),
-    })
+    let mut facts = L7UsageFacts::default();
+    if let regorus::Value::Object(policies) = &attribution {
+        for (policy, rule_ids) in policies.iter() {
+            if let Ok(policy) = policy.as_string() {
+                facts.policies.push(policy.to_string());
+            }
+            if let regorus::Value::Set(rule_ids) = rule_ids {
+                facts.rule_ids.extend(
+                    rule_ids
+                        .iter()
+                        .filter_map(|rule_id| rule_id.as_string().ok().map(ToString::to_string)),
+                );
+            }
+        }
+    }
+    facts.policies.sort();
+    facts.policies.dedup();
+    facts.rule_ids.sort();
+    facts.rule_ids.dedup();
+    Ok(facts)
 }
 
 /// Usage facts of an L7 request. A JSON-RPC batch takes the union of the
@@ -3265,10 +3264,15 @@ pub(crate) fn admit_l7_usage(
         return Ok(());
     };
     let facts = if allowed {
-        l7_usage_facts(engine, ctx, request).unwrap_or_else(|error| {
+        let mut facts = l7_usage_facts(engine, ctx, request).unwrap_or_else(|error| {
             debug!(error = %error, "L7 usage attribution unavailable; charging L4 policies");
             L7UsageFacts::default()
-        })
+        });
+        if facts.rule_ids.is_empty() {
+            // Allow variants without a matching rule use the endpoint identity.
+            facts.rule_ids.push(format!("endpoint:{endpoint_id}"));
+        }
+        facts
     } else {
         L7UsageFacts {
             policies: Vec::new(),
