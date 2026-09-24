@@ -40,6 +40,7 @@ pub struct UsageEntry {
     pub overflow: bool,
     connections: AtomicU64,
     requests: AtomicU64,
+    write_requests: AtomicU64,
     bytes_out: AtomicU64,
     bytes_in: AtomicU64,
     status_2xx: AtomicU64,
@@ -60,6 +61,7 @@ impl UsageEntry {
             overflow,
             connections: AtomicU64::new(0),
             requests: AtomicU64::new(0),
+            write_requests: AtomicU64::new(0),
             bytes_out: AtomicU64::new(0),
             bytes_in: AtomicU64::new(0),
             status_2xx: AtomicU64::new(0),
@@ -77,8 +79,11 @@ impl UsageEntry {
         self.connections.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn add_request(&self, rule_ids: &[String]) {
+    pub fn add_request(&self, rule_ids: &[String], write: bool) {
         self.requests.fetch_add(1, Ordering::Relaxed);
+        if write {
+            self.write_requests.fetch_add(1, Ordering::Relaxed);
+        }
         if rule_ids.is_empty() {
             return;
         }
@@ -123,6 +128,7 @@ impl UsageEntry {
         let take = |counter: &AtomicU64| counter.swap(0, Ordering::AcqRel);
         let connections = take(&self.connections);
         let requests = take(&self.requests);
+        let write_requests = take(&self.write_requests);
         let bytes_out = take(&self.bytes_out);
         let bytes_in = take(&self.bytes_in);
         let responses = ResponseCounts {
@@ -156,6 +162,7 @@ impl UsageEntry {
             overflow: self.overflow,
             connections,
             requests,
+            write_requests,
             bytes_out,
             bytes_in,
             responses,
@@ -176,6 +183,7 @@ pub struct UsageSummary {
     pub overflow: bool,
     pub connections: u64,
     pub requests: u64,
+    pub write_requests: u64,
     pub bytes_out: u64,
     pub bytes_in: u64,
     pub responses: ResponseCounts,
@@ -307,7 +315,7 @@ mod tests {
         let hash: Arc<str> = Arc::from("h1");
         let entry = table.get_or_insert(&key("a.example.com"), &hash).entry;
         entry.add_connection();
-        entry.add_request(&["rule:1".into()]);
+        entry.add_request(&["rule:1".into()], false);
         entry.add_bytes_out(10);
         entry.add_bytes_in(20);
         entry.record_status(200);
@@ -377,7 +385,7 @@ mod tests {
         let hash: Arc<str> = Arc::from("h");
         let entry = table.get_or_insert(&key("a"), &hash).entry;
         for index in 0..(MAX_RULE_HITS_PER_SUMMARY + 5) {
-            entry.add_request(&[format!("rule:{index}")]);
+            entry.add_request(&[format!("rule:{index}")], false);
         }
         let summary = table.drain("h").remove(0);
         assert_eq!(summary.rule_hits.len(), MAX_RULE_HITS_PER_SUMMARY + 1);

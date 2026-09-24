@@ -123,9 +123,9 @@ mod tests {
     // no messages or enums and touch no stored type, so the durable and overlap
     // fingerprints below remain unchanged.
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "d7d5f578f5c4ff5da7f50dda803782f3d7fd3cabfbcd71af5a89c10b04af138d";
+        "83157ebdf98a6a8b3090d9a5ec323a1ab7f1a92ccb51fc19f268a16db59357ce";
     const DURABLE_SCHEMA_SHA256: &str =
-        "14f1aa6d54bc6eef6363e68ad7dbd520a9eba5b9116eb9b8b1bc06a05231d37a";
+        "45c2790542ecab98076551430221c0fac1f3332838a8d1ae3fa56279c1f73937";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
         "906d1dc29485d02ed0c8e7bd662d7d154ceb256812f7ec679513b39cc5582d96";
     // A persisted Sandbox without endpoint status retains its lifecycle fields;

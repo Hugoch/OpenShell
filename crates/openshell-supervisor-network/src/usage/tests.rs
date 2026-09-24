@@ -15,6 +15,7 @@ fn budget(name: &str, deny: bool) -> BudgetSpec {
         hosts: vec![],
         deny,
         requests_per_minute: None,
+        write_requests_per_minute: None,
         connections_per_minute: None,
         bytes_out_per_hour: None,
         bytes_in_per_hour: None,
@@ -52,7 +53,7 @@ async fn deny_budget_denies_requests_after_its_capacity() {
         .expect("no connection budget");
 
     let results: Vec<_> = (0..10)
-        .map(|_| connection.admit_request(&[], "", &[]))
+        .map(|_| connection.admit_request(&[], "", &[], false))
         .collect();
     assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 5);
     let denial = results[5].as_ref().unwrap_err();
@@ -82,7 +83,7 @@ async fn alert_budget_never_denies_and_reports_once() {
         .expect("admitted");
     for _ in 0..6 {
         connection
-            .admit_request(&[], "", &[])
+            .admit_request(&[], "", &[], false)
             .expect("alert budgets never deny");
     }
     let snapshot = state.drain_window();
@@ -107,10 +108,10 @@ async fn later_deny_returns_tokens_taken_by_earlier_budgets() {
     let connection = ConnectionUsage::admit_connection(&state, meta("api.example.com"), false)
         .expect("admitted");
     connection
-        .admit_request(&[], "", &[])
+        .admit_request(&[], "", &[], false)
         .expect("both budgets have tokens");
     for _ in 0..5 {
-        let denial = connection.admit_request(&[], "", &[]).unwrap_err();
+        let denial = connection.admit_request(&[], "", &[], false).unwrap_err();
         assert_eq!(denial.budget, "b-second");
     }
     let first_bucket = state.ledger.selected(&[], "api.example.com")[0]
@@ -130,9 +131,11 @@ async fn budget_selects_on_any_authorizing_policy() {
         .expect("admitted");
     let authorizing = vec!["a_policy".to_string(), "z_policy".to_string()];
     connection
-        .admit_request(&authorizing, "", &[])
+        .admit_request(&authorizing, "", &[], false)
         .expect("first token");
-    let denial = connection.admit_request(&authorizing, "", &[]).unwrap_err();
+    let denial = connection
+        .admit_request(&authorizing, "", &[], false)
+        .unwrap_err();
     assert_eq!(denial.budget, "scoped");
     // The reported key is the smallest authorizing policy.
     let snapshot = state.drain_window();
@@ -152,7 +155,7 @@ async fn byte_debt_denies_the_next_request() {
     let connection = ConnectionUsage::admit_connection(&state, meta("api.example.com"), false)
         .expect("admitted");
     connection
-        .admit_request(&[], "", &[])
+        .admit_request(&[], "", &[], false)
         .expect("balance available");
 
     let (mut remote, local) = tokio::io::duplex(4096);
@@ -161,7 +164,7 @@ async fn byte_debt_denies_the_next_request() {
     let mut buffer = vec![0u8; 500];
     upstream.read_exact(&mut buffer).await.unwrap();
 
-    let denial = connection.admit_request(&[], "", &[]).unwrap_err();
+    let denial = connection.admit_request(&[], "", &[], false).unwrap_err();
     assert_eq!(denial.counter, Counter::BytesIn);
     assert_eq!(connection.cell().totals(), (0, 500));
 }
@@ -175,7 +178,7 @@ async fn counting_stream_charges_each_request_exactly_once() {
     let mut upstream = CountingStream::new(local, connection.cell());
 
     connection
-        .admit_request(&["first".to_string()], "endpoint:v1:first", &[])
+        .admit_request(&["first".to_string()], "endpoint:v1:first", &[], false)
         .unwrap();
     upstream
         .write_all(b"GET /a HTTP/1.1\r\n\r\n")
@@ -186,7 +189,7 @@ async fn counting_stream_charges_each_request_exactly_once() {
     upstream.read_exact(&mut response).await.unwrap();
 
     connection
-        .admit_request(&["second".to_string()], "endpoint:v1:second", &[])
+        .admit_request(&["second".to_string()], "endpoint:v1:second", &[], false)
         .unwrap();
     upstream
         .write_all(b"POST /b HTTP/1.1\r\n\r\n")
@@ -266,13 +269,91 @@ async fn reconfigure_keeps_balance_of_unchanged_budget() {
     let state = state(vec![hub.clone()], Duration::ZERO);
     let connection =
         ConnectionUsage::admit_connection(&state, meta("api.example.com"), false).unwrap();
-    connection.admit_request(&[], "", &[]).unwrap();
-    connection.admit_request(&[], "", &[]).unwrap();
+    connection.admit_request(&[], "", &[], false).unwrap();
+    connection.admit_request(&[], "", &[], false).unwrap();
     state.reconfigure(UsageConfig {
         policy_hash: Arc::from("hash-2"),
         budgets: vec![hub],
         learning_period: Duration::ZERO,
         ..UsageConfig::default()
     });
-    assert!(connection.admit_request(&[], "", &[]).is_err());
+    assert!(connection.admit_request(&[], "", &[], false).is_err());
+}
+
+#[test]
+fn only_get_head_and_options_are_reads() {
+    for method in ["GET", "head", "OPTIONS"] {
+        assert!(!is_write_method(method), "{method}");
+    }
+    for method in ["POST", "PUT", "PATCH", "DELETE", "MKCOL", "PROPPATCH"] {
+        assert!(is_write_method(method), "{method}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn write_budget_denies_writes_and_keeps_reads() {
+    let mut writes = budget("writes", true);
+    writes.write_requests_per_minute = Some(2);
+    let state = state(vec![writes], Duration::ZERO);
+    let connection = ConnectionUsage::admit_connection(&state, meta("api.example.com"), false)
+        .expect("admitted");
+    for _ in 0..2 {
+        connection
+            .admit_request(&[], "", &[], true)
+            .expect("write token");
+    }
+    let denial = connection.admit_request(&[], "", &[], true).unwrap_err();
+    assert_eq!(denial.counter, Counter::WriteRequests);
+    for _ in 0..5 {
+        connection
+            .admit_request(&[], "", &[], false)
+            .expect("reads are not limited");
+    }
+    let snapshot = state.drain_window();
+    assert_eq!(snapshot.summaries[0].requests, 7);
+    assert_eq!(snapshot.summaries[0].write_requests, 2);
+    assert_eq!(snapshot.summaries[0].budget_denials, 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn denied_write_returns_its_request_token() {
+    let mut both = budget("both", true);
+    both.requests_per_minute = Some(10);
+    both.write_requests_per_minute = Some(1);
+    let state = state(vec![both], Duration::ZERO);
+    let connection = ConnectionUsage::admit_connection(&state, meta("api.example.com"), false)
+        .expect("admitted");
+    connection
+        .admit_request(&[], "", &[], true)
+        .expect("write token");
+    for _ in 0..3 {
+        connection.admit_request(&[], "", &[], true).unwrap_err();
+    }
+    let requests = state.ledger.selected(&[], "api.example.com")[0]
+        .bucket(Counter::Requests)
+        .unwrap()
+        .clone();
+    assert!((requests.balance(Instant::now()) - 9.0).abs() < 1e-9);
+}
+
+#[tokio::test(start_paused = true)]
+async fn alert_write_budget_admits_and_reports() {
+    let mut writes = budget("writes", false);
+    writes.write_requests_per_minute = Some(1);
+    let state = state(vec![writes], Duration::ZERO);
+    let connection = ConnectionUsage::admit_connection(&state, meta("api.example.com"), false)
+        .expect("admitted");
+    for _ in 0..3 {
+        connection
+            .admit_request(&[], "", &[], true)
+            .expect("alert budgets never deny");
+    }
+    let snapshot = state.drain_window();
+    let alert = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_type == "egress.budget_exceeded")
+        .expect("alert finding");
+    assert_eq!(alert.counter, "write_requests_per_minute");
+    assert_eq!(alert.action, "alert");
 }

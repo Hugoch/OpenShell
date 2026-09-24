@@ -15,6 +15,7 @@ use tokio::time::Instant;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Counter {
     Requests,
+    WriteRequests,
     Connections,
     BytesOut,
     BytesIn,
@@ -24,6 +25,7 @@ impl Counter {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Requests => "requests_per_minute",
+            Self::WriteRequests => "write_requests_per_minute",
             Self::Connections => "connections_per_minute",
             Self::BytesOut => "bytes_out_per_hour",
             Self::BytesIn => "bytes_in_per_hour",
@@ -32,7 +34,7 @@ impl Counter {
 
     const fn period(self) -> Duration {
         match self {
-            Self::Requests | Self::Connections => Duration::from_mins(1),
+            Self::Requests | Self::WriteRequests | Self::Connections => Duration::from_mins(1),
             Self::BytesOut | Self::BytesIn => Duration::from_hours(1),
         }
     }
@@ -141,7 +143,9 @@ impl TokenBucket {
         let mut state = self.lock();
         self.settle(&mut state, now);
         let needed = match self.counter {
-            Counter::Requests | Counter::Connections => 1.0 - state.balance,
+            Counter::Requests | Counter::WriteRequests | Counter::Connections => {
+                1.0 - state.balance
+            }
             Counter::BytesOut | Counter::BytesIn => -state.balance + 1.0,
         };
         if needed <= 0.0 {
@@ -180,6 +184,7 @@ pub struct BudgetSpec {
     pub hosts: Vec<HostPattern>,
     pub deny: bool,
     pub requests_per_minute: Option<u64>,
+    pub write_requests_per_minute: Option<u64>,
     pub connections_per_minute: Option<u64>,
     pub bytes_out_per_hour: Option<u64>,
     pub bytes_in_per_hour: Option<u64>,
@@ -189,6 +194,7 @@ impl BudgetSpec {
     fn capacity(&self, counter: Counter) -> Option<u64> {
         match counter {
             Counter::Requests => self.requests_per_minute,
+            Counter::WriteRequests => self.write_requests_per_minute,
             Counter::Connections => self.connections_per_minute,
             Counter::BytesOut => self.bytes_out_per_hour,
             Counter::BytesIn => self.bytes_in_per_hour,
@@ -213,6 +219,7 @@ impl BudgetSpec {
 pub struct BudgetEntry {
     pub spec: BudgetSpec,
     requests: Option<Arc<TokenBucket>>,
+    write_requests: Option<Arc<TokenBucket>>,
     connections: Option<Arc<TokenBucket>>,
     bytes_out: Option<Arc<TokenBucket>>,
     bytes_in: Option<Arc<TokenBucket>>,
@@ -222,6 +229,7 @@ impl BudgetEntry {
     pub fn bucket(&self, counter: Counter) -> Option<&Arc<TokenBucket>> {
         match counter {
             Counter::Requests => self.requests.as_ref(),
+            Counter::WriteRequests => self.write_requests.as_ref(),
             Counter::Connections => self.connections.as_ref(),
             Counter::BytesOut => self.bytes_out.as_ref(),
             Counter::BytesIn => self.bytes_in.as_ref(),
@@ -258,6 +266,7 @@ impl BudgetLedger {
             };
             let entry = BudgetEntry {
                 requests: bucket(Counter::Requests),
+                write_requests: bucket(Counter::WriteRequests),
                 connections: bucket(Counter::Connections),
                 bytes_out: bucket(Counter::BytesOut),
                 bytes_in: bucket(Counter::BytesIn),
@@ -291,6 +300,7 @@ mod tests {
             hosts: vec![],
             deny: true,
             requests_per_minute,
+            write_requests_per_minute: None,
             connections_per_minute: None,
             bytes_out_per_hour: None,
             bytes_in_per_hour: None,

@@ -97,6 +97,8 @@ impl EgressUsageStore {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Baseline {
     requests: f64,
+    #[serde(default)]
+    writes: f64,
     bytes_out: f64,
     bytes_in: f64,
     errors: f64,
@@ -152,6 +154,7 @@ impl DriftSettings {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct EndpointTotals {
     requests: u64,
+    writes: u64,
     bytes_out: u64,
     bytes_in: u64,
     errors: u64,
@@ -172,6 +175,7 @@ fn endpoint_totals(
         });
         let responses = summary.responses.unwrap_or_default();
         entry.2.requests += summary.requests;
+        entry.2.writes += summary.write_requests;
         entry.2.bytes_out += summary.bytes_out;
         entry.2.bytes_in += summary.bytes_in;
         entry.2.errors += responses.status_4xx + responses.status_5xx;
@@ -246,6 +250,7 @@ fn apply_window(
                 key,
                 Baseline {
                     requests: as_f64(window.requests),
+                    writes: as_f64(window.writes),
                     bytes_out: as_f64(window.bytes_out),
                     bytes_in: as_f64(window.bytes_in),
                     errors: as_f64(window.errors),
@@ -262,6 +267,12 @@ fn apply_window(
                     "requests",
                     window.requests,
                     baseline.requests,
+                    settings.min_requests,
+                ),
+                (
+                    "writes",
+                    window.writes,
+                    baseline.writes,
                     settings.min_requests,
                 ),
                 (
@@ -308,6 +319,7 @@ fn apply_window(
                 *mean = (1.0 - EWMA_WEIGHT).mul_add(*mean, EWMA_WEIGHT * as_f64(value));
             };
             update(&mut baseline.requests, window.requests);
+            update(&mut baseline.writes, window.writes);
             update(&mut baseline.bytes_out, window.bytes_out);
             update(&mut baseline.bytes_in, window.bytes_in);
             update(&mut baseline.errors, window.errors);
@@ -735,6 +747,27 @@ mod tests {
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].counter, "bytes_in");
         assert!(findings[0].detail.contains("MiB"), "{}", findings[0].detail);
+    }
+
+    #[test]
+    fn writes_drift_on_a_read_mostly_endpoint() {
+        let mut state = PersistedUsageState::default();
+        warm(&mut state, 200);
+        let mut window = summary(200, 0);
+        window.write_requests = 1500;
+        let findings = apply_window(&mut state, &[window], settings(), 0);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].counter, "writes");
+    }
+
+    #[test]
+    fn persisted_baseline_without_writes_decodes() {
+        let baseline: Baseline = serde_json::from_str(
+            r#"{"requests":1.0,"bytes_out":0.0,"bytes_in":0.0,"errors":0.0,"windows":3,"last_active_ms":0}"#,
+        )
+        .unwrap();
+        assert!(baseline.writes.abs() < f64::EPSILON);
+        assert_eq!(baseline.windows, 3);
     }
 
     #[test]

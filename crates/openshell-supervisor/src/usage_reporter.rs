@@ -193,6 +193,7 @@ fn summary_to_proto(summary: UsageSummary) -> EgressUsageSummary {
             .collect(),
         budget_denials: summary.budget_denials,
         overflow: summary.overflow,
+        write_requests: summary.write_requests,
     }
 }
 
@@ -266,7 +267,7 @@ mod tests {
         )
         .unwrap();
         connection
-            .admit_request(&[], "", &["rule:v1:a".into()])
+            .admit_request(&[], "", &["rule:v1:a".into()], false)
             .unwrap();
         let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
         let end = start + Duration::from_mins(1);

@@ -858,9 +858,11 @@ type NetworkBudget struct {
 	// Bytes received by the sandbox per hour. Absent means no ceiling.
 	BytesInPerHour *uint64 `protobuf:"varint,6,opt,name=bytes_in_per_hour,json=bytesInPerHour,proto3,oneof" json:"bytes_in_per_hour,omitempty"`
 	// Behavior when a counter has no balance left.
-	OnExceed      NetworkBudgetAction `protobuf:"varint,7,opt,name=on_exceed,json=onExceed,proto3,enum=openshell.sandbox.v1.NetworkBudgetAction" json:"on_exceed,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	OnExceed NetworkBudgetAction `protobuf:"varint,7,opt,name=on_exceed,json=onExceed,proto3,enum=openshell.sandbox.v1.NetworkBudgetAction" json:"on_exceed,omitempty"`
+	// L7 write requests per minute. Absent means no ceiling.
+	WriteRequestsPerMinute *uint64 `protobuf:"varint,8,opt,name=write_requests_per_minute,json=writeRequestsPerMinute,proto3,oneof" json:"write_requests_per_minute,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *NetworkBudget) Reset() {
@@ -940,6 +942,13 @@ func (x *NetworkBudget) GetOnExceed() NetworkBudgetAction {
 		return x.OnExceed
 	}
 	return NetworkBudgetAction_NETWORK_BUDGET_ACTION_UNSPECIFIED
+}
+
+func (x *NetworkBudget) GetWriteRequestsPerMinute() uint64 {
+	if x != nil && x.WriteRequestsPerMinute != nil {
+		return *x.WriteRequestsPerMinute
+	}
+	return 0
 }
 
 // Egress usage monitoring settings.
@@ -2672,7 +2681,7 @@ const file_sandbox_proto_rawDesc = "" +
 	"\x05order\x18\x06 \x01(\x05R\x05order\"P\n" +
 	"\x1aMiddlewareEndpointSelector\x12\x18\n" +
 	"\ainclude\x18\x01 \x03(\tR\ainclude\x12\x18\n" +
-	"\aexclude\x18\x02 \x03(\tR\aexclude\"\xbb\x03\n" +
+	"\aexclude\x18\x02 \x03(\tR\aexclude\"\x99\x04\n" +
 	"\rNetworkBudget\x12\x1a\n" +
 	"\bpolicies\x18\x01 \x03(\tR\bpolicies\x12\x14\n" +
 	"\x05hosts\x18\x02 \x03(\tR\x05hosts\x123\n" +
@@ -2680,11 +2689,13 @@ const file_sandbox_proto_rawDesc = "" +
 	"\x16connections_per_minute\x18\x04 \x01(\x04H\x01R\x14connectionsPerMinute\x88\x01\x01\x120\n" +
 	"\x12bytes_out_per_hour\x18\x05 \x01(\x04H\x02R\x0fbytesOutPerHour\x88\x01\x01\x12.\n" +
 	"\x11bytes_in_per_hour\x18\x06 \x01(\x04H\x03R\x0ebytesInPerHour\x88\x01\x01\x12F\n" +
-	"\ton_exceed\x18\a \x01(\x0e2).openshell.sandbox.v1.NetworkBudgetActionR\bonExceedB\x16\n" +
+	"\ton_exceed\x18\a \x01(\x0e2).openshell.sandbox.v1.NetworkBudgetActionR\bonExceed\x12>\n" +
+	"\x19write_requests_per_minute\x18\b \x01(\x04H\x04R\x16writeRequestsPerMinute\x88\x01\x01B\x16\n" +
 	"\x14_requests_per_minuteB\x19\n" +
 	"\x17_connections_per_minuteB\x15\n" +
 	"\x13_bytes_out_per_hourB\x14\n" +
-	"\x12_bytes_in_per_hour\"\x87\x01\n" +
+	"\x12_bytes_in_per_hourB\x1c\n" +
+	"\x1a_write_requests_per_minute\"\x87\x01\n" +
 	"\x0fUsageMonitoring\x12<\n" +
 	"\anovelty\x18\x01 \x01(\v2\".openshell.sandbox.v1.UsageNoveltyR\anovelty\x126\n" +
 	"\x05drift\x18\x02 \x01(\v2 .openshell.sandbox.v1.UsageDriftR\x05drift\"R\n" +

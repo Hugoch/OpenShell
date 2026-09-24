@@ -23,6 +23,7 @@ struct UsageRow {
     binary: String,
     connections: u64,
     requests: u64,
+    write_requests: u64,
     bytes_out: u64,
     bytes_in: u64,
     status_2xx: u64,
@@ -51,6 +52,7 @@ fn usage_rows(response: &GetEgressUsageResponse) -> Vec<UsageRow> {
         let responses = summary.responses.unwrap_or_default();
         row.connections += summary.connections;
         row.requests += summary.requests;
+        row.write_requests += summary.write_requests;
         row.bytes_out += summary.bytes_out;
         row.bytes_in += summary.bytes_in;
         row.status_2xx += responses.status_2xx;
@@ -158,8 +160,8 @@ fn draw_usage_table(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let header = Row::new(
         [
-            "POLICY", "HOST", "BINARY", "CONNS", "REQS", "OUT", "IN", "2XX", "4XX", "5XX", "429",
-            "DENIED",
+            "POLICY", "HOST", "BINARY", "CONNS", "REQS", "WRITES", "OUT", "IN", "2XX", "4XX",
+            "5XX", "429", "DENIED",
         ]
         .map(|label| Cell::from(label).style(t.heading)),
     );
@@ -176,6 +178,7 @@ fn draw_usage_table(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Cell::from(if binary.is_empty() { "-" } else { binary }.to_string()),
             Cell::from(row.connections.to_string()),
             Cell::from(row.requests.to_string()),
+            Cell::from(row.write_requests.to_string()),
             Cell::from(human_bytes(row.bytes_out)),
             Cell::from(human_bytes(row.bytes_in)),
             Cell::from(row.status_2xx.to_string()),
@@ -190,6 +193,7 @@ fn draw_usage_table(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Constraint::Length(16),
         Constraint::Min(24),
         Constraint::Length(12),
+        Constraint::Length(6),
         Constraint::Length(6),
         Constraint::Length(6),
         Constraint::Length(10),

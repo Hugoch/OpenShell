@@ -23,6 +23,7 @@ struct UsageRow {
     binary: String,
     connections: u64,
     requests: u64,
+    write_requests: u64,
     bytes_out: u64,
     bytes_in: u64,
     status_2xx: u64,
@@ -52,6 +53,7 @@ fn aggregate(response: &GetEgressUsageResponse) -> Vec<UsageRow> {
             let responses = summary.responses.unwrap_or_default();
             row.connections += summary.connections;
             row.requests += summary.requests;
+            row.write_requests += summary.write_requests;
             row.bytes_out += summary.bytes_out;
             row.bytes_in += summary.bytes_in;
             row.status_2xx += responses.status_2xx;
@@ -115,6 +117,7 @@ fn to_json(response: &GetEgressUsageResponse) -> serde_json::Value {
                 "binary": row.binary,
                 "connections": row.connections,
                 "requests": row.requests,
+                "write_requests": row.write_requests,
                 "bytes_out": row.bytes_out,
                 "bytes_in": row.bytes_in,
                 "responses": {
@@ -163,12 +166,13 @@ fn render_table<W: Write>(response: &GetEgressUsageResponse, out: &mut W) -> Res
     .into_diagnostic()?;
     writeln!(
         out,
-        "{:<16} {:<32} {:<18} {:>6} {:>7} {:>10} {:>10} {:>5} {:>5} {:>5} {:>5} {:>7}",
+        "{:<16} {:<32} {:<18} {:>6} {:>7} {:>7} {:>10} {:>10} {:>5} {:>5} {:>5} {:>5} {:>7}",
         "POLICY",
         "HOST",
         "BINARY",
         "CONNS",
         "REQS",
+        "WRITES",
         "OUT",
         "IN",
         "2XX",
@@ -182,12 +186,13 @@ fn render_table<W: Write>(response: &GetEgressUsageResponse, out: &mut W) -> Res
         let binary = row.binary.rsplit('/').next().unwrap_or("-");
         writeln!(
             out,
-            "{:<16} {:<32} {:<18} {:>6} {:>7} {:>10} {:>10} {:>5} {:>5} {:>5} {:>5} {:>7}",
+            "{:<16} {:<32} {:<18} {:>6} {:>7} {:>7} {:>10} {:>10} {:>5} {:>5} {:>5} {:>5} {:>7}",
             row.policy,
             format!("{}:{}", row.host, row.port),
             if binary.is_empty() { "-" } else { binary },
             row.connections,
             row.requests,
+            row.write_requests,
             human_bytes(row.bytes_out),
             human_bytes(row.bytes_in),
             row.status_2xx,

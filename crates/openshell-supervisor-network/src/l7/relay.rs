@@ -3279,7 +3279,28 @@ pub(crate) fn admit_l7_usage(
             rule_ids: vec![openshell_core::egress_usage::AUDIT_FORWARDED_RULE_ID.to_string()],
         }
     };
-    usage.admit_request(&facts.policies, endpoint_id, &facts.rule_ids)
+    usage.admit_request(
+        &facts.policies,
+        endpoint_id,
+        &facts.rule_ids,
+        is_write_request(request),
+    )
+}
+
+/// Whether an L7 request can change remote state. A GraphQL request is a
+/// write when it has a mutation. A JSON-RPC request is never classified,
+/// because its HTTP method is always POST.
+fn is_write_request(request: &L7RequestInfo) -> bool {
+    if let Some(graphql) = &request.graphql {
+        return graphql
+            .operations
+            .iter()
+            .any(|operation| operation.operation_type == "mutation");
+    }
+    if request.jsonrpc.is_some() {
+        return false;
+    }
+    crate::usage::is_write_method(&request.action)
 }
 
 /// Refuse an L7 request that a deny budget has no balance for.
@@ -3401,7 +3422,8 @@ where
 
         // No L7 rules apply, so the request is charged to the L4 policies.
         if let Some(usage) = ctx.usage.as_ref()
-            && let Err(denial) = usage.admit_request(&[], "", &[])
+            && let Err(denial) =
+                usage.admit_request(&[], "", &[], crate::usage::is_write_method(&req.action))
         {
             send_budget_denial(client, ctx, &req.action, &redacted_target, &denial).await?;
             return Ok(());
@@ -5016,6 +5038,7 @@ network_policies:
             .find(|summary| summary.requests == 1)
             .expect("audit-forwarded request is charged");
         assert_eq!(summary.key.policy_key, "api");
+        assert_eq!(summary.write_requests, 1, "DELETE is a write");
         assert_eq!(
             summary.rule_hits,
             [(
@@ -5023,6 +5046,45 @@ network_policies:
                 1
             )]
         );
+    }
+
+    #[test]
+    fn write_classification_follows_the_protocol() {
+        let request = |action: &str| L7RequestInfo {
+            action: action.into(),
+            target: "/".into(),
+            query_params: std::collections::HashMap::new(),
+            graphql: None,
+            jsonrpc: None,
+        };
+        let graphql = |operation_type: &str| {
+            let mut info = request("POST");
+            info.graphql = Some(crate::l7::graphql::GraphqlRequestInfo {
+                operations: vec![crate::l7::graphql::GraphqlOperationInfo {
+                    operation_type: operation_type.into(),
+                    operation_name: None,
+                    fields: vec![],
+                    persisted_query: false,
+                    persisted_query_hash: None,
+                    persisted_query_id: None,
+                }],
+                error: None,
+            });
+            info
+        };
+        assert!(!is_write_request(&request("GET")));
+        assert!(is_write_request(&request("MKCOL")));
+        assert!(!is_write_request(&graphql("query")), "a POSTed query reads");
+        assert!(is_write_request(&graphql("mutation")));
+        let mut jsonrpc = request("POST");
+        jsonrpc.jsonrpc = Some(crate::l7::jsonrpc::JsonRpcRequestInfo {
+            calls: vec![],
+            is_batch: false,
+            receive_stream: false,
+            has_response: false,
+            error: None,
+        });
+        assert!(!is_write_request(&jsonrpc), "JSON-RPC is not classified");
     }
 
     #[test]

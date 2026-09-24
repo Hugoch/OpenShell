@@ -3775,6 +3775,10 @@ message EgressUsageSummary {
   uint64 budget_denials = 15;
   // True when this entry aggregates keys that did not fit the usage table.
   bool overflow = 16;
+  // Requests that can change remote state: HTTP methods other than GET,
+  // HEAD, and OPTIONS, and GraphQL mutations. JSON-RPC requests are not
+  // classified.
+  uint64 write_requests = 17;
 }
 
 // Upstream response status classes. Locally generated budget denials are

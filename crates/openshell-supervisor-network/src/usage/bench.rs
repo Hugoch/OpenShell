@@ -57,6 +57,7 @@ fn budget(
         hosts: vec![],
         deny: true,
         requests_per_minute,
+        write_requests_per_minute: None,
         connections_per_minute: None,
         bytes_out_per_hour: None,
         bytes_in_per_hour,
@@ -144,7 +145,7 @@ fn bench_request_admission() {
             for _ in 0..ROUNDS {
                 let start = Instant::now();
                 for _ in 0..REQUESTS {
-                    connection.admit_request(&[], "", &rule).unwrap();
+                    connection.admit_request(&[], "", &rule, false).unwrap();
                 }
                 samples.push(start.elapsed() / REQUESTS);
             }

@@ -118,6 +118,8 @@ message NetworkBudget {
   optional uint64 bytes_in_per_hour = 6;
   // Behavior when a counter has no balance left.
   NetworkBudgetAction on_exceed = 7;
+  // L7 write requests per minute. Absent means no ceiling.
+  optional uint64 write_requests_per_minute = 8;
 }
 
 // Behavior of a network budget without balance.

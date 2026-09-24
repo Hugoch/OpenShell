@@ -17476,7 +17476,11 @@ type EgressUsageSummary struct {
 	RuleHits      []*EgressRuleHit      `protobuf:"bytes,14,rep,name=rule_hits,json=ruleHits,proto3" json:"rule_hits,omitempty"`
 	BudgetDenials uint64                `protobuf:"varint,15,opt,name=budget_denials,json=budgetDenials,proto3" json:"budget_denials,omitempty"`
 	// True when this entry aggregates keys that did not fit the usage table.
-	Overflow      bool `protobuf:"varint,16,opt,name=overflow,proto3" json:"overflow,omitempty"`
+	Overflow bool `protobuf:"varint,16,opt,name=overflow,proto3" json:"overflow,omitempty"`
+	// Requests that can change remote state: HTTP methods other than GET,
+	// HEAD, and OPTIONS, and GraphQL mutations. JSON-RPC requests are not
+	// classified.
+	WriteRequests uint64 `protobuf:"varint,17,opt,name=write_requests,json=writeRequests,proto3" json:"write_requests,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -17621,6 +17625,13 @@ func (x *EgressUsageSummary) GetOverflow() bool {
 		return x.Overflow
 	}
 	return false
+}
+
+func (x *EgressUsageSummary) GetWriteRequests() uint64 {
+	if x != nil {
+		return x.WriteRequests
+	}
+	return 0
 }
 
 // Upstream response status classes. Locally generated budget denials are
@@ -19740,7 +19751,7 @@ const file_openshell_proto_rawDesc = "" +
 	"\x0fdropped_windows\x18\t \x01(\x04R\x0edroppedWindows\x12)\n" +
 	"\x10dropped_findings\x18\n" +
 	" \x01(\x04R\x0fdroppedFindings\"\x1b\n" +
-	"\x19ReportEgressUsageResponse\"\xc1\x04\n" +
+	"\x19ReportEgressUsageResponse\"\xe8\x04\n" +
 	"\x12EgressUsageSummary\x12\x1d\n" +
 	"\n" +
 	"policy_key\x18\x01 \x01(\tR\tpolicyKey\x12\x1f\n" +
@@ -19762,7 +19773,8 @@ const file_openshell_proto_rawDesc = "" +
 	"\tresponses\x18\r \x01(\v2\".openshell.v1.EgressResponseCountsR\tresponses\x128\n" +
 	"\trule_hits\x18\x0e \x03(\v2\x1b.openshell.v1.EgressRuleHitR\bruleHits\x12%\n" +
 	"\x0ebudget_denials\x18\x0f \x01(\x04R\rbudgetDenials\x12\x1a\n" +
-	"\boverflow\x18\x10 \x01(\bR\boverflow\"\xb1\x01\n" +
+	"\boverflow\x18\x10 \x01(\bR\boverflow\x12%\n" +
+	"\x0ewrite_requests\x18\x11 \x01(\x04R\rwriteRequests\"\xb1\x01\n" +
 	"\x14EgressResponseCounts\x12\x1d\n" +
 	"\n" +
 	"status_2xx\x18\x01 \x01(\x04R\tstatus2xx\x12\x1d\n" +

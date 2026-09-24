@@ -5818,7 +5818,10 @@ async fn handle_forward_proxy(
         forward_tunnel_engine = Some(tunnel_engine);
         forward_l7_reeval = Some((l7_config.config.clone(), request_info));
     }
-    if !forward_request_admitted && let Err(denial) = connection_usage.admit_request(&[], "", &[]) {
+    if !forward_request_admitted
+        && let Err(denial) =
+            connection_usage.admit_request(&[], "", &[], crate::usage::is_write_method(method))
+    {
         emit_forward_budget_denial(&denial, method, &host_lc, port, &telemetry_path, policy_str);
         emit_activity_simple(activity_tx, true, "budget_exceeded");
         respond(client, &crate::usage::budget_exceeded_response(&denial)).await?;

@@ -475,6 +475,8 @@ pub struct NetworkBudget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requests_per_minute: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_requests_per_minute: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connections_per_minute: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_out_per_hour: Option<u64>,
@@ -801,6 +803,7 @@ fn inspect_document(root: &serde_yml::Value) -> InspectionResult {
                 "policies",
                 "hosts",
                 "requests_per_minute",
+                "write_requests_per_minute",
                 "connections_per_minute",
                 "bytes_out_per_hour",
                 "bytes_in_per_hour",
@@ -1528,6 +1531,7 @@ network_budgets:
     policies: [model_hub]
     hosts: [huggingface.co]
     requests_per_minute: 120
+    write_requests_per_minute: 6
     bytes_in_per_hour: 1024
     on_exceed: deny
   total: { bytes_out_per_hour: 10 }
@@ -1539,6 +1543,7 @@ usage_monitoring:
         let hub = &policy.network_budgets["hub"];
         assert_eq!(hub.policies, ["model_hub"]);
         assert_eq!(hub.requests_per_minute, Some(120));
+        assert_eq!(hub.write_requests_per_minute, Some(6));
         assert_eq!(hub.connections_per_minute, None);
         assert_eq!(hub.on_exceed, NetworkBudgetAction::Deny);
         assert_eq!(

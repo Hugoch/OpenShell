@@ -35,6 +35,7 @@ pub fn into_proto(
                     policies: definition.policies,
                     hosts: definition.hosts,
                     requests_per_minute: definition.requests_per_minute,
+                    write_requests_per_minute: definition.write_requests_per_minute,
                     connections_per_minute: definition.connections_per_minute,
                     bytes_out_per_hour: definition.bytes_out_per_hour,
                     bytes_in_per_hour: definition.bytes_in_per_hour,
@@ -60,6 +61,7 @@ pub fn from_proto(budgets: &HashMap<String, NetworkBudget>) -> BTreeMap<String, 
                     policies: budget.policies.clone(),
                     hosts: budget.hosts.clone(),
                     requests_per_minute: budget.requests_per_minute,
+                    write_requests_per_minute: budget.write_requests_per_minute,
                     connections_per_minute: budget.connections_per_minute,
                     bytes_out_per_hour: budget.bytes_out_per_hour,
                     bytes_in_per_hour: budget.bytes_in_per_hour,
@@ -128,6 +130,10 @@ pub fn validate(policy: &SandboxPolicy) -> Vec<PolicyViolation> {
         }
         let counters = [
             ("requests_per_minute", budget.requests_per_minute),
+            (
+                "write_requests_per_minute",
+                budget.write_requests_per_minute,
+            ),
             ("connections_per_minute", budget.connections_per_minute),
             ("bytes_out_per_hour", budget.bytes_out_per_hour),
             ("bytes_in_per_hour", budget.bytes_in_per_hour),
@@ -227,6 +233,16 @@ mod tests {
                 .any(|violation| violation.to_string().contains("more than zero"))
         );
 
+        let zero_writes = policy_with_budget(NetworkBudget {
+            write_requests_per_minute: Some(0),
+            ..Default::default()
+        });
+        assert!(validate(&zero_writes).iter().any(|violation| {
+            violation
+                .to_string()
+                .contains("write_requests_per_minute must be more than zero")
+        }));
+
         let unknown = policy_with_budget(NetworkBudget {
             policies: vec!["missing".to_string()],
             requests_per_minute: Some(1),
@@ -274,6 +290,7 @@ mod tests {
                 policies: vec!["model_hub".to_string()],
                 hosts: vec![],
                 requests_per_minute: Some(5),
+                write_requests_per_minute: Some(2),
                 connections_per_minute: None,
                 bytes_out_per_hour: None,
                 bytes_in_per_hour: Some(1024),

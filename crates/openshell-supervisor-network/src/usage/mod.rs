@@ -84,6 +84,7 @@ impl UsageConfig {
                     .collect(),
                 deny: budget.on_exceed == NetworkBudgetAction::Deny as i32,
                 requests_per_minute: budget.requests_per_minute,
+                write_requests_per_minute: budget.write_requests_per_minute,
                 connections_per_minute: budget.connections_per_minute,
                 bytes_out_per_hour: budget.bytes_out_per_hour,
                 bytes_in_per_hour: budget.bytes_in_per_hour,
@@ -121,6 +122,15 @@ impl UsageConfig {
     }
 }
 
+/// Whether an HTTP method can change remote state. Every method except
+/// `GET`, `HEAD`, and `OPTIONS` counts as a write, including `WebDAV` methods
+/// such as `MKCOL`.
+pub fn is_write_method(method: &str) -> bool {
+    !["GET", "HEAD", "OPTIONS"]
+        .iter()
+        .any(|read| method.eq_ignore_ascii_case(read))
+}
+
 /// Connection or L7 request admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdmissionKind {
@@ -141,6 +151,8 @@ pub struct Admission<'a> {
     pub binary_sha256: &'a str,
     pub glob_host: bool,
     pub rule_ids: &'a [String],
+    /// The request can change remote state. See [`is_write_method`].
+    pub write: bool,
 }
 
 /// A deny budget without balance.
@@ -252,9 +264,12 @@ impl UsageState {
         let budgets = self
             .ledger
             .selected(admission.authorizing_policies, admission.host);
-        let count_counter = match admission.kind {
-            AdmissionKind::Connection => Counter::Connections,
-            AdmissionKind::Request => Counter::Requests,
+        let count_counters: &[Counter] = match admission.kind {
+            AdmissionKind::Connection => &[Counter::Connections],
+            AdmissionKind::Request if admission.write => {
+                &[Counter::Requests, Counter::WriteRequests]
+            }
+            AdmissionKind::Request => &[Counter::Requests],
         };
         let key = UsageKey {
             policy_key: admission.reported_policy.to_string(),
@@ -280,7 +295,7 @@ impl UsageState {
         self.observe_novelty(admission, &key);
         let entry = lookup.entry;
 
-        if let Some(denial) = take_deny_tokens(&budgets, count_counter, now) {
+        if let Some(denial) = take_deny_tokens(&budgets, count_counters, now) {
             entry.add_budget_denial();
             self.record_finding(
                 &key,
@@ -302,7 +317,7 @@ impl UsageState {
         }
 
         for budget in budgets.iter().filter(|budget| !budget.spec.deny) {
-            if let Some(counter) = alert_budget_exhausted(budget, count_counter, now) {
+            if let Some(counter) = alert_budget_exhausted(budget, count_counters, now) {
                 self.record_finding(
                     &key,
                     UsageFinding {
@@ -324,7 +339,7 @@ impl UsageState {
 
         match admission.kind {
             AdmissionKind::Connection => entry.add_connection(),
-            AdmissionKind::Request => entry.add_request(admission.rule_ids),
+            AdmissionKind::Request => entry.add_request(admission.rule_ids, admission.write),
         }
         let buckets = |counter: Counter| {
             budgets
@@ -449,17 +464,18 @@ fn finding_base(key: &UsageKey) -> UsageFinding {
 /// return the tokens taken from earlier budgets and report the denial.
 fn take_deny_tokens(
     budgets: &[Arc<BudgetEntry>],
-    count_counter: Counter,
+    count_counters: &[Counter],
     now: Instant,
 ) -> Option<BudgetDenial> {
     let mut taken = Vec::new();
     for budget in budgets.iter().filter(|budget| budget.spec.deny) {
-        let denied_counter = budget.bucket(count_counter).and_then(|bucket| {
+        let denied_counter = count_counters.iter().find_map(|&counter| {
+            let bucket = budget.bucket(counter)?;
             if bucket.try_take_one(now) {
                 taken.push(bucket.clone());
                 None
             } else {
-                Some((count_counter, bucket.clone()))
+                Some((counter, bucket.clone()))
             }
         });
         let denied_counter = denied_counter.or_else(|| {
@@ -471,8 +487,8 @@ fn take_deny_tokens(
                 })
         });
         if let Some((counter, bucket)) = denied_counter {
-            // `taken` includes this budget's count token when a byte
-            // counter denied the admission.
+            // `taken` includes the count tokens of this budget that were
+            // taken before another counter denied the admission.
             for token in taken {
                 token.return_one();
             }
@@ -489,13 +505,17 @@ fn take_deny_tokens(
 /// Charge an alert budget. Returns the counter that has no balance left.
 fn alert_budget_exhausted(
     budget: &BudgetEntry,
-    count_counter: Counter,
+    count_counters: &[Counter],
     now: Instant,
 ) -> Option<Counter> {
-    let mut exhausted = budget
-        .bucket(count_counter)
-        .filter(|bucket| !bucket.force_take_one(now))
-        .map(|_| count_counter);
+    let mut exhausted = None;
+    for &counter in count_counters {
+        if let Some(bucket) = budget.bucket(counter)
+            && !bucket.force_take_one(now)
+        {
+            exhausted.get_or_insert(counter);
+        }
+    }
     for counter in [Counter::BytesOut, Counter::BytesIn] {
         if let Some(bucket) = budget.bucket(counter)
             && !bucket.has_balance(now)
@@ -623,6 +643,7 @@ impl ConnectionUsage {
             binary_sha256: &meta.binary_sha256,
             glob_host,
             rule_ids: &[],
+            write: false,
         });
         match outcome {
             AdmissionOutcome::Admitted(attribution) => Ok(Self {
@@ -644,12 +665,14 @@ impl ConnectionUsage {
 
     /// Admit an L7 request on this connection. Authorizing policies default
     /// to the L4 match when the request has no L7 authorizer, for example
-    /// when audit mode forwards a request that no rule allows.
+    /// when audit mode forwards a request that no rule allows. `write`
+    /// marks a request that can change remote state.
     pub fn admit_request(
         &self,
         authorizing_policies: &[String],
         endpoint_id: &str,
         rule_ids: &[String],
+        write: bool,
     ) -> Result<(), BudgetDenial> {
         let authorizing = if authorizing_policies.is_empty() {
             &self.meta.l4_policies[..]
@@ -676,6 +699,7 @@ impl ConnectionUsage {
             binary_sha256: &self.meta.binary_sha256,
             glob_host: false,
             rule_ids,
+            write,
         }) {
             AdmissionOutcome::Admitted(attribution) => {
                 self.cell.switch_to_request(attribution);
