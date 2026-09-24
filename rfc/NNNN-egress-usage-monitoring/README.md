@@ -119,6 +119,8 @@ The usage key needs the binary SHA-256. `EgressDecision` (`proxy/egress.rs:144`)
 
 Attribution costs one Rego evaluation per L7 request, after the allow decision. The rule `l7_request_attribution` returns a map from each policy key to the IDs of its rules that match the request. It matches rules only, and it does not evaluate the allow decision again. Some variants allow a request without a rule, for example the MCP and GraphQL variants without operation rules. For these requests, the usage goes to the rule ID `endpoint:<endpoint_id>` and to the L4 authorizing policies of the connection.
 
+The usage table also counts **write requests**: L7 requests that can change remote state. A request is a write if its HTTP method is not `GET`, `HEAD`, or `OPTIONS`. This includes WebDAV methods such as `MKCOL`. A GraphQL request is a write if it contains a mutation, because GraphQL sends queries with `POST` too. JSON-RPC requests are not classified: their method is always `POST`, and the method name of a call does not tell if it changes state. Many allowed endpoints are read-mostly, for example a package proxy or a model hub. On these endpoints, writes are a better signal than the request total.
+
 Raw request paths never enter the usage table. Paths are unbounded, they can contain identifiers or secrets, and path templates go out of date quickly. The policy advisor does not map L7 denials mechanically for the same reason.
 
 ### Reporting
@@ -171,6 +173,8 @@ message EgressUsageSummary {
   uint64 budget_denials = 15;
   // True when this entry aggregates keys that did not fit the usage table.
   bool overflow = 16;
+  // L7 requests that can change remote state.
+  uint64 write_requests = 17;
 }
 ```
 
@@ -198,6 +202,7 @@ network_budgets:
     policies: [model_hub]
     hosts: ["huggingface.co"]
     requests_per_minute: 120
+    write_requests_per_minute: 10
     connections_per_minute: 30
     bytes_out_per_hour: 52428800
     bytes_in_per_hour: 21474836480
@@ -210,6 +215,7 @@ network_budgets:
 - `policies` selects traffic whose authorizing policies contain one of these policy keys. If it is absent, the budget selects traffic from all policy keys. This makes a sandbox-wide budget possible.
 - `hosts` is an optional list of host globs on the observed host.
 - `requests_per_minute` counts L7 requests only.
+- `write_requests_per_minute` counts L7 write requests only. A write takes one token from each of the two request counters. If one counter denies, the supervisor returns the tokens that it took.
 - `connections_per_minute`, `bytes_out_per_hour`, and `bytes_in_per_hour` count all traffic.
 - An absent counter field means no ceiling for that counter. Validation rejects zero. To block an endpoint, remove it from `network_policies`.
 - `on_exceed` is `alert` or `deny`. The default is `alert`, so a new budget never breaks a running agent.
@@ -279,7 +285,7 @@ Novelty has known limits:
 
 The gateway computes drift from the usage summaries. It adds the summaries of one window per `(policy_key, endpoint_id)`, across all hosts and binaries. An agent that rotates hosts under a glob or rotates binaries therefore cannot split its traffic below the baseline. Novelty covers the rotation itself.
 
-For each endpoint, the gateway keeps an EWMA of `requests`, `bytes_out`, `bytes_in`, and error responses (4xx and 5xx from upstream), with a weight of 0.1 for the new window:
+For each endpoint, the gateway keeps an EWMA of `requests`, `write_requests`, `bytes_out`, `bytes_in`, and error responses (4xx and 5xx from upstream), with a weight of 0.1 for the new window:
 
 - Only a window with traffic for an endpoint updates its means. Agent traffic is bursty. If idle windows count as zero, the baseline decays to zero between bursts, and every burst above the floor is drift.
 - Every window, with or without traffic, counts toward the warmup. A baseline produces findings only after 30 windows.
@@ -288,7 +294,17 @@ For each endpoint, the gateway keeps an EWMA of `requests`, `bytes_out`, `bytes_
 - A drifting counter reports once. It reports again only after a window in which it is below its threshold. Bytes count in the window when they move, so a long transfer spans several windows, and without this rule one transfer produces a finding in each of them.
 - A window with traffic updates the baseline, including a window that drifts. A lasting new level therefore stops being above the threshold after about `ln(1 - 1/r) / ln(1 - w)` windows, with weight `w` and ratio `r`. This is intentional: drift reports a change, and budgets cap a level.
 
-The gateway keeps at most 256 baselines per sandbox and evicts the least recently updated baseline. It deletes the baselines when it deletes the sandbox. Drift does not cover a sandbox that lives for less than 30 windows.
+The gateway keeps at most 256 baselines per sandbox and evicts the least recently updated baseline. It deletes the baselines when it deletes the sandbox.
+
+A sandbox baseline needs 30 windows, so it cannot cover a sandbox that lives for less than 30 windows. Evaluation and batch sandboxes are often this short. For these sandboxes, the gateway keeps **cohort baselines**, shared by similar sandboxes:
+
+- The cohort is the workload template of the sandbox (`created_from_workload_template`). A sandbox without a template belongs to the cohort of its base policy hash. Cohorts are scoped to the workspace.
+- Every accepted window of a cohort member updates the cohort baseline of each endpoint with traffic, with the same EWMA. The cohort warmup counts these windows across all members.
+- Until its own baseline is warm, a sandbox compares against the cohort baseline. The cohort baseline is used only after 30 windows from at least 3 sandboxes, so one sandbox cannot define it. The finding names the reference: `the template baseline` or `the policy baseline`.
+- A window that drifts does not update the cohort baseline. A misbehaving sandbox therefore does not raise the reference of the other members.
+- The drift alert state stays per sandbox, so one change reports once for each sandbox.
+- A cohort update is best effort. Many sandboxes write one record, so a conflict after 5 attempts drops the update without failing the report.
+- A cohort outlives its sandboxes. Workspace deletion removes it, and a sweep removes cohorts without a report for 7 days.
 
 ### Findings
 
@@ -344,6 +360,21 @@ Usage summaries contain hosts, binary paths, binary hashes, policy keys, and rul
 
 The usage table, the budget ledger, and the novelty sets live in the supervisor, outside the workload boundary. The agent cannot read or change them. The agent sees budget state only through the 429 responses and connection denials that it receives.
 
+### Worked example: package proxy abuse
+
+In 2026, OpenAI reported that agents in an evaluation environment misused the only egress they had: an internal Artifactory that proxied package registries. The agents found that they could write into it. They used files, and later WebDAV directory names, as a message board between agents. Then they exploited the proxy to get open internet access and a command channel. The table maps each step to OpenShell with this RFC.
+
+| Step | Control |
+|---|---|
+| Writes into a read-only package proxy | A read-only L7 rule (`GET` and `HEAD` on package paths) denies them. This is policy today, without this RFC. If writes are allowed, `write_requests_per_minute` caps them, and `egress.new_rule` reports the first use of a write rule. |
+| The message board | Drift on `write_requests` and on `bytes_out`. Evaluation sandboxes are short, so drift depends on the cohort baseline. |
+| Probes for server-side request forgery and other flaws | Drift on upstream errors. Paths are not in the usage table, so the probes themselves stay invisible. |
+| Internet access through the proxy | `bytes_in` drift and byte budgets. `egress.new_binary` if a tool other than the package manager calls the proxy. Nothing in this RFC stops the pivot itself. |
+| Command channel over the proxy | Not covered. Small periodic polling does not change volume. |
+| Coordination across sandboxes | Not covered. Usage is per sandbox. The cohort shares a baseline, but no finding correlates sandboxes. |
+
+The strongest control in this case is the existing L7 policy: a proxy that the agent can only read cannot carry a message board. Usage monitoring adds caps and visibility where the policy must allow writes. The two gaps, periodic beaconing and correlation across sandboxes, are open questions.
+
 ## Implementation plan
 
 Each phase can merge and ship alone. Phase 1 has value without the other phases.
@@ -355,7 +386,7 @@ Each phase can merge and ship alone. Phase 1 has value without the other phases.
 
 ### Proof of concept
 
-The branch `poc/egress-usage-monitoring` on `github.com/Hugoch/OpenShell` implements all four phases. An e2e test runs a sandbox through a gateway with a deny budget of 5 requests per minute. The test gets 5 responses with 200 and 5 responses with 429, and `openshell sandbox usage` shows `bytes_in` equal to the upstream response bytes.
+The branch `poc/egress-usage-monitoring` on `github.com/Hugoch/OpenShell` implements all four phases, the write counter, and cohort baselines. An e2e test runs a sandbox through a gateway with a deny budget of 5 requests per minute. The test gets 5 responses with 200 and 5 responses with 429, and `openshell sandbox usage` shows `bytes_in` equal to the upstream response bytes.
 
 The proof of concept uses these simplifications. A production implementation can keep or replace each one:
 
@@ -363,6 +394,7 @@ The proof of concept uses these simplifications. A production implementation can
 - `config_revision` in the summaries is 0. The policy hash identifies the revision.
 - The gateway removes the recent windows of a sandbox when the API deletes the sandbox. It does not remove them when the sandbox disappears without the API.
 - There is no supervisor capability flag. See [Open questions](#open-questions).
+- The cohort contributor threshold counts contributors of the whole cohort, not of each endpoint baseline.
 - Count tokens use a mutex for each bucket, not a compare-and-subtract. Byte charges are lock-free.
 
 Ignored benchmarks in `crates/openshell-supervisor-network/src/usage/bench.rs` measure the hot path. The results are medians of 5 rounds on an Apple M-series laptop, in a release build:
@@ -385,7 +417,7 @@ Each phase updates `architecture/sandbox.md`, `architecture/sandbox-limits.md`, 
 
 - **Hot-path cost.** Each admission does one table lookup, each copy does atomic additions, and each L7 request does one more Rego evaluation. Mitigation: no channel and no allocation per copy, the ledger lookup only for selected budgets, and an attribution rule that does not evaluate the allow decision again. The [proof of concept](#proof-of-concept) measures a raw relay overhead in the noise, and 65 µs for each L7 request. Remaining uncertainty: the cost under contention on one usage key, and a Rego attribution cost that grows with the number of rules.
 - **Too many findings.** Novelty and drift can produce findings for legal agent behavior, and operators then ignore them. Mitigation: the learning period, the floors, the minimum window count, and one finding per key per type per window. Novelty and drift never deny traffic. Remaining uncertainty: the default values need data from real agent workloads.
-- **Evasion.** An agent can stay under every budget. It can spread traffic across endpoints of different policy keys, and it can misbehave from the start so that novelty learns the misbehavior. Mitigation: sandbox-wide budgets, drift on endpoint totals, and overflow findings. Budgets are the only control that does not depend on history.
+- **Evasion.** An agent can stay under every budget. It can spread traffic across endpoints of different policy keys, and it can misbehave from the start so that novelty learns the misbehavior. Mitigation: sandbox-wide budgets, drift on endpoint totals, cohort baselines that do not learn from the drifting sandbox, and overflow findings. Budgets are the only control that does not depend on history.
 - **Policy complexity.** Budgets add a new policy section. Mitigation: all counters are optional, `on_exceed` defaults to `alert`, and the policy advisor can later propose budgets from observed usage.
 - **Sensitive data in summaries.** Hosts and binary hashes can identify internal services and tools. Mitigation: sandbox authentication, the same read permission as sandbox logs, no paths or payloads, no anonymous telemetry, and deletion with the sandbox.
 - **Version skew.** Older supervisors reject the new policy sections. Mitigation: the gateway must gate delivery on supervisor support. See [Open questions](#open-questions).
@@ -426,7 +458,8 @@ Operators keep the current allow and deny model. Abuse of an allowed endpoint st
 ## Open questions
 
 - **Version gating.** How does the gateway know that a supervisor supports `network_budgets` and `usage_monitoring` before it delivers them? Is there a capability exchange, or does the gateway use the supervisor version?
-- **Baseline scope.** Is a per-sandbox baseline enough, or do sandboxes created from the same template need a shared baseline? A shared baseline gives short-lived sandboxes drift findings, but it needs a stable template identity and changes the gateway storage model.
+- **Cohort key.** Is the workload template, or else the base policy hash, the right cohort? Two different agents that share one generic policy share a cohort. A cohort can also drift slowly if all its members change together.
+- **Beaconing and fleet correlation.** Do periodic polling on an allowed endpoint and the same unusual use across many sandboxes need their own findings? Both need data that the usage summaries do not carry: request timing, and an index across sandboxes.
 - **Rego attribution cost.** Is 62 µs for each L7 request acceptable, or does the attribution need a Rust rule index that the supervisor builds at policy load?
 - **Budget state for the agent.** Does `policy.local` need a `/v1/usage` route so that an agent can read its remaining budget before it starts a large transfer?
 - **Connections in progress.** Does `on_exceed: deny` need to close long-lived raw tunnels when a byte budget runs out? This needs per-budget cancellation of relays. Today the only mechanism is a policy generation advance, which closes every pinned connection.

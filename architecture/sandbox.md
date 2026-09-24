@@ -722,7 +722,12 @@ Every window, the supervisor reads and resets the counters and sends one
 outbox is bounded and sends in order, one report at a time. The gateway adds a
 report only when its sequence is higher than the last accepted one, keeps
 recent windows in memory, keeps drift baselines per endpoint in the store, and
-publishes windows and findings on `WatchSandbox`. Usage never carries request
+publishes windows and findings on `WatchSandbox`. Drift also keeps cohort
+baselines per workspace, shared by the sandboxes of one workload template or,
+without a template, of one base policy. A sandbox compares against its cohort
+until its own baseline is warm. Cohort updates are best effort, skip drifting
+windows, and outlive sandboxes: workspace deletion removes them, and an hourly
+sweep removes cohorts idle for 7 days. Usage never carries request
 paths, query strings, headers, or bodies.
 
 ## Configuration Admission

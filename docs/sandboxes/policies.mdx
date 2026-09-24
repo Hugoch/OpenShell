@@ -136,7 +136,13 @@ network_budgets:
     on_exceed: deny
   downloads:
     bytes_in_per_hour: 10737418240
+  package-writes:
+    policies: [package_proxy]
+    write_requests_per_minute: 5
+    on_exceed: deny
 ```
+
+A `write_requests_per_minute` counter limits only requests that can change remote state, such as `PUT`, `POST`, and WebDAV `MKCOL`. Use it on an endpoint that the agent mostly reads, for example a package proxy. A read-only L7 rule is stronger when the agent must never write.
 
 With `on_exceed: deny`, a request without balance gets `429 Too Many Requests` with a `Retry-After` header and an `error: budget_exceeded` body. The default `on_exceed: alert` records a finding and admits the traffic, so you can add a budget to a running sandbox, observe it, and then change it to `deny`. A budget keeps its balance across reloads while its name stays the same.
 

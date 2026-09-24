@@ -14,6 +14,7 @@ Network policy decides where a sandbox can connect. Egress usage shows how much 
 The supervisor groups usage by policy key, endpoint, destination host and port, and calling binary. For each group and window, it counts:
 
 - Connections and L7 requests.
+- Write requests: L7 requests that can change remote state. These are HTTP methods other than `GET`, `HEAD`, and `OPTIONS`, including WebDAV methods such as `MKCOL`, and GraphQL mutations. JSON-RPC requests are not classified, because their HTTP method is always `POST`.
 - Bytes out (sent by the sandbox) and bytes in (received by the sandbox).
 - Upstream response classes: 2xx, 3xx, 4xx, 5xx, and 429.
 - Budget denials.
@@ -88,13 +89,15 @@ For each network policy, the supervisor remembers the hosts under glob endpoints
 
 ### Drift
 
-The gateway sums each window per policy and endpoint, across hosts and binaries, and keeps a moving average of requests, bytes out, bytes in, and upstream errors:
+The gateway sums each window per policy and endpoint, across hosts and binaries, and keeps a moving average of requests, write requests, bytes out, bytes in, and upstream errors:
 
 - Only windows with traffic update the average, so idle time does not lower the baseline.
 - Drift starts after 30 windows.
 - A counter drifts when one window is more than `ratio` times the larger of its average and its floor (`min_requests` or `min_bytes`).
 - A drifting counter reports once. It reports again only after a window below its threshold.
 - A lasting new level raises the average, so drift reports a change, not a level. Use budgets to cap a level.
+
+Sandboxes of one cohort also share baselines. The cohort is the workload template of the sandbox or, for a sandbox without a template, its base policy. Until its own baseline has 30 windows, a sandbox compares against the cohort baseline. The cohort baseline is used only after 30 windows from at least 3 sandboxes. A short-lived sandbox therefore gets drift findings from its first window, and the finding names the `template baseline` or the `policy baseline`. A window that drifts does not update the cohort baseline. Cohort baselines are deleted with their workspace, or after 7 days without a report.
 
 Set the thresholds in [`usage_monitoring`](/reference/policy-schema#usage-monitoring).
 
@@ -109,6 +112,7 @@ Set the thresholds in [`usage_monitoring`](/reference/policy-schema#usage-monito
 | Findings per window | 64 | Other findings go only to the local OCSF log. |
 | Unsent reports in the supervisor | 10 | The oldest report is dropped and counted as a dropped window. |
 | Drift baselines per sandbox | 256 | The least recently active baseline is removed. |
+| Drift baselines per cohort | 256 | The least recently active baseline is removed. |
 
 ## Standalone Network Proxy
 

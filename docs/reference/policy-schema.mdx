@@ -646,6 +646,7 @@ network_budgets:
     policies: [model_hub]
     hosts: ["huggingface.co"]
     requests_per_minute: 120
+    write_requests_per_minute: 10
     connections_per_minute: 30
     bytes_out_per_hour: 52428800
     bytes_in_per_hour: 21474836480
@@ -659,6 +660,7 @@ network_budgets:
 | `policies` | list of strings | No | Keys of `network_policies` entries. The budget selects traffic that any of these policies allowed. Empty selects traffic from every policy. Each key must exist in `network_policies`. |
 | `hosts` | list of strings | No | Exact host or DNS glob patterns on the destination host, at most 32. Empty selects every host. |
 | `requests_per_minute` | integer | No | L7 requests per minute. Applies only to endpoints where OpenShell parses HTTP. |
+| `write_requests_per_minute` | integer | No | L7 write requests per minute: HTTP methods other than `GET`, `HEAD`, and `OPTIONS`, and GraphQL mutations. A write also takes a token from `requests_per_minute`. |
 | `connections_per_minute` | integer | No | New connections per minute. |
 | `bytes_out_per_hour` | integer | No | Bytes that the sandbox sends per hour. |
 | `bytes_in_per_hour` | integer | No | Bytes that the sandbox receives per hour. |
@@ -689,7 +691,7 @@ usage_monitoring:
 |---|---|---|---|
 | `novelty.learning_period_seconds` | integer | `600` | Time after a network policy starts, or after its endpoints change, during which a first use produces no finding. |
 | `drift.enabled` | boolean | `true` | Whether the gateway computes drift findings. |
-| `drift.ratio` | integer | `10` | A counter drifts when one window is more than this many times its baseline. Must be at least `2`. |
+| `drift.ratio` | integer | `10` | A counter drifts when one window is more than this many times its baseline. Must be at least `2`. The baseline is the sandbox baseline, or the cohort baseline before the sandbox baseline is warm. |
 | `drift.min_requests` | integer | `100` | Smallest request baseline that drift compares against. |
 | `drift.min_bytes` | integer | `104857600` | Smallest byte baseline that drift compares against. |
 

@@ -140,6 +140,9 @@ resources.
 | Gateway recent windows | 60 per sandbox | Drop the oldest window. |
 | Gateway recent findings | 200 per sandbox | Drop the oldest finding. |
 | Gateway drift baselines | 256 per sandbox | Evict the least recently active baseline. |
+| Gateway cohort baselines | 256 per cohort | Evict the least recently active baseline. |
+| Cohort contributors | 64 most recent sandboxes | Drop the oldest contributor. |
+| Idle cohort | 7 days without a report | Delete the cohort in the hourly sweep. |
 
 ## Network and Upstream Proxying
 
