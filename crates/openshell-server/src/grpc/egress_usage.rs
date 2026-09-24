@@ -9,6 +9,11 @@
 //! EWMA baseline per `(policy_key, endpoint_id)` in the store. The highest
 //! sequences and the baselines are one object, so one write keeps them
 //! consistent.
+//!
+//! Sandboxes of one cohort also share baselines: the sandboxes from one
+//! workload template, or else the sandboxes with one base policy. A sandbox
+//! compares against the cohort baseline until its own baseline is warm, so
+//! short-lived sandboxes get drift findings too.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -20,7 +25,8 @@ use openshell_core::egress_usage::{
 use openshell_core::proto::{
     EgressFindingSeverity, EgressUsageFinding, EgressUsageSummary, EgressUsageUpdate,
     EgressUsageWindow, GetEgressUsageRequest, GetEgressUsageResponse, ReportEgressUsageRequest,
-    ReportEgressUsageResponse, Sandbox, SandboxStreamEvent, UsageDrift, sandbox_stream_event,
+    ReportEgressUsageResponse, Sandbox, SandboxPolicy as ProtoSandboxPolicy, SandboxStreamEvent,
+    UsageDrift, sandbox_stream_event,
 };
 use serde::{Deserialize, Serialize};
 use tonic::{Request, Response, Status};
@@ -28,10 +34,14 @@ use tonic::{Request, Response, Status};
 use crate::ServerState;
 use crate::auth::principal::Principal;
 use crate::auth::workspace_authz::MinWorkspaceRole;
-use crate::persistence::{ObjectId, ObjectName, PersistenceError, Store, WriteCondition};
+use crate::persistence::{
+    ObjectCursor, ObjectId, ObjectName, PersistenceError, Store, WriteCondition,
+};
 
 /// Store object type for per-sandbox baselines and accepted sequences.
 pub const EGRESS_USAGE_OBJECT_TYPE: &str = "egress_usage_state";
+/// Store object type for cohort baselines, one per workspace and cohort.
+pub const EGRESS_USAGE_COHORT_OBJECT_TYPE: &str = "egress_usage_cohort";
 
 const RECENT_WINDOWS: usize = 60;
 const RECENT_FINDINGS: usize = 200;
@@ -40,6 +50,11 @@ const MAX_TRACKED_INSTANCES: usize = 8;
 const WARMUP_WINDOWS: u64 = 30;
 const EWMA_WEIGHT: f64 = 0.1;
 const CAS_ATTEMPTS: usize = 5;
+/// Distinct sandboxes that must contribute before a cohort baseline is used.
+const COHORT_MIN_CONTRIBUTORS: usize = 3;
+const MAX_COHORT_CONTRIBUTORS: usize = 64;
+/// Cohorts without a report for this long are removed.
+pub const COHORT_IDLE_TTL: std::time::Duration = std::time::Duration::from_hours(24 * 7);
 
 /// Recent windows and findings of every sandbox on this replica.
 #[derive(Debug, Default)]
@@ -120,6 +135,55 @@ struct PersistedUsageState {
     baselines: BTreeMap<String, Baseline>,
     /// Instance insertion order, oldest first, for bounded tracking.
     instances: Vec<String>,
+}
+
+/// Shared baselines of one cohort.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct CohortState {
+    /// Baselines keyed by `policy_key|endpoint_id`. `windows` counts the
+    /// active sandbox windows that updated the baseline.
+    baselines: BTreeMap<String, Baseline>,
+    /// Sandboxes that contributed, most recent last.
+    contributors: Vec<String>,
+}
+
+/// Cohort baselines that a sandbox compares against before its own
+/// baselines are warm.
+struct CohortReference<'a> {
+    label: &'static str,
+    state: &'a CohortState,
+}
+
+impl CohortReference<'_> {
+    fn baseline(&self, key: &str) -> Option<&Baseline> {
+        if self.state.contributors.len() < COHORT_MIN_CONTRIBUTORS {
+            return None;
+        }
+        self.state
+            .baselines
+            .get(key)
+            .filter(|baseline| baseline.windows >= WARMUP_WINDOWS)
+    }
+}
+
+/// Cohort of a sandbox: its workload template, or else its base policy.
+fn cohort_of(sandbox: &Sandbox, policy: &ProtoSandboxPolicy) -> (String, &'static str) {
+    sandbox
+        .created_from_workload_template
+        .as_ref()
+        .filter(|template| !template.name.is_empty())
+        .map_or_else(
+            || {
+                (
+                    format!(
+                        "policy:{}",
+                        openshell_core::policy_identity::deterministic_policy_hash(policy)
+                    ),
+                    "policy baseline",
+                )
+            },
+            |template| (format!("template:{}", template.name), "template baseline"),
+        )
 }
 
 /// Drift settings resolved from the sandbox policy.
@@ -203,27 +267,67 @@ fn human_bytes(bytes: f64) -> String {
     }
 }
 
-fn drift_detail(counter: &str, value: u64, reference: f64, ratio: f64) -> String {
+fn drift_detail(counter: &str, value: u64, reference: f64, ratio: f64, label: &str) -> String {
     let (value, reference) = if counter.starts_with("bytes") {
         (human_bytes(as_f64(value)), human_bytes(reference))
     } else {
         (value.to_string(), format!("{reference:.1}"))
     };
-    format!("{counter} {value} in one window is more than {ratio} times the baseline {reference}")
+    format!("{counter} {value} in one window is more than {ratio} times the {label} {reference}")
+}
+
+fn update_means(baseline: &mut Baseline, window: EndpointTotals) {
+    let update = |mean: &mut f64, value: u64| {
+        *mean = (1.0 - EWMA_WEIGHT).mul_add(*mean, EWMA_WEIGHT * as_f64(value));
+    };
+    update(&mut baseline.requests, window.requests);
+    update(&mut baseline.writes, window.writes);
+    update(&mut baseline.bytes_out, window.bytes_out);
+    update(&mut baseline.bytes_in, window.bytes_in);
+    update(&mut baseline.errors, window.errors);
+}
+
+fn first_baseline(window: EndpointTotals, now_ms: i64) -> Baseline {
+    Baseline {
+        requests: as_f64(window.requests),
+        writes: as_f64(window.writes),
+        bytes_out: as_f64(window.bytes_out),
+        bytes_in: as_f64(window.bytes_in),
+        errors: as_f64(window.errors),
+        windows: 1,
+        last_active_ms: now_ms,
+        alerting: std::collections::BTreeSet::new(),
+    }
+}
+
+fn evict_least_recent(baselines: &mut BTreeMap<String, Baseline>) {
+    while baselines.len() > MAX_BASELINES {
+        let Some(oldest) = baselines
+            .iter()
+            .min_by_key(|(_, baseline)| baseline.last_active_ms)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        baselines.remove(&oldest);
+    }
 }
 
 /// Apply one accepted window to the baselines.
 ///
 /// Only windows with traffic for an endpoint update its means, so idle time
 /// does not pull a baseline down to zero. Every window counts toward the
-/// warmup. A counter drifts when its value is more than `ratio` times the
-/// larger of its mean and its floor. It reports once, and again only after
-/// a window below the threshold. Windows that never arrived (dropped by the
-/// supervisor) are gaps and update nothing. Returns drift findings.
+/// warmup. Before the sandbox baseline of an endpoint is warm, the warm
+/// cohort baseline is the reference. A counter drifts when its value is
+/// more than `ratio` times the larger of the reference mean and its floor.
+/// It reports once, and again only after a window below the threshold.
+/// Windows that never arrived (dropped by the supervisor) are gaps and
+/// update nothing. Returns drift findings.
 fn apply_window(
     state: &mut PersistedUsageState,
     summaries: &[EgressUsageSummary],
     settings: DriftSettings,
+    cohort: Option<&CohortReference<'_>>,
     now_ms: i64,
 ) -> Vec<EgressUsageFinding> {
     let totals = endpoint_totals(summaries);
@@ -245,58 +349,60 @@ fn apply_window(
                 EndpointTotals::default(),
             )
         });
-        let Some(baseline) = state.baselines.get_mut(&key) else {
-            state.baselines.insert(
-                key,
-                Baseline {
-                    requests: as_f64(window.requests),
-                    writes: as_f64(window.writes),
-                    bytes_out: as_f64(window.bytes_out),
-                    bytes_in: as_f64(window.bytes_in),
-                    errors: as_f64(window.errors),
-                    windows: 1,
-                    last_active_ms: now_ms,
-                    alerting: std::collections::BTreeSet::new(),
-                },
-            );
-            continue;
+        let own = state.baselines.get(&key);
+        let reference = match own {
+            Some(baseline) if baseline.windows >= WARMUP_WINDOWS => {
+                Some((baseline.clone(), "baseline"))
+            }
+            _ => cohort.and_then(|cohort| {
+                cohort
+                    .baseline(&key)
+                    .map(|baseline| (baseline.clone(), cohort.label))
+            }),
         };
-        if settings.enabled && baseline.windows >= WARMUP_WINDOWS {
+        let is_new = own.is_none();
+        let baseline = state
+            .baselines
+            .entry(key)
+            .or_insert_with(|| first_baseline(window, now_ms));
+        if settings.enabled
+            && let Some((reference, label)) = reference
+        {
             let checks = [
                 (
                     "requests",
                     window.requests,
-                    baseline.requests,
+                    reference.requests,
                     settings.min_requests,
                 ),
                 (
                     "writes",
                     window.writes,
-                    baseline.writes,
+                    reference.writes,
                     settings.min_requests,
                 ),
                 (
                     "bytes_out",
                     window.bytes_out,
-                    baseline.bytes_out,
+                    reference.bytes_out,
                     settings.min_bytes,
                 ),
                 (
                     "bytes_in",
                     window.bytes_in,
-                    baseline.bytes_in,
+                    reference.bytes_in,
                     settings.min_bytes,
                 ),
                 (
                     "errors",
                     window.errors,
-                    baseline.errors,
+                    reference.errors,
                     settings.min_requests,
                 ),
             ];
             for (counter, value, mean, floor) in checks {
-                let reference = mean.max(as_f64(floor));
-                if as_f64(value) <= settings.ratio * reference {
+                let threshold = mean.max(as_f64(floor));
+                if as_f64(value) <= settings.ratio * threshold {
                     baseline.alerting.remove(counter);
                     continue;
                 }
@@ -307,37 +413,60 @@ fn apply_window(
                         policy_key: policy_key.clone(),
                         endpoint_id: endpoint_id.clone(),
                         counter: counter.to_string(),
-                        detail: drift_detail(counter, value, reference, settings.ratio),
+                        detail: drift_detail(counter, value, threshold, settings.ratio, label),
                         ..Default::default()
                     });
                 }
             }
         }
+        if is_new {
+            continue;
+        }
         baseline.windows += 1;
         if window != EndpointTotals::default() {
-            let update = |mean: &mut f64, value: u64| {
-                *mean = (1.0 - EWMA_WEIGHT).mul_add(*mean, EWMA_WEIGHT * as_f64(value));
-            };
-            update(&mut baseline.requests, window.requests);
-            update(&mut baseline.writes, window.writes);
-            update(&mut baseline.bytes_out, window.bytes_out);
-            update(&mut baseline.bytes_in, window.bytes_in);
-            update(&mut baseline.errors, window.errors);
+            update_means(baseline, window);
             baseline.last_active_ms = now_ms;
         }
     }
-    while state.baselines.len() > MAX_BASELINES {
-        let Some(oldest) = state
-            .baselines
-            .iter()
-            .min_by_key(|(_, baseline)| baseline.last_active_ms)
-            .map(|(key, _)| key.clone())
-        else {
-            break;
-        };
-        state.baselines.remove(&oldest);
-    }
+    evict_least_recent(&mut state.baselines);
     findings
+}
+
+/// Add one sandbox window to the cohort baselines. Endpoints that drifted
+/// in this window are left out, so a misbehaving sandbox does not raise the
+/// shared baseline.
+fn apply_cohort_window(
+    cohort: &mut CohortState,
+    summaries: &[EgressUsageSummary],
+    drifted: &std::collections::BTreeSet<String>,
+    sandbox_id: &str,
+    now_ms: i64,
+) {
+    let mut contributed = false;
+    for (key, (_, _, window)) in endpoint_totals(summaries) {
+        if window == EndpointTotals::default() || drifted.contains(&key) {
+            continue;
+        }
+        contributed = true;
+        match cohort.baselines.get_mut(&key) {
+            Some(baseline) => {
+                update_means(baseline, window);
+                baseline.windows += 1;
+                baseline.last_active_ms = now_ms;
+            }
+            None => {
+                cohort.baselines.insert(key, first_baseline(window, now_ms));
+            }
+        }
+    }
+    if contributed {
+        cohort.contributors.retain(|id| id != sandbox_id);
+        cohort.contributors.push(sandbox_id.to_string());
+        if cohort.contributors.len() > MAX_COHORT_CONTRIBUTORS {
+            cohort.contributors.remove(0);
+        }
+    }
+    evict_least_recent(&mut cohort.baselines);
 }
 
 /// Accept a report only when its sequence is higher than the last accepted
@@ -386,6 +515,118 @@ async fn load_state(
         }
         None => Ok((PersistedUsageState::default(), None)),
     }
+}
+
+async fn load_cohort(
+    store: &Store,
+    workspace: &str,
+    cohort_id: &str,
+) -> Result<Option<(CohortState, (String, u64))>, String> {
+    let Some(record) = store
+        .get_by_name(EGRESS_USAGE_COHORT_OBJECT_TYPE, workspace, cohort_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let cohort = serde_json::from_slice(&record.payload).map_err(|error| error.to_string())?;
+    Ok(Some((cohort, (record.id, record.resource_version))))
+}
+
+/// Add a sandbox window to its cohort. The update is best effort: the
+/// cohort is statistical, so a lost update never fails the report.
+async fn update_cohort(
+    store: &Store,
+    workspace: &str,
+    cohort_id: &str,
+    summaries: &[EgressUsageSummary],
+    drifted: &std::collections::BTreeSet<String>,
+    sandbox_id: &str,
+) {
+    for _ in 0..CAS_ATTEMPTS {
+        let (mut cohort, existing) = match load_cohort(store, workspace, cohort_id).await {
+            Ok(Some((cohort, existing))) => (cohort, Some(existing)),
+            Ok(None) => (CohortState::default(), None),
+            Err(error) => {
+                tracing::debug!(error = %error, cohort = %cohort_id, "egress usage cohort load failed");
+                return;
+            }
+        };
+        let before = cohort.clone();
+        apply_cohort_window(&mut cohort, summaries, drifted, sandbox_id, now_ms());
+        if cohort == before {
+            return;
+        }
+        let Ok(payload) = serde_json::to_vec(&cohort) else {
+            return;
+        };
+        let (id, condition) = existing.map_or_else(
+            || (uuid::Uuid::new_v4().to_string(), WriteCondition::MustCreate),
+            |(id, version)| (id, WriteCondition::MatchResourceVersion(version)),
+        );
+        match store
+            .put_if(
+                EGRESS_USAGE_COHORT_OBJECT_TYPE,
+                &id,
+                cohort_id,
+                workspace,
+                &payload,
+                None,
+                condition,
+            )
+            .await
+        {
+            Ok(_) => return,
+            Err(PersistenceError::Conflict { .. } | PersistenceError::UniqueViolation { .. }) => {}
+            Err(error) => {
+                tracing::debug!(error = %error, cohort = %cohort_id, "egress usage cohort write failed");
+                return;
+            }
+        }
+    }
+    tracing::debug!(cohort = %cohort_id, "egress usage cohort changed concurrently; update dropped");
+}
+
+/// Remove cohorts that received no report for [`COHORT_IDLE_TTL`], once per
+/// `interval`.
+pub fn spawn_cohort_reaper(store: Arc<Store>, interval: std::time::Duration) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+            if let Err(error) = reap_idle_cohorts(&store, now_ms()).await {
+                tracing::warn!(error = %error, "egress usage cohort reaper sweep failed");
+            }
+        }
+    });
+}
+
+async fn reap_idle_cohorts(store: &Store, now_ms: i64) -> Result<u64, String> {
+    let cutoff = now_ms - i64::try_from(COHORT_IDLE_TTL.as_millis()).unwrap_or(i64::MAX);
+    let mut cursor = None;
+    let mut idle = Vec::new();
+    loop {
+        let records = store
+            .list_by_type_after(EGRESS_USAGE_COHORT_OBJECT_TYPE, cursor.as_ref(), 500)
+            .await
+            .map_err(|error| error.to_string())?;
+        let Some(last) = records.last() else {
+            break;
+        };
+        cursor = Some(ObjectCursor::from(last));
+        idle.extend(
+            records
+                .iter()
+                .filter(|record| record.updated_at_ms < cutoff)
+                .map(|record| record.id.clone()),
+        );
+    }
+    if idle.is_empty() {
+        return Ok(0);
+    }
+    store
+        .delete_many(EGRESS_USAGE_COHORT_OBJECT_TYPE, &idle)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Handle `ReportEgressUsage` from a sandbox supervisor.
@@ -503,6 +744,19 @@ async fn record_report(
             .and_then(|monitoring| monitoring.drift.as_ref()),
     );
 
+    let (cohort_id, cohort_label) = cohort_of(sandbox, &policy);
+    let cohort = load_cohort(state.store.as_ref(), workspace, &cohort_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::debug!(error = %error, cohort = %cohort_id, "egress usage cohort unavailable");
+            None
+        })
+        .map(|(cohort, _)| cohort);
+    let cohort_reference = cohort.as_ref().map(|state| CohortReference {
+        label: cohort_label,
+        state,
+    });
+
     let mut drift_findings = Vec::new();
     let mut accepted = false;
     for _ in 0..CAS_ATTEMPTS {
@@ -516,7 +770,13 @@ async fn record_report(
             // A repeated report is acknowledged without being added again.
             return Ok(Response::new(ReportEgressUsageResponse {}));
         }
-        drift_findings = apply_window(&mut persisted, &report.summaries, settings, now_ms());
+        drift_findings = apply_window(
+            &mut persisted,
+            &report.summaries,
+            settings,
+            cohort_reference.as_ref(),
+            now_ms(),
+        );
         let payload = serde_json::to_vec(&persisted).map_err(|error| {
             Status::internal(format!("encode egress usage state failed: {error}"))
         })?;
@@ -555,6 +815,20 @@ async fn record_report(
             "egress usage state changed concurrently; retry",
         ));
     }
+
+    let drifted = drift_findings
+        .iter()
+        .map(|finding| format!("{}|{}", finding.policy_key, finding.endpoint_id))
+        .collect();
+    update_cohort(
+        state.store.as_ref(),
+        workspace,
+        &cohort_id,
+        &report.summaries,
+        &drifted,
+        &sandbox_id,
+    )
+    .await;
 
     let observed = prost_types::Timestamp::from(SystemTime::now());
     for finding in &mut drift_findings {
@@ -660,15 +934,15 @@ mod tests {
 
     fn warm(state: &mut PersistedUsageState, requests: u64) {
         for _ in 0..WARMUP_WINDOWS {
-            assert!(apply_window(state, &[summary(requests, 0)], settings(), 0).is_empty());
+            assert!(apply_window(state, &[summary(requests, 0)], settings(), None, 0).is_empty());
         }
     }
 
     #[test]
     fn no_drift_before_warmup() {
         let mut state = PersistedUsageState::default();
-        apply_window(&mut state, &[summary(10, 0)], settings(), 0);
-        let findings = apply_window(&mut state, &[summary(10_000, 0)], settings(), 0);
+        apply_window(&mut state, &[summary(10, 0)], settings(), None, 0);
+        let findings = apply_window(&mut state, &[summary(10_000, 0)], settings(), None, 0);
         assert!(findings.is_empty());
     }
 
@@ -676,11 +950,13 @@ mod tests {
     fn jump_above_ratio_reports_once_while_it_lasts() {
         let mut state = PersistedUsageState::default();
         warm(&mut state, 200);
-        let first = apply_window(&mut state, &[summary(20_000, 0)], settings(), 0);
+        let first = apply_window(&mut state, &[summary(20_000, 0)], settings(), None, 0);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].counter, "requests");
         for _ in 0..5 {
-            assert!(apply_window(&mut state, &[summary(20_000, 0)], settings(), 0).is_empty());
+            assert!(
+                apply_window(&mut state, &[summary(20_000, 0)], settings(), None, 0).is_empty()
+            );
         }
     }
 
@@ -689,15 +965,15 @@ mod tests {
         let mut state = PersistedUsageState::default();
         warm(&mut state, 200);
         assert_eq!(
-            apply_window(&mut state, &[summary(20_000, 0)], settings(), 0).len(),
+            apply_window(&mut state, &[summary(20_000, 0)], settings(), None, 0).len(),
             1
         );
         // An idle window clears the alert. The first jump raised the mean to
         // 2180, so the next jump must exceed 21 800 to drift again.
-        apply_window(&mut state, &[], settings(), 0);
-        assert!(apply_window(&mut state, &[summary(20_000, 0)], settings(), 0).is_empty());
+        apply_window(&mut state, &[], settings(), None, 0);
+        assert!(apply_window(&mut state, &[summary(20_000, 0)], settings(), None, 0).is_empty());
         assert_eq!(
-            apply_window(&mut state, &[summary(300_000, 0)], settings(), 0).len(),
+            apply_window(&mut state, &[summary(300_000, 0)], settings(), None, 0).len(),
             1
         );
     }
@@ -705,9 +981,9 @@ mod tests {
     #[test]
     fn idle_windows_do_not_decay_the_baseline() {
         let mut state = PersistedUsageState::default();
-        apply_window(&mut state, &[summary(100, 0)], settings(), 0);
+        apply_window(&mut state, &[summary(100, 0)], settings(), None, 0);
         for _ in 0..50 {
-            apply_window(&mut state, &[], settings(), 0);
+            apply_window(&mut state, &[], settings(), None, 0);
         }
         let baseline = &state.baselines["api|endpoint:v1:api"];
         assert_eq!(baseline.windows, 51);
@@ -719,9 +995,9 @@ mod tests {
         let mut state = PersistedUsageState::default();
         warm(&mut state, 1);
         // Ten times a tiny baseline, but below ratio times the floor of 100.
-        assert!(apply_window(&mut state, &[summary(500, 0)], settings(), 0).is_empty());
+        assert!(apply_window(&mut state, &[summary(500, 0)], settings(), None, 0).is_empty());
         assert_eq!(
-            apply_window(&mut state, &[summary(1001, 0)], settings(), 0).len(),
+            apply_window(&mut state, &[summary(1001, 0)], settings(), None, 0).len(),
             1
         );
     }
@@ -731,9 +1007,9 @@ mod tests {
         // The playground case: idle windows, then one 4 GB download counted
         // over three 10 s windows.
         let mut state = PersistedUsageState::default();
-        apply_window(&mut state, &[summary(1, 50_000)], settings(), 0);
+        apply_window(&mut state, &[summary(1, 50_000)], settings(), None, 0);
         for _ in 0..WARMUP_WINDOWS {
-            apply_window(&mut state, &[], settings(), 0);
+            apply_window(&mut state, &[], settings(), None, 0);
         }
         let mut findings = Vec::new();
         for bytes in [143_501_034, 2_109_301_566, 2_048_000_240] {
@@ -741,6 +1017,7 @@ mod tests {
                 &mut state,
                 &[summary(1, bytes)],
                 settings(),
+                None,
                 0,
             ));
         }
@@ -755,7 +1032,7 @@ mod tests {
         warm(&mut state, 200);
         let mut window = summary(200, 0);
         window.write_requests = 1500;
-        let findings = apply_window(&mut state, &[window], settings(), 0);
+        let findings = apply_window(&mut state, &[window], settings(), None, 0);
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].counter, "writes");
     }
@@ -768,6 +1045,143 @@ mod tests {
         .unwrap();
         assert!(baseline.writes.abs() < f64::EPSILON);
         assert_eq!(baseline.windows, 3);
+    }
+
+    fn warm_cohort(contributors: usize, requests: u64) -> CohortState {
+        let mut cohort = CohortState::default();
+        let none = std::collections::BTreeSet::new();
+        for window in 0..WARMUP_WINDOWS {
+            let sandbox = format!("sandbox-{}", window % contributors as u64);
+            apply_cohort_window(&mut cohort, &[summary(requests, 0)], &none, &sandbox, 0);
+        }
+        cohort
+    }
+
+    #[test]
+    fn new_sandbox_drifts_against_a_warm_cohort_in_its_first_window() {
+        let cohort = warm_cohort(3, 200);
+        let reference = CohortReference {
+            label: "policy baseline",
+            state: &cohort,
+        };
+        let mut state = PersistedUsageState::default();
+        let findings = apply_window(
+            &mut state,
+            &[summary(20_000, 0)],
+            settings(),
+            Some(&reference),
+            0,
+        );
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(
+            findings[0].detail.contains("the policy baseline"),
+            "{}",
+            findings[0].detail
+        );
+        // The alert state is per sandbox, so the same level reports once.
+        assert!(
+            apply_window(
+                &mut state,
+                &[summary(20_000, 0)],
+                settings(),
+                Some(&reference),
+                0
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn cohort_needs_three_contributors() {
+        let cohort = warm_cohort(2, 200);
+        let reference = CohortReference {
+            label: "policy baseline",
+            state: &cohort,
+        };
+        let mut state = PersistedUsageState::default();
+        let findings = apply_window(
+            &mut state,
+            &[summary(20_000, 0)],
+            settings(),
+            Some(&reference),
+            0,
+        );
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn warm_sandbox_baseline_takes_over_from_the_cohort() {
+        let cohort = warm_cohort(3, 200);
+        let reference = CohortReference {
+            label: "policy baseline",
+            state: &cohort,
+        };
+        let mut state = PersistedUsageState::default();
+        // This sandbox normally makes 20 000 requests per window.
+        for _ in 0..=WARMUP_WINDOWS {
+            apply_window(
+                &mut state,
+                &[summary(20_000, 0)],
+                settings(),
+                Some(&reference),
+                0,
+            );
+        }
+        assert!(
+            apply_window(
+                &mut state,
+                &[summary(20_000, 0)],
+                settings(),
+                Some(&reference),
+                0
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn drifted_endpoints_do_not_update_the_cohort() {
+        let mut cohort = warm_cohort(3, 200);
+        let before = cohort.baselines["api|endpoint:v1:api"].clone();
+        let drifted = std::collections::BTreeSet::from(["api|endpoint:v1:api".to_string()]);
+        apply_cohort_window(&mut cohort, &[summary(20_000, 0)], &drifted, "bad", 0);
+        assert_eq!(cohort.baselines["api|endpoint:v1:api"], before);
+        assert!(!cohort.contributors.contains(&"bad".to_string()));
+    }
+
+    #[test]
+    fn cohort_contributors_are_bounded() {
+        let none = std::collections::BTreeSet::new();
+        let mut cohort = CohortState::default();
+        for index in 0..(MAX_COHORT_CONTRIBUTORS + 5) {
+            apply_cohort_window(
+                &mut cohort,
+                &[summary(1, 0)],
+                &none,
+                &format!("sandbox-{index}"),
+                0,
+            );
+        }
+        assert_eq!(cohort.contributors.len(), MAX_COHORT_CONTRIBUTORS);
+        assert_eq!(cohort.contributors[0], "sandbox-5");
+    }
+
+    #[test]
+    fn cohort_is_the_template_or_else_the_policy() {
+        let policy = openshell_policy::restrictive_default_policy();
+        let mut sandbox = Sandbox::default();
+        let (policy_cohort, label) = cohort_of(&sandbox, &policy);
+        assert!(policy_cohort.starts_with("policy:"), "{policy_cohort}");
+        assert_eq!(label, "policy baseline");
+        sandbox.created_from_workload_template =
+            Some(openshell_core::proto::SandboxWorkloadTemplateProvenance {
+                name: "eval".into(),
+                resource_version: "1".into(),
+            });
+        assert_eq!(
+            cohort_of(&sandbox, &policy),
+            ("template:eval".to_string(), "template baseline")
+        );
     }
 
     #[test]
@@ -799,6 +1213,7 @@ mod tests {
                 &mut state,
                 &[item],
                 settings(),
+                None,
                 i64::try_from(index).unwrap(),
             );
         }
@@ -878,6 +1293,97 @@ mod tests {
                 replica_id: "replica-b".to_string(),
                 pod_uid: "pod-b".to_string(),
             })
+        }
+
+        async fn put_sandbox(state: &ServerState, id: &str, template: Option<&str>) {
+            let mut sandbox = Sandbox {
+                metadata: Some(ObjectMeta {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    workspace: "default".to_string(),
+                    ..Default::default()
+                }),
+                spec: Some(SandboxSpec {
+                    policy: Some(openshell_policy::restrictive_default_policy()),
+                    ..Default::default()
+                }),
+                created_from_workload_template: template.map(|name| {
+                    openshell_core::proto::SandboxWorkloadTemplateProvenance {
+                        name: name.to_string(),
+                        resource_version: "1".to_string(),
+                    }
+                }),
+                ..Default::default()
+            };
+            sandbox.set_phase(SandboxPhase::Ready as i32);
+            state.store.put_message(&sandbox).await.unwrap();
+        }
+
+        async fn send(state: &Arc<ServerState>, id: &str, sequence: u64, requests: u64) {
+            let mut request = report(sequence);
+            request.name = id.to_string();
+            request.summaries[0].requests = requests;
+            let principal = Principal::Sandbox(SandboxPrincipal {
+                sandbox_id: id.to_string(),
+                source: SandboxIdentitySource::BootstrapJwt {
+                    issuer: "openshell-gateway:test-gateway".to_string(),
+                },
+                trust_domain: Some("openshell".to_string()),
+            });
+            handle_report_egress_usage(state, with_principal(request, principal))
+                .await
+                .unwrap();
+        }
+
+        fn drift_findings(state: &ServerState, id: &str) -> Vec<EgressUsageFinding> {
+            state
+                .egress_usage
+                .snapshot(id)
+                .findings
+                .into_iter()
+                .filter(|finding| finding.finding_type == "egress.drift")
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn short_lived_sandbox_drifts_against_its_policy_cohort() {
+            let state = test_server_state().await;
+            for id in ["warm-a", "warm-b", "warm-c"] {
+                put_sandbox(&state, id, None).await;
+                for sequence in 1..=10 {
+                    send(&state, id, sequence, 200).await;
+                }
+            }
+            put_sandbox(&state, "fresh", None).await;
+            send(&state, "fresh", 1, 20_000).await;
+            let findings = drift_findings(&state, "fresh");
+            assert_eq!(findings.len(), 1, "{findings:?}");
+            assert!(findings[0].detail.contains("the policy baseline"));
+
+            // A template sandbox is in another cohort, which is still cold.
+            put_sandbox(&state, "templated", Some("eval")).await;
+            send(&state, "templated", 1, 20_000).await;
+            assert!(drift_findings(&state, "templated").is_empty());
+        }
+
+        #[tokio::test]
+        async fn idle_cohorts_are_reaped() {
+            let state = test_server_state().await;
+            put_sandbox(&state, "warm-a", None).await;
+            send(&state, "warm-a", 1, 5).await;
+            let cohorts = || async {
+                state
+                    .store
+                    .list(EGRESS_USAGE_COHORT_OBJECT_TYPE, "default", 10, 0)
+                    .await
+                    .unwrap()
+                    .len()
+            };
+            assert_eq!(cohorts().await, 1);
+            assert_eq!(reap_idle_cohorts(&state.store, now_ms()).await.unwrap(), 0);
+            let later = now_ms() + i64::try_from(COHORT_IDLE_TTL.as_millis()).unwrap() + 1;
+            assert_eq!(reap_idle_cohorts(&state.store, later).await.unwrap(), 1);
+            assert_eq!(cohorts().await, 0);
         }
 
         #[tokio::test]
