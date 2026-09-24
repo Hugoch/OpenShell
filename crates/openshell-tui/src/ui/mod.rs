@@ -11,6 +11,7 @@ mod sandbox_draft;
 pub mod sandbox_logs;
 mod sandbox_policy;
 pub mod sandbox_settings;
+pub mod sandbox_usage;
 pub mod sandboxes;
 mod splash;
 
@@ -84,6 +85,7 @@ fn draw_sandbox_screen(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     match app.focus {
         Focus::SandboxLogs => sandbox_logs::draw(frame, app, chunks[1]),
         Focus::SandboxDraft => sandbox_draft::draw(frame, app, chunks[1]),
+        Focus::SandboxUsage => sandbox_usage::draw(frame, app, chunks[1]),
         _ => match app.sandbox_policy_tab {
             app::SandboxPolicyTab::Settings => sandbox_settings::draw(frame, app, chunks[1]),
             app::SandboxPolicyTab::Policy => sandbox_policy::draw(frame, app, chunks[1]),
@@ -348,6 +350,23 @@ fn draw_nav_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
                     ]
                 }
             }
+            Focus::SandboxUsage => vec![
+                Span::styled(" ", t.text),
+                Span::styled("[j/k]", t.key_hint),
+                Span::styled(" Scroll Findings", t.text),
+                Span::styled("  ", t.text),
+                Span::styled("[l]", t.key_hint),
+                Span::styled(" Logs", t.text),
+                Span::styled("  ", t.text),
+                Span::styled("[r]", t.key_hint),
+                Span::styled(" Rules", t.text),
+                Span::styled("  |  ", t.border),
+                Span::styled("[Esc]", t.muted),
+                Span::styled(" Policy", t.muted),
+                Span::styled("  ", t.text),
+                Span::styled("[q]", t.muted),
+                Span::styled(" Quit", t.muted),
+            ],
             Focus::SandboxDraft => {
                 // Build state-aware action hints based on selected chunk.
                 let selected_status = app
@@ -447,6 +466,9 @@ fn draw_nav_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 Span::styled("  ", t.text),
                 Span::styled("[r]", t.key_hint),
                 Span::styled(" Rules", t.text),
+                Span::styled("  ", t.text),
+                Span::styled("[u]", t.key_hint),
+                Span::styled(" Usage", t.text),
                 Span::styled("  ", t.text),
                 Span::styled("[d]", t.key_hint),
                 Span::styled(" Delete", t.text),

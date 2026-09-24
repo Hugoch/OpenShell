@@ -144,6 +144,10 @@ pub async fn run(
                     app.pending_log_fetch = false;
                     spawn_log_stream(&mut app, events.sender());
                 }
+                if app.pending_usage_fetch {
+                    app.pending_usage_fetch = false;
+                    refresh_egress_usage(&mut app).await;
+                }
                 if app.pending_sandbox_delete {
                     app.pending_sandbox_delete = false;
                     handle_sandbox_delete(&mut app, events.sender()).await;
@@ -394,6 +398,9 @@ pub async fn run(
                 if app.screen == Screen::Sandbox {
                     refresh_sandbox_policy(&mut app).await;
                     refresh_draft_chunks(&mut app).await;
+                    if app.focus == Focus::SandboxUsage {
+                        refresh_egress_usage(&mut app).await;
+                    }
                 }
             }
             Some(Event::Redraw) => {
@@ -2928,6 +2935,23 @@ async fn refresh_draft_chunks(app: &mut App) {
         if app.draft_selected >= app.draft_chunks.len() && !app.draft_chunks.is_empty() {
             app.draft_selected = app.draft_chunks.len() - 1;
         }
+    }
+}
+
+async fn refresh_egress_usage(app: &mut App) {
+    let Some(sandbox) = app.selected_sandbox_name().map(ToString::to_string) else {
+        return;
+    };
+    let req = openshell_core::proto::GetEgressUsageRequest {
+        workspace_scope: Some(openshell_core::proto::workspace_selector(
+            app.selected_sandbox_workspace(),
+        )),
+        sandbox,
+    };
+    match tokio::time::timeout(Duration::from_secs(5), app.client.get_egress_usage(req)).await {
+        Ok(Ok(response)) => app.egress_usage = response.into_inner(),
+        Ok(Err(status)) => app.status_text = format!("egress usage: {}", status.message()),
+        Err(_) => app.status_text = "egress usage: request timed out".to_string(),
     }
 }
 
