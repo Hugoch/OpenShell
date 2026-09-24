@@ -122,6 +122,25 @@ middleware. A passed binary logical message still advances the active
 middleware session sequence and emits coverage telemetry, so a later text RPC
 can contain a valid sequence gap.
 
+## Egress Usage
+
+Usage accounting runs on every allowed connection, so its state has fixed
+bounds. Budget denial is a policy decision, not a limit on supervisor
+resources.
+
+| Resource | Current bound | Terminal behavior |
+|---|---:|---|
+| Budgets per policy | 32 | Reject the policy. |
+| Host patterns per budget | 32 | Reject the policy. |
+| Usage table entries | 1024 per sandbox | Aggregate new keys into one overflow entry per policy and endpoint; record one overflow finding per window. |
+| Rule hits per usage entry | 64 | Aggregate other rule IDs into one entry. |
+| Novelty items | 256 per kind per policy, 4096 per sandbox | Stop learning; record one overflow finding. |
+| Findings per report | 64 | Count the others as dropped; they remain in the local OCSF log. |
+| Report outbox | 10 windows | Drop the oldest report and count it as a dropped window. |
+| Gateway recent windows | 60 per sandbox | Drop the oldest window. |
+| Gateway recent findings | 200 per sandbox | Drop the oldest finding. |
+| Gateway drift baselines | 256 per sandbox | Evict the least recently active baseline. |
+
 ## Network and Upstream Proxying
 
 | Path | Current bound | Terminal behavior |

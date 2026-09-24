@@ -21,6 +21,8 @@ landlock: { ... }
 process: { ... }
 network_policies: { ... }
 network_middlewares: { ... }
+network_budgets: { ... }
+usage_monitoring: { ... }
 ```
 
 | Field | Type | Required | Category | Description |
@@ -31,6 +33,8 @@ network_middlewares: { ... }
 | `process` | object | No | Static | Sets the user and group the agent process runs as. |
 | `network_policies` | map | No | Dynamic | Declares which binaries can reach which network endpoints. |
 | `network_middlewares` | map | No | Dynamic | Attaches ordered middleware by destination host; each implementation's manifest selects its supported HTTP and WebSocket operations. |
+| `network_budgets` | map | No | Dynamic | Caps how much the sandbox uses allowed egress: requests, connections, and bytes per period. |
+| `usage_monitoring` | object | No | Dynamic | Sets the novelty learning period and the drift thresholds for egress usage findings. |
 
 The YAML root and each present top-level section listed as an object or map must be mappings. Each named network policy or middleware entry must also be a mapping. The OPA loader rejects the first malformed container before normalization or access preset expansion, with a structural error that excludes authored keys and values.
 
@@ -629,6 +633,65 @@ network_middlewares:
 Host selectors use the same case-insensitive exact and DNS glob semantics as network endpoints: `*` matches exactly one DNS label and `**` matches one or more labels, so `**.example.com` covers subdomains but not `example.com` itself. Brace alternates are rejected at validation. A matching attachment joins only the operation chains its implementation advertises. An HTTP-only attachment may inspect a WebSocket upgrade GET without joining the post-upgrade chain; OpenShell permits the messages and records `binding_not_selected` coverage regardless of `on_error`. WebSocket bindings inspect complete client text messages. Binary messages pass with `unsupported_message_type` coverage for active stages. A fail-closed selector that can cover a `tls: skip` endpoint is rejected because OpenShell cannot inspect that traffic through any operation. An all-`fail_open` match may cover the endpoint; the supervisor bypasses the middleware and emits a detection finding.
 
 See [Supervisor Middleware](/extensibility/supervisor-middleware) for registration, failure behavior, body limits, and operational guidance.
+
+## Network Budgets
+
+**Category:** Dynamic
+
+A map of up to 32 named budgets on allowed egress. The map key is the budget name. A budget keeps its balance across policy reloads while its name stays the same. Budgets act when a connection or an L7 request starts. They do not stop a transfer in progress. Refer to [Egress Usage](/observability/egress-usage) for the counted bytes, the findings, and the responses.
+
+```yaml showLineNumbers={false}
+network_budgets:
+  model-hub-downloads:
+    policies: [model_hub]
+    hosts: ["huggingface.co"]
+    requests_per_minute: 120
+    connections_per_minute: 30
+    bytes_out_per_hour: 52428800
+    bytes_in_per_hour: 21474836480
+    on_exceed: deny
+  sandbox-total:
+    bytes_in_per_hour: 107374182400
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `policies` | list of strings | No | Keys of `network_policies` entries. The budget selects traffic that any of these policies allowed. Empty selects traffic from every policy. Each key must exist in `network_policies`. |
+| `hosts` | list of strings | No | Exact host or DNS glob patterns on the destination host, at most 32. Empty selects every host. |
+| `requests_per_minute` | integer | No | L7 requests per minute. Applies only to endpoints where OpenShell parses HTTP. |
+| `connections_per_minute` | integer | No | New connections per minute. |
+| `bytes_out_per_hour` | integer | No | Bytes that the sandbox sends per hour. |
+| `bytes_in_per_hour` | integer | No | Bytes that the sandbox receives per hour. |
+| `on_exceed` | string | No | `alert` records a finding and admits the traffic. `deny` records a finding and refuses the traffic. Defaults to `alert`. |
+
+A budget needs at least one counter. An absent counter has no ceiling. Zero is rejected: to block an endpoint, remove it from `network_policies`.
+
+Each counter is a token bucket. The capacity is the amount for one period, and the bucket refills at a constant rate over that period. A budget is therefore a sustained rate with a burst of one period, not a fixed ceiling per calendar minute or hour. Byte counters charge bytes as they move, so one large transfer can overrun a byte budget. The next connection or request then waits until the refill pays back the debt.
+
+## Usage Monitoring
+
+**Category:** Dynamic
+
+Settings for the novelty and drift findings that OpenShell produces from egress usage. All fields are optional.
+
+```yaml showLineNumbers={false}
+usage_monitoring:
+  novelty:
+    learning_period_seconds: 600
+  drift:
+    enabled: true
+    ratio: 10
+    min_requests: 100
+    min_bytes: 104857600
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `novelty.learning_period_seconds` | integer | `600` | Time after a network policy starts, or after its endpoints change, during which a first use produces no finding. |
+| `drift.enabled` | boolean | `true` | Whether the gateway computes drift findings. |
+| `drift.ratio` | integer | `10` | A counter drifts when one window is more than this many times its baseline. Must be at least `2`. |
+| `drift.min_requests` | integer | `100` | Smallest request baseline that drift compares against. |
+| `drift.min_bytes` | integer | `104857600` | Smallest byte baseline that drift compares against. |
 
 ## Full Example
 

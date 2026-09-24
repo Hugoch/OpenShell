@@ -1,0 +1,125 @@
+---
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+title: "Egress Usage"
+sidebar-title: "Egress Usage"
+description: "How OpenShell counts the use of allowed egress endpoints, enforces network budgets, and reports novelty and drift findings."
+keywords: "Generative AI, Cybersecurity, AI Agents, Sandboxing, Egress, Budgets, Observability"
+---
+
+Network policy decides where a sandbox can connect. Egress usage shows how much the sandbox uses each allowed destination, and [network budgets](/sandboxes/policies#egress-budgets) limit it. The supervisor counts the traffic, enforces budgets, and reports the counts to the gateway once per window.
+
+## What OpenShell Counts
+
+The supervisor groups usage by policy key, endpoint, destination host and port, and calling binary. For each group and window, it counts:
+
+- Connections and L7 requests.
+- Bytes out (sent by the sandbox) and bytes in (received by the sandbox).
+- Upstream response classes: 2xx, 3xx, 4xx, 5xx, and 429.
+- Budget denials.
+- Requests per L7 rule. A rule is identified by a hash of its `allow` block, or by `preset:<access>:<METHOD>` for `access` presets.
+
+On endpoints where OpenShell terminates TLS, bytes are application bytes of the upstream session. On `tls: skip` and raw TCP endpoints, bytes are transport bytes and include TLS records. Bytes count in the window when they move, so a long transfer appears in each window it spans. Usage never contains request paths, query strings, headers, or bodies.
+
+The supervisor sends one report per window, 60 seconds by default. The gateway keeps the last 60 windows and the last 200 findings for each sandbox in memory, and keeps drift baselines in its database. In a multi-replica gateway, the replica that owns the sandbox supervisor session keeps this state. Other replicas forward reports and queries to it.
+
+## Read Usage
+
+Show usage per policy, host, and binary over the recent windows, plus the newest findings:
+
+```shell
+openshell sandbox usage my-sandbox
+```
+
+For machine-readable output, add `-o json` or `-o yaml`.
+
+In the terminal UI, run `openshell term`, open the sandbox, and press `u`. The panel refreshes while it is open.
+
+Findings also appear in the sandbox logs:
+
+```shell
+openshell logs my-sandbox --source sandbox | grep -E 'egress\.|NET:CLOSE'
+```
+
+A budget finding in the logs names the destination and the budget:
+
+```text
+OCSF FINDING:BLOCKED [MED] "api.example.com:443 budget 'api-requests' has no requests_per_minute left" [type:egress.budget_exceeded]
+```
+
+When a connection closes, the supervisor emits a Network Activity event with its totals and duration:
+
+```text
+OCSF NET:CLOSE [INFO] ALLOWED api.example.com:443 [policy:my_api engine:opa] [bytes_out:512 bytes_in:4096 duration_ms:1500]
+```
+
+## Budget Responses
+
+When a budget with `on_exceed: deny` has no balance left, OpenShell refuses the connection or request before it reaches the upstream. An L7 request gets this response:
+
+```text
+HTTP/1.1 429 Too Many Requests
+Content-Type: application/json
+Retry-After: 12
+
+{"error":"budget_exceeded","budget":"api-requests","counter":"requests_per_minute","retry_after_seconds":12,"detail":"..."}
+```
+
+The body gives no policy-change guidance, because a spent budget is not a missing permission. An agent can read `retry_after_seconds` and slow down. A budget with `on_exceed: alert` admits the traffic and records a finding.
+
+Budget denials apply on endpoints with `enforcement: audit` too. A 429 that OpenShell generates counts as a budget denial, not as an upstream 429.
+
+## Findings
+
+| Finding type | Source | Severity | Meaning |
+|---|---|---|---|
+| `egress.budget_exceeded` | Supervisor | Medium for `deny`, Low for `alert` | A budget had no balance left for a connection or request. |
+| `egress.new_host` | Supervisor | Low | First connection to a host under a glob endpoint, after the learning period. |
+| `egress.new_binary` | Supervisor | Low | First use of an endpoint by a binary, after the learning period. |
+| `egress.new_rule` | Supervisor | Low | First request that an L7 rule allowed, after the learning period. |
+| `egress.usage_overflow` | Supervisor | Medium | A usage or novelty table reached its bound. |
+| `egress.drift` | Gateway | Medium | One window of an endpoint is far above its baseline. |
+
+The supervisor emits each finding as an OCSF Detection Finding and sends it in the next report. It records at most one finding per usage group and type per window, and at most 64 findings per window.
+
+### Novelty
+
+For each network policy, the supervisor remembers the hosts under glob endpoints, the binaries, and the L7 rules that it saw. During the learning period, 10 minutes by default, it learns new items without a finding. The learning period starts again for a policy only when its set of endpoints changes. A sandbox that does all its work during the learning period produces no novelty findings. Use budgets to limit such sandboxes.
+
+### Drift
+
+The gateway sums each window per policy and endpoint, across hosts and binaries, and keeps a moving average of requests, bytes out, bytes in, and upstream errors:
+
+- Only windows with traffic update the average, so idle time does not lower the baseline.
+- Drift starts after 30 windows.
+- A counter drifts when one window is more than `ratio` times the larger of its average and its floor (`min_requests` or `min_bytes`).
+- A drifting counter reports once. It reports again only after a window below its threshold.
+- A lasting new level raises the average, so drift reports a change, not a level. Use budgets to cap a level.
+
+Set the thresholds in [`usage_monitoring`](/reference/policy-schema#usage-monitoring).
+
+## Limits
+
+| Resource | Bound | At the bound |
+|---|---:|---|
+| Budgets per policy | 32 | The policy is rejected. |
+| Usage groups per sandbox | 1024 | New groups share one overflow entry per policy and endpoint, and an `egress.usage_overflow` finding is recorded. |
+| Rule entries per usage group | 64 | Other rules share one `other` entry. |
+| Novelty items | 256 per kind per policy, 4096 per sandbox | New items are not learned, and one `egress.usage_overflow` finding is recorded. |
+| Findings per window | 64 | Other findings go only to the local OCSF log. |
+| Unsent reports in the supervisor | 10 | The oldest report is dropped and counted as a dropped window. |
+| Drift baselines per sandbox | 256 | The least recently active baseline is removed. |
+
+## Standalone Network Proxy
+
+`openshell-supervisor --role=network-proxy` enforces budgets and writes findings and close events to its local logs. It has no gateway, so it sends no reports and computes no drift. It cannot observe the calling process, so usage has no binary and no `egress.new_binary` findings.
+
+## Privacy
+
+Usage and findings contain destination hosts, binary paths and hashes, policy keys, and rule IDs. They never contain request paths, query strings, headers, bodies, or credentials, and they never go to anonymous telemetry. Reading usage requires the same access as reading sandbox logs.
+
+## Next Steps
+
+- Configure budgets in [Policies](/sandboxes/policies#egress-budgets).
+- Read the field reference in [Policy Schema Reference](/reference/policy-schema#network-budgets).
+- Export findings to a SIEM with [OCSF JSON Export](/observability/ocsf-json-export).

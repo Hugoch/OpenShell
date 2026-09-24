@@ -11,7 +11,9 @@ Generate YAML sandbox network policies and network middleware configuration from
 
 This skill translates a user's plain-language policy intent into a valid sandbox policy. The amount of detail the user provides determines the granularity of the generated policy — from broad L4 or preset-based policies (just a host:port) up to fine-grained per-endpoint L7 rules (full API docs).
 
-The output is a `network_policies` YAML block, an optional `network_middlewares` block, and optionally a full policy file that conforms to the sandbox policy schema.
+The output is a `network_policies` YAML block, an optional `network_middlewares` block, an optional `network_budgets` block, and optionally a full policy file that conforms to the sandbox policy schema.
+
+When the user wants to limit how much the agent uses an allowed destination (request rate, connection rate, or bytes per hour), add a `network_budgets` entry that names the `network_policies` keys it covers. Start with `on_exceed: alert` unless the user asks for enforcement, then use `on_exceed: deny`.
 
 ## Step 1: Gather Inputs
 

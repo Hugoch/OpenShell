@@ -12,7 +12,7 @@ Use this page to apply and iterate policy changes on running sandboxes. For a fu
 
 ## Policy Structure
 
-A policy has static sections `filesystem_policy`, `landlock`, and `process` that are locked at sandbox creation, and dynamic `network_policies` and `network_middlewares` sections that are hot-reloadable on a running sandbox.
+A policy has static sections `filesystem_policy`, `landlock`, and `process` that are locked at sandbox creation, and dynamic `network_policies`, `network_middlewares`, `network_budgets`, and `usage_monitoring` sections that are hot-reloadable on a running sandbox.
 
 ```yaml wordWrap showLineNumbers={false}
 version: 1
@@ -71,6 +71,8 @@ When a hot reload changes rules, the supervisor publishes a new policy generatio
 | `process` | Static | Optionally overrides the OS-level identity for the agent process. Explicit values must be `sandbox` or numeric UID/GID values from `1` through `4294967294`; root and the invalid identity sentinel are rejected. Docker and Podman may use named identities through per-field OCI `USER` fallback; Kubernetes uses its platform-selected numeric identity. The agent also runs with seccomp filters that block dangerous system calls. |
 | `network_policies` | Dynamic | Controls outbound traffic from the sandbox, including native model-provider endpoints. Each block has a name, a list of endpoints (host, port, protocol, and optional rules), and a list of binaries allowed to use those endpoints. <br />Every outbound connection passes through the network supervisor, which queries the [policy engine](/about/how-it-works#core-components) with the destination and calling binary. A connection is allowed only when both match an entry in the same policy block. Attached provider profiles can contribute endpoint and binary entries to the effective policy. <br />For endpoints with `protocol: rest`, the proxy auto-detects TLS and terminates it so each HTTP request can be checked against that endpoint's `rules` (method and path). For endpoints with `protocol: websocket`, the proxy validates the RFC 6455 upgrade and evaluates `GET` rules for the handshake plus either `WEBSOCKET_TEXT` rules for raw client text messages or GraphQL operation rules for GraphQL-over-WebSocket messages. Set `websocket_credential_rewrite: true` only when a WebSocket or REST compatibility endpoint must keep placeholder credentials in sandbox-owned text frames and resolve them at the OpenShell relay boundary. <br />Endpoints with `protocol: tcp` allow ordinary DNS resolution and native TCP connections without inspecting payloads. Endpoints without `protocol` retain L4 passthrough through an explicit proxy. <br />If no endpoint matches, the connection is denied. |
 | `network_middlewares` | Dynamic | Declares keyed HTTP and WebSocket middleware configs. After network and L7 policy admit a request or upgrade, OpenShell matches each config's host selectors independently and runs matching entries by their unique ascending `order` before credential injection. WebSocket-capable entries continue on complete client text messages. |
+| `network_budgets` | Dynamic | Declares named budgets on allowed egress: requests and connections per minute, and bytes in each direction per hour. A budget with `on_exceed: deny` refuses traffic without balance with HTTP 429. Refer to [Egress Budgets](#egress-budgets). |
+| `usage_monitoring` | Dynamic | Sets the learning period for first-use findings and the thresholds for drift findings. Refer to [Egress Usage](/observability/egress-usage). |
 
 When REST body credential rewriting is disabled, OpenShell forwards placeholder
 text unchanged if trusted metadata identifies an unknown key or a valid credential
@@ -121,6 +123,24 @@ Matching entries run once each by ascending `order`; lower values run first, and
 `on_error` defaults to `fail_closed`. Use `fail_open` only when skipping a selected stage that fails is acceptable. For WebSocket streams, a broken fail-open stage is disabled for the rest of that connection and OpenShell emits a state-change finding. A host-matched attachment joins only operation chains advertised by its implementation. An HTTP-only attachment may inspect the WebSocket upgrade GET, but post-upgrade messages pass with informational `binding_not_selected` coverage under either error mode. Binary messages also pass without middleware inspection and produce `unsupported_message_type` coverage for active WebSocket stages. Upstream-to-client messages remain uninspected. Policy validation rejects a fail-closed selector that can cover a `tls: skip` endpoint. An all-`fail_open` match may cover the endpoint; the supervisor bypasses the middleware and emits a detection finding.
 
 See [Supervisor Middleware](/extensibility/supervisor-middleware) for registration, chain ordering, body limits, failure behavior, and operations.
+
+## Egress Budgets
+
+Network policy decides where the sandbox can connect. Budgets limit how much it uses an allowed destination. A budget selects traffic by the `network_policies` keys that allowed it and, optionally, by destination host:
+
+```yaml
+network_budgets:
+  api-requests:
+    policies: [my_api]
+    requests_per_minute: 60
+    on_exceed: deny
+  downloads:
+    bytes_in_per_hour: 10737418240
+```
+
+With `on_exceed: deny`, a request without balance gets `429 Too Many Requests` with a `Retry-After` header and an `error: budget_exceeded` body. The default `on_exceed: alert` records a finding and admits the traffic, so you can add a budget to a running sandbox, observe it, and then change it to `deny`. A budget keeps its balance across reloads while its name stays the same.
+
+Budgets act when a connection or request starts and never stop a transfer in progress. Refer to the [Policy Schema Reference](/reference/policy-schema#network-budgets) for every field and to [Egress Usage](/observability/egress-usage) to read usage, budget denials, and findings.
 
 ## Baseline Filesystem Paths
 
@@ -341,7 +361,7 @@ OCSF configuration and finding events identify the rejected candidate, validatio
 
 ## Incremental Policy Updates
 
-Use `openshell policy update` when you want to merge network policy changes into the current live policy instead of replacing the whole YAML document. This command only updates the dynamic `network_policies` section.
+Use `openshell policy update` when you want to merge network policy changes into the current live policy instead of replacing the whole YAML document. This command only updates the dynamic `network_policies` section. Change `network_middlewares`, `network_budgets`, or `usage_monitoring` with `openshell policy set`.
 
 `openshell policy update` is useful when you want to:
 

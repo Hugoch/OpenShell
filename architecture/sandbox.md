@@ -698,6 +698,33 @@ the structured 403 and authors the narrowest rule. Mechanistically mapping L7
 would either over-broaden rules or require path-templating logic that rots
 quickly.
 
+## Egress Usage
+
+The network supervisor counts allowed egress into a bounded usage table keyed
+by reported policy, endpoint ID, observed host, port, and binary hash. A
+counting wrapper on the upstream side of every relay charges bytes to the
+current attribution as the relay copies them. The counters are atomic, so
+accounting takes no lock after admission, and a relay that stops early keeps
+every charge. L7 relays switch the attribution at each request, so each byte of
+a keep-alive connection is charged once, to the request that moved it.
+
+Admission of a connection or an L7 request selects the `network_budgets` whose
+policy selectors match the authorizing policies and whose host selectors match
+the destination. Deny budgets take a whole token or refuse with HTTP 429. Alert
+budgets are charged and only record a finding. Byte budgets go into debt when a
+transfer overruns them, and the refill pays the debt back before the next
+admission. The budget ledger is keyed by budget name and survives reloads.
+Novelty sets record the first use of a host under a glob, a binary, or an L7
+rule ID after a learning period.
+
+Every window, the supervisor reads and resets the counters and sends one
+`ReportEgressUsage` with its supervisor instance ID and a window sequence. The
+outbox is bounded and sends in order, one report at a time. The gateway adds a
+report only when its sequence is higher than the last accepted one, keeps
+recent windows in memory, keeps drift baselines per endpoint in the store, and
+publishes windows and findings on `WatchSandbox`. Usage never carries request
+paths, query strings, headers, or bodies.
+
 ## Configuration Admission
 
 Gateway-managed supervisors reconcile configuration before launching the main
