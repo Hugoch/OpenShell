@@ -315,7 +315,9 @@ Some misuse shows only across sandboxes: many agents that use one allowed host a
 - 30 seconds after the bucket ends, the first replica that creates the claim record for the bucket merges all partials and evaluates it. The other replicas skip it. No leader election is necessary, and each finding exists once.
 - `egress.fleet_fan_in` reports a jump in the number of sandboxes that use, or write to, one destination. Reads count, because the receiving side of a channel only reads. Each destination and counter has its own EWMA, and the first bucket of a destination sets it. A host that every sandbox reads, such as a package proxy, therefore stays quiet, and a rarely used host reports when many sandboxes start to use it.
 - A counter reports when its value is more than `ratio` times the larger of its mean and a floor of sandboxes (5 and 3 by default), once until it returns below the threshold.
-- `GetFleetEgressUsage` returns the destinations and the fleet findings of a workspace, and `openshell workspace usage` prints them. It requires the workspace admin role, because it shows the destinations of every member's sandboxes.
+- `egress.fleet_volume` applies the same rule to the requests, bytes out, and bytes in of all sandboxes to one destination, with floors of 300 requests and 300 MiB. It catches traffic that is split across sandboxes to stay under the per-sandbox budgets and drift.
+- A fleet finding lists the sandboxes that it involves. `GetEgressUsage` adds the fleet findings of a sandbox to its view at read time, so the sandbox usage command and the terminal UI show them.
+- `GetFleetEgressUsage` returns the destinations and the fleet findings of a workspace, and `openshell workspace usage` and the Fleet tab of the terminal UI show them. It requires the workspace admin role, because it shows the destinations of every member's sandboxes.
 - Fleet records are deleted with the workspace. Partials are kept for 1 hour, findings for 24 hours.
 
 ### Findings
@@ -330,6 +332,7 @@ All three signals use these finding types:
 | `egress.usage_overflow` | supervisor | Medium |
 | `egress.drift` | gateway | Medium |
 | `egress.fleet_fan_in` | gateway | Medium |
+| `egress.fleet_volume` | gateway | Medium |
 
 A budget deny is a policy violation, which `AGENTS.md` classifies as Medium. The other findings report a change in usage, not a failed security control, so they stay below High. Each supervisor finding follows the dual-emit rule in `AGENTS.md`:
 
@@ -382,7 +385,7 @@ In 2026, OpenAI reported that agents in an evaluation environment misused the on
 | Writes into a read-only package proxy | A read-only L7 rule (`GET` and `HEAD` on package paths) denies them. This is policy today, without this RFC. If writes are allowed, `write_requests_per_minute` caps them, and `egress.new_rule` reports the first use of a write rule. |
 | The message board | Drift on `write_requests` and on `bytes_out`. Evaluation sandboxes are short, so drift depends on the cohort baseline. |
 | Probes for server-side request forgery and other flaws | Drift on upstream errors. Paths are not in the usage table, so the probes themselves stay invisible. |
-| Internet access through the proxy | `bytes_in` drift and byte budgets. `egress.new_binary` if a tool other than the package manager calls the proxy. Nothing in this RFC stops the pivot itself. |
+| Internet access through the proxy | `bytes_in` drift and byte budgets, and `egress.fleet_volume` when many sandboxes pull through the proxy at once. `egress.new_binary` if a tool other than the package manager calls the proxy. Nothing in this RFC stops the pivot itself. |
 | Command channel over the proxy | Not covered. Small periodic polling does not change volume. |
 | Coordination across sandboxes | `egress.fleet_fan_in` reports when the number of sandboxes that write to the proxy jumps. On a proxy that every sandbox reads, the writer count is the useful counter. |
 
@@ -473,7 +476,7 @@ Operators keep the current allow and deny model. Abuse of an allowed endpoint st
 - **Version gating.** How does the gateway know that a supervisor supports `network_budgets` and `usage_monitoring` before it delivers them? Is there a capability exchange, or does the gateway use the supervisor version?
 - **Cohort key.** Is the workload template, or else the base policy hash, the right cohort? Two different agents that share one generic policy share a cohort. A cohort can also drift slowly if all its members change together.
 - **Beaconing.** Does periodic polling on an allowed endpoint need its own finding? It needs request timing, which the usage summaries do not carry.
-- **More fleet signals.** Do fleets need a finding for the same new host or rule in many sandboxes within minutes, a fleet volume finding, and fleet-wide budgets? A fleet budget needs a token bucket shared by many supervisors on the admission path.
+- **More fleet signals.** Do fleets need a finding for the same new host or rule in many sandboxes within minutes, and fleet-wide budgets? A fleet budget needs a token bucket shared by many supervisors on the admission path.
 - **Rego attribution cost.** Is 62 µs for each L7 request acceptable, or does the attribution need a Rust rule index that the supervisor builds at policy load?
 - **Budget state for the agent.** Does `policy.local` need a `/v1/usage` route so that an agent can read its remaining budget before it starts a large transfer?
 - **Connections in progress.** Does `on_exceed: deny` need to close long-lived raw tunnels when a byte budget runs out? This needs per-budget cancellation of relays. Today the only mechanism is a policy generation advance, which closes every pinned connection.

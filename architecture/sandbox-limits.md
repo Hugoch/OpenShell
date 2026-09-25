@@ -147,6 +147,7 @@ resources.
 | Fleet baselines | 256 per workspace | Evict the least recently active baseline. |
 | Fleet partials and claims | 1 hour | Delete in the hourly sweep. |
 | Fleet findings | 24 hours | Delete in the hourly sweep. |
+| Sandboxes listed per fleet destination | 256 | Keep the first 256 names in sort order; others do not see the finding in their own view. |
 
 ## Network and Upstream Proxying
 

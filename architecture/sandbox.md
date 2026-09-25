@@ -735,7 +735,9 @@ partial record, so every partial has one writer, and sandbox counts add up
 because a sandbox has one owner replica. The first replica that creates the
 claim record for a minute merges all partials and evaluates fan-in against
 per-destination baselines. Only the claim winner writes baselines and findings,
-so each finding exists once without a leader. Usage never carries request
+so each finding exists once without a leader. A fleet finding lists the
+sandboxes that it involves, and `GetEgressUsage` adds the matching fleet
+findings to a sandbox view at read time, so every replica can serve it. Usage never carries request
 paths, query strings, headers, or bodies.
 
 ## Configuration Admission
