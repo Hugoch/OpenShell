@@ -123,7 +123,7 @@ mod tests {
     // no messages or enums and touch no stored type, so the durable and overlap
     // fingerprints below remain unchanged.
     const PUBLIC_RPC_SCHEMA_SHA256: &str =
-        "83157ebdf98a6a8b3090d9a5ec323a1ab7f1a92ccb51fc19f268a16db59357ce";
+        "012e7063adbcf6907353be7cc844b5cbb00b080bdd34c2ea6d5e83a7de7345e8";
     const DURABLE_SCHEMA_SHA256: &str =
         "45c2790542ecab98076551430221c0fac1f3332838a8d1ae3fa56279c1f73937";
     const PUBLIC_DURABLE_OVERLAP_SHA256: &str =
@@ -535,12 +535,12 @@ mod tests {
         }
         assert_eq!(
             compiled_method_count,
-            104 + PROVIDER_READINESS_RPC_SIGNATURES.len() + PEER_OWNER_RPC_SIGNATURES.len(),
+            105 + PROVIDER_READINESS_RPC_SIGNATURES.len() + PEER_OWNER_RPC_SIGNATURES.len(),
             "classify every compiled RPC"
         );
         assert_eq!(
             methods.len(),
-            79 + PROVIDER_READINESS_RPC_SIGNATURES.len() + PEER_OWNER_RPC_SIGNATURES.len(),
+            80 + PROVIDER_READINESS_RPC_SIGNATURES.len() + PEER_OWNER_RPC_SIGNATURES.len(),
             "inventory every public gateway RPC"
         );
         assert_eq!(
@@ -548,7 +548,7 @@ mod tests {
                 .iter()
                 .filter(|method| method.starts_with("openshell.v1.OpenShell/"))
                 .count(),
-            79 + PROVIDER_READINESS_RPC_SIGNATURES.len() + PEER_OWNER_RPC_SIGNATURES.len()
+            80 + PROVIDER_READINESS_RPC_SIGNATURES.len() + PEER_OWNER_RPC_SIGNATURES.len()
         );
         assert!(methods.iter().all(|method| !method.contains(".storage.")));
 
@@ -592,7 +592,7 @@ mod tests {
                 overlap_hash.as_str(),
             ),
             (
-                (319, 27),
+                (322, 27),
                 (97, 20),
                 (85, 20),
                 PUBLIC_RPC_SCHEMA_SHA256,

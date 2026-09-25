@@ -67,7 +67,7 @@ fn aggregate(response: &GetEgressUsageResponse) -> Vec<UsageRow> {
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn human_bytes(bytes: u64) -> String {
+pub fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
     let mut unit = 0;
@@ -82,7 +82,7 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
-fn severity(finding: &EgressUsageFinding) -> &'static str {
+pub fn severity(finding: &EgressUsageFinding) -> &'static str {
     match EgressFindingSeverity::try_from(finding.severity) {
         Ok(EgressFindingSeverity::Medium) => "MEDIUM",
         Ok(EgressFindingSeverity::Low) => "LOW",

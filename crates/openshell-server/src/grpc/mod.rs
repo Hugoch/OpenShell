@@ -4,6 +4,7 @@
 //! gRPC service implementation.
 
 mod auth_rpc;
+pub mod egress_fleet;
 pub mod egress_usage;
 pub mod mutation_replay;
 pub mod policy;
@@ -674,6 +675,13 @@ impl OpenShell for OpenShellService {
         request: Request<openshell_core::proto::ReportEgressUsageRequest>,
     ) -> Result<Response<openshell_core::proto::ReportEgressUsageResponse>, Status> {
         egress_usage::handle_report_egress_usage(&self.state, request).await
+    }
+
+    async fn get_fleet_egress_usage(
+        &self,
+        request: Request<openshell_core::proto::GetFleetEgressUsageRequest>,
+    ) -> Result<Response<openshell_core::proto::GetFleetEgressUsageResponse>, Status> {
+        egress_fleet::handle_get_fleet_egress_usage(&self.state, request).await
     }
 
     async fn get_egress_usage(

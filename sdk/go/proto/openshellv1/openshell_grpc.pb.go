@@ -78,6 +78,7 @@ const (
 	OpenShell_GetSandboxProviderEnvironment_FullMethodName = "/openshell.v1.OpenShell/GetSandboxProviderEnvironment"
 	OpenShell_ExchangeProviderSubjectToken_FullMethodName  = "/openshell.v1.OpenShell/ExchangeProviderSubjectToken"
 	OpenShell_GetEgressUsage_FullMethodName                = "/openshell.v1.OpenShell/GetEgressUsage"
+	OpenShell_GetFleetEgressUsage_FullMethodName           = "/openshell.v1.OpenShell/GetFleetEgressUsage"
 	OpenShell_GetSandboxLogs_FullMethodName                = "/openshell.v1.OpenShell/GetSandboxLogs"
 	OpenShell_PushSandboxLogs_FullMethodName               = "/openshell.v1.OpenShell/PushSandboxLogs"
 	OpenShell_ConnectSupervisor_FullMethodName             = "/openshell.v1.OpenShell/ConnectSupervisor"
@@ -251,6 +252,9 @@ type OpenShellClient interface {
 	ExchangeProviderSubjectToken(ctx context.Context, in *ExchangeProviderSubjectTokenRequest, opts ...grpc.CallOption) (*ExchangeProviderSubjectTokenResponse, error)
 	// Fetch recent egress usage windows and findings of one sandbox.
 	GetEgressUsage(ctx context.Context, in *GetEgressUsageRequest, opts ...grpc.CallOption) (*GetEgressUsageResponse, error)
+	// Get egress usage of all sandboxes in a workspace, per destination and
+	// minute, with fleet findings.
+	GetFleetEgressUsage(ctx context.Context, in *GetFleetEgressUsageRequest, opts ...grpc.CallOption) (*GetFleetEgressUsageResponse, error)
 	// Fetch recent sandbox logs (one-shot).
 	GetSandboxLogs(ctx context.Context, in *GetSandboxLogsRequest, opts ...grpc.CallOption) (*GetSandboxLogsResponse, error)
 	// Push sandbox supervisor logs to the server (client-streaming).
@@ -923,6 +927,16 @@ func (c *openShellClient) GetEgressUsage(ctx context.Context, in *GetEgressUsage
 	return out, nil
 }
 
+func (c *openShellClient) GetFleetEgressUsage(ctx context.Context, in *GetFleetEgressUsageRequest, opts ...grpc.CallOption) (*GetFleetEgressUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFleetEgressUsageResponse)
+	err := c.cc.Invoke(ctx, OpenShell_GetFleetEgressUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *openShellClient) GetSandboxLogs(ctx context.Context, in *GetSandboxLogsRequest, opts ...grpc.CallOption) (*GetSandboxLogsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetSandboxLogsResponse)
@@ -1394,6 +1408,9 @@ type OpenShellServer interface {
 	ExchangeProviderSubjectToken(context.Context, *ExchangeProviderSubjectTokenRequest) (*ExchangeProviderSubjectTokenResponse, error)
 	// Fetch recent egress usage windows and findings of one sandbox.
 	GetEgressUsage(context.Context, *GetEgressUsageRequest) (*GetEgressUsageResponse, error)
+	// Get egress usage of all sandboxes in a workspace, per destination and
+	// minute, with fleet findings.
+	GetFleetEgressUsage(context.Context, *GetFleetEgressUsageRequest) (*GetFleetEgressUsageResponse, error)
 	// Fetch recent sandbox logs (one-shot).
 	GetSandboxLogs(context.Context, *GetSandboxLogsRequest) (*GetSandboxLogsResponse, error)
 	// Push sandbox supervisor logs to the server (client-streaming).
@@ -1665,6 +1682,9 @@ func (UnimplementedOpenShellServer) ExchangeProviderSubjectToken(context.Context
 }
 func (UnimplementedOpenShellServer) GetEgressUsage(context.Context, *GetEgressUsageRequest) (*GetEgressUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetEgressUsage not implemented")
+}
+func (UnimplementedOpenShellServer) GetFleetEgressUsage(context.Context, *GetFleetEgressUsageRequest) (*GetFleetEgressUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFleetEgressUsage not implemented")
 }
 func (UnimplementedOpenShellServer) GetSandboxLogs(context.Context, *GetSandboxLogsRequest) (*GetSandboxLogsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSandboxLogs not implemented")
@@ -2741,6 +2761,24 @@ func _OpenShell_GetEgressUsage_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OpenShell_GetFleetEgressUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFleetEgressUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OpenShellServer).GetFleetEgressUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OpenShell_GetFleetEgressUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OpenShellServer).GetFleetEgressUsage(ctx, req.(*GetFleetEgressUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _OpenShell_GetSandboxLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetSandboxLogsRequest)
 	if err := dec(in); err != nil {
@@ -3462,6 +3500,10 @@ var OpenShell_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetEgressUsage",
 			Handler:    _OpenShell_GetEgressUsage_Handler,
+		},
+		{
+			MethodName: "GetFleetEgressUsage",
+			Handler:    _OpenShell_GetFleetEgressUsage_Handler,
 		},
 		{
 			MethodName: "GetSandboxLogs",

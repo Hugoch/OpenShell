@@ -285,6 +285,7 @@ pub struct ServerState {
 
     /// Recent egress usage windows and findings per sandbox.
     pub egress_usage: grpc::egress_usage::EgressUsageStore,
+    pub egress_fleet: grpc::egress_fleet::EgressFleet,
 
     /// Active SSH tunnel connection counts per session token.
     pub ssh_connections_by_token: Mutex<HashMap<String, u32>>,
@@ -443,6 +444,7 @@ impl ServerState {
             tracing_log_bus,
             telemetry: telemetry::TelemetryState::new(),
             egress_usage: grpc::egress_usage::EgressUsageStore::default(),
+            egress_fleet: grpc::egress_fleet::EgressFleet::default(),
             ssh_connections_by_token: Mutex::new(HashMap::new()),
             ssh_connections_by_sandbox: Mutex::new(HashMap::new()),
             settings_mutex: tokio::sync::Mutex::new(()),
@@ -1015,6 +1017,7 @@ pub(crate) async fn run_server(
     }
     ssh_sessions::spawn_session_reaper(store.clone(), Duration::from_hours(1));
     grpc::egress_usage::spawn_cohort_reaper(store.clone(), Duration::from_hours(1));
+    grpc::egress_fleet::spawn_fleet_worker(state.clone());
     supervisor_session::spawn_relay_reaper(state.clone(), Duration::from_secs(30));
     provider_refresh::spawn_refresh_worker(state.clone(), Duration::from_mins(1));
 

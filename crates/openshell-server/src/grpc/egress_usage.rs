@@ -816,6 +816,13 @@ async fn record_report(
         ));
     }
 
+    state.egress_fleet.observe(
+        workspace,
+        &cohort_id,
+        sandbox.object_name(),
+        &report.summaries,
+        now_ms(),
+    );
     let drifted = drift_findings
         .iter()
         .map(|finding| format!("{}|{}", finding.policy_key, finding.endpoint_id))

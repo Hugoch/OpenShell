@@ -1598,6 +1598,17 @@ pub async fn sandbox_usage(
     crate::commands::usage::sandbox_usage(server, name, output, workspace, tls).await
 }
 
+/// Print fleet egress usage and fleet findings of one workspace.
+pub async fn workspace_usage(
+    server: &str,
+    workspace: &str,
+    minutes: u32,
+    output: &str,
+    tls: &TlsOptions,
+) -> Result<()> {
+    crate::commands::fleet_usage::workspace_usage(server, workspace, minutes, output, tls).await
+}
+
 /// Fetch a sandbox by name.
 ///
 /// Policy always comes from [`GetSandboxConfig`] (effective active policy, sandbox

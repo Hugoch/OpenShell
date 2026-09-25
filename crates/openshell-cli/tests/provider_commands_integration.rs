@@ -268,6 +268,15 @@ impl OpenShell for TestOpenShell {
         ))
     }
 
+    async fn get_fleet_egress_usage(
+        &self,
+        _request: tonic::Request<openshell_core::proto::GetFleetEgressUsageRequest>,
+    ) -> Result<Response<openshell_core::proto::GetFleetEgressUsageResponse>, Status> {
+        Ok(Response::new(
+            openshell_core::proto::GetFleetEgressUsageResponse::default(),
+        ))
+    }
+
     async fn get_egress_usage(
         &self,
         _request: tonic::Request<openshell_core::proto::GetEgressUsageRequest>,

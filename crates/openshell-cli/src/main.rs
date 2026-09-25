@@ -2439,6 +2439,22 @@ enum WorkspaceCommands {
         names: Vec<String>,
     },
 
+    /// Show egress usage of all sandboxes in a workspace, with fleet findings.
+    #[command(help_template = LEAF_HELP_TEMPLATE, next_help_heading = "FLAGS")]
+    Usage {
+        /// Workspace name (defaults to the selected workspace).
+        #[arg(add = ArgValueCompleter::new(completers::complete_workspace_names))]
+        name: Option<String>,
+
+        /// Minutes of usage to show, at most 60.
+        #[arg(long, default_value_t = 10)]
+        minutes: u32,
+
+        /// Output format.
+        #[arg(short = 'o', long = "output", value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
+    },
+
     /// Manage workspace members.
     #[command(subcommand, help_template = SUBCOMMAND_HELP_TEMPLATE)]
     Member(WorkspaceMemberCommands),
@@ -3760,6 +3776,15 @@ async fn run_async() -> Result<()> {
                 }
                 WorkspaceCommands::Get { name } => {
                     run::workspace_get(endpoint, &name, &tls).await?;
+                }
+                WorkspaceCommands::Usage {
+                    name,
+                    minutes,
+                    output,
+                } => {
+                    let workspace = name.unwrap_or_else(|| cli.workspace.clone());
+                    run::workspace_usage(endpoint, &workspace, minutes, output.as_str(), &tls)
+                        .await?;
                 }
                 WorkspaceCommands::List {
                     page_size,

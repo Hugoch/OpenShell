@@ -543,6 +543,16 @@ service OpenShell {
     };
   }
 
+  // Get egress usage of all sandboxes in a workspace, per destination and
+  // minute, with fleet findings.
+  rpc GetFleetEgressUsage(GetFleetEgressUsageRequest) returns (GetFleetEgressUsageResponse) {
+    option (openshell.options.v1.authorization) = {
+      auth_mode: "bearer"
+      scope: "sandbox:read"
+      workspace_role: "admin"
+    };
+  }
+
   // Fetch recent sandbox logs (one-shot).
   rpc GetSandboxLogs(GetSandboxLogsRequest) returns (GetSandboxLogsResponse) {
     option (openshell.options.v1.authorization) = {
@@ -3836,6 +3846,40 @@ message GetEgressUsageRequest {
 message GetEgressUsageResponse {
   repeated EgressUsageWindow windows = 1;
   repeated EgressUsageFinding findings = 2;
+}
+
+// Get egress usage of all sandboxes in a workspace.
+message GetFleetEgressUsageRequest {
+  // Workspace scope. Only a named workspace selection is accepted.
+  openshell.datamodel.v1.WorkspaceSelector workspace_scope = 1;
+  // Minutes of usage to return, newest first. 0 means 10. At most 60.
+  uint32 minutes = 2;
+}
+
+message GetFleetEgressUsageResponse {
+  // Destinations ordered by the largest number of sandboxes in one minute.
+  repeated FleetEgressDestination destinations = 1;
+  // Fleet findings of the last 24 hours, newest first, at most 200.
+  repeated EgressUsageFinding findings = 2;
+}
+
+// Usage of one destination by the sandboxes of one cohort.
+message FleetEgressDestination {
+  // `template:<name>` or `policy:<hash>`.
+  string cohort = 1;
+  string host = 2;
+  uint32 port = 3;
+  // Largest number of sandboxes with traffic in one minute.
+  uint64 max_sandboxes = 4;
+  // Largest number of sandboxes with write requests in one minute.
+  uint64 max_writer_sandboxes = 5;
+  uint64 requests = 6;
+  uint64 write_requests = 7;
+  uint64 bytes_out = 8;
+  uint64 bytes_in = 9;
+  uint64 errors = 10;
+  // Names of some sandboxes that used the destination.
+  repeated string example_sandboxes = 11;
 }
 
 // One accepted usage window.
