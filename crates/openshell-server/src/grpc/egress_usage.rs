@@ -1374,6 +1374,29 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn accepted_reports_reach_the_fleet_partials() {
+            let state = test_server_state().await;
+            put_sandbox(&state, "fleet-a", None).await;
+            send(&state, "fleet-a", 1, 5).await;
+            let later = now_ms() + 2 * 60_000;
+            state
+                .egress_fleet
+                .tick_for_test(&state.store, "replica-a", later)
+                .await;
+            let partials = state
+                .store
+                .list(
+                    super::super::super::egress_fleet::FLEET_PARTIAL_OBJECT_TYPE,
+                    "default",
+                    10,
+                    0,
+                )
+                .await
+                .unwrap();
+            assert_eq!(partials.len(), 1);
+        }
+
+        #[tokio::test]
         async fn idle_cohorts_are_reaped() {
             let state = test_server_state().await;
             put_sandbox(&state, "warm-a", None).await;

@@ -315,6 +315,14 @@ impl EgressFleet {
     }
 }
 
+#[cfg(test)]
+impl EgressFleet {
+    pub(crate) async fn tick_for_test(&self, store: &Store, replica_id: &str, now_ms: i64) {
+        self.tick(store, replica_id, FleetSettings::default(), now_ms)
+            .await;
+    }
+}
+
 async fn write_partial(
     store: &Store,
     workspace: &str,
