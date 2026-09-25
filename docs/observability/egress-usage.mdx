@@ -80,6 +80,7 @@ Budget denials apply on endpoints with `enforcement: audit` too. A 429 that Open
 | `egress.new_rule` | Supervisor | Low | First request that an L7 rule allowed, after the learning period. |
 | `egress.usage_overflow` | Supervisor | Medium | A usage or novelty table reached its bound. |
 | `egress.drift` | Gateway | Medium | One window of an endpoint is far above its baseline. |
+| `egress.fleet_fan_in` | Gateway | Medium | The number of sandboxes in a workspace that use, or write to, one destination in one minute is far above its fleet baseline. |
 
 The supervisor emits each finding as an OCSF Detection Finding and sends it in the next report. It records at most one finding per usage group and type per window, and at most 64 findings per window.
 
@@ -101,6 +102,20 @@ Sandboxes of one cohort also share baselines. The cohort is the workload templat
 
 Set the thresholds in [`usage_monitoring`](/reference/policy-schema#usage-monitoring).
 
+### Fleet View
+
+Some misuse is visible only across sandboxes, for example many agents that use one allowed host as a shared message board. The gateway sums the usage of all sandboxes in a workspace per cohort, destination, and minute. Workspace admins read it:
+
+```shell
+openshell workspace usage my-workspace
+```
+
+`SANDBOXES` and `WRITERS` are the largest number of sandboxes that used, or wrote to, the destination in one minute. Add `--minutes` to change the range (10 by default, at most 60) and `-o json` for machine-readable output.
+
+The gateway reports `egress.fleet_fan_in` when the number of sandboxes that use, or write to, one destination jumps. Each destination and counter has its own moving average, and the first minute of a destination sets it. A counter reports when one minute is more than 5 times the larger of its average and a floor of 3 sandboxes. It reports once, and again only after a minute below the threshold. A host that every sandbox reads, such as a package proxy, therefore stays quiet. A host that few sandboxes use reports when many start to use it.
+
+Fleet findings arrive 1 to 2 minutes after the traffic. They appear in `openshell workspace usage` and as warnings in the gateway log. The gateway keeps fleet usage for 1 hour and fleet findings for 24 hours.
+
 ## Limits
 
 | Resource | Bound | At the bound |
@@ -113,6 +128,8 @@ Set the thresholds in [`usage_monitoring`](/reference/policy-schema#usage-monito
 | Unsent reports in the supervisor | 10 | The oldest report is dropped and counted as a dropped window. |
 | Drift baselines per sandbox | 256 | The least recently active baseline is removed. |
 | Drift baselines per cohort | 256 | The least recently active baseline is removed. |
+| Fleet destinations per workspace and minute | 512 per gateway replica | Other destinations share one `other` entry per cohort. |
+| Fleet baselines per workspace | 256 | The least recently active baseline is removed. |
 
 ## Standalone Network Proxy
 

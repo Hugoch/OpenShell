@@ -143,6 +143,10 @@ resources.
 | Gateway cohort baselines | 256 per cohort | Evict the least recently active baseline. |
 | Cohort contributors | 64 most recent sandboxes | Drop the oldest contributor. |
 | Idle cohort | 7 days without a report | Delete the cohort in the hourly sweep. |
+| Fleet destinations | 512 per workspace, minute, and replica | Aggregate new destinations into one `other` entry per cohort. |
+| Fleet baselines | 256 per workspace | Evict the least recently active baseline. |
+| Fleet partials and claims | 1 hour | Delete in the hourly sweep. |
+| Fleet findings | 24 hours | Delete in the hourly sweep. |
 
 ## Network and Upstream Proxying
 

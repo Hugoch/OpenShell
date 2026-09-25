@@ -727,7 +727,15 @@ baselines per workspace, shared by the sandboxes of one workload template or,
 without a template, of one base policy. A sandbox compares against its cohort
 until its own baseline is warm. Cohort updates are best effort, skip drifting
 windows, and outlive sandboxes: workspace deletion removes them, and an hourly
-sweep removes cohorts idle for 7 days. Usage never carries request
+sweep removes cohorts idle for 7 days.
+
+The fleet view sums accepted reports per workspace, cohort, destination, and
+minute of gateway time. Each replica writes its share of a closed minute as one
+partial record, so every partial has one writer, and sandbox counts add up
+because a sandbox has one owner replica. The first replica that creates the
+claim record for a minute merges all partials and evaluates fan-in against
+per-destination baselines. Only the claim winner writes baselines and findings,
+so each finding exists once without a leader. Usage never carries request
 paths, query strings, headers, or bodies.
 
 ## Configuration Admission

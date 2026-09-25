@@ -432,6 +432,9 @@ openshell sandbox usage my-sandbox
 
 # Machine-readable
 openshell sandbox usage my-sandbox -o json
+
+# Fleet usage of a workspace (workspace admins), with fan-in findings
+openshell workspace usage my-workspace
 ```
 
 Usage arrives once per window (60 seconds by default). A `429` with `"error": "budget_exceeded"` comes from a `network_budgets` entry, not from the upstream. Raise the budget or slow the agent down instead of changing `network_policies`.
