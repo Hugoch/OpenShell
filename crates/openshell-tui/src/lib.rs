@@ -402,6 +402,11 @@ pub async fn run(
                         refresh_egress_usage(&mut app).await;
                     }
                 }
+                if app.screen == Screen::Dashboard
+                    && app.middle_pane_tab == app::MiddlePaneTab::Fleet
+                {
+                    refresh_fleet_usage(&mut app).await;
+                }
             }
             Some(Event::Redraw) => {
                 // Check if a buffered sandbox CreateResult is ready to finalize.
@@ -2952,6 +2957,36 @@ async fn refresh_egress_usage(app: &mut App) {
         Ok(Ok(response)) => app.egress_usage = response.into_inner(),
         Ok(Err(status)) => app.status_text = format!("egress usage: {}", status.message()),
         Err(_) => app.status_text = "egress usage: request timed out".to_string(),
+    }
+}
+
+async fn refresh_fleet_usage(app: &mut App) {
+    if app.all_workspaces {
+        app.fleet_usage = openshell_core::proto::GetFleetEgressUsageResponse::default();
+        app.fleet_usage_error = Some("Select a workspace to see fleet usage.".to_string());
+        return;
+    }
+    let req = openshell_core::proto::GetFleetEgressUsageRequest {
+        workspace_scope: Some(openshell_core::proto::workspace_selector(
+            app.current_workspace.clone(),
+        )),
+        minutes: 0,
+    };
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        app.client.get_fleet_egress_usage(req),
+    )
+    .await
+    {
+        Ok(Ok(response)) => {
+            app.fleet_usage = response.into_inner();
+            app.fleet_usage_error = None;
+        }
+        Ok(Err(status)) => {
+            app.fleet_usage = openshell_core::proto::GetFleetEgressUsageResponse::default();
+            app.fleet_usage_error = Some(format!("Fleet usage unavailable: {}", status.message()));
+        }
+        Err(_) => app.fleet_usage_error = Some("Fleet usage: request timed out".to_string()),
     }
 }
 

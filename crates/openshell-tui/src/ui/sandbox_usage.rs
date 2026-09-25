@@ -65,7 +65,7 @@ fn usage_rows(response: &GetEgressUsageResponse) -> Vec<UsageRow> {
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn human_bytes(bytes: u64) -> String {
+pub(super) fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
     let mut unit = 0;
@@ -96,7 +96,7 @@ fn finding_target(finding: &EgressUsageFinding) -> String {
     }
 }
 
-fn severity(finding: &EgressUsageFinding, app: &App) -> (&'static str, Style) {
+pub(super) fn severity(finding: &EgressUsageFinding, app: &App) -> (&'static str, Style) {
     match EgressFindingSeverity::try_from(finding.severity) {
         Ok(EgressFindingSeverity::Medium) => ("MEDIUM", app.theme.status_err),
         Ok(EgressFindingSeverity::Low) => ("LOW", app.theme.status_warn),
@@ -104,7 +104,7 @@ fn severity(finding: &EgressUsageFinding, app: &App) -> (&'static str, Style) {
     }
 }
 
-fn observed_time(finding: &EgressUsageFinding) -> String {
+pub(super) fn observed_time(finding: &EgressUsageFinding) -> String {
     finding
         .observed_time
         .as_ref()

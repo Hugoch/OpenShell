@@ -14,11 +14,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use openshell_core::egress_usage::{DEFAULT_DRIFT_MIN_BYTES, DEFAULT_DRIFT_MIN_REQUESTS};
 use openshell_core::proto::{
     EgressFindingSeverity, EgressUsageFinding, EgressUsageSummary, FleetEgressDestination,
     GetFleetEgressUsageRequest, GetFleetEgressUsageResponse,
 };
-use prost::Message;
 use serde::{Deserialize, Serialize};
 use tonic::{Request, Response, Status};
 
@@ -50,6 +50,11 @@ const BUCKET_MS: i64 = 60_000;
 const EVALUATION_DELAY_MS: i64 = 30_000;
 const MAX_KEYS_PER_BUCKET: usize = 512;
 const MAX_EXAMPLES: usize = 20;
+/// Sandboxes kept per destination, so that a sandbox view can find the
+/// fleet findings that involve it.
+const MAX_CONTRIBUTORS: usize = 256;
+/// Fleet findings merged into one sandbox view.
+const MAX_SANDBOX_FINDINGS: usize = 20;
 const MAX_BASELINES: usize = 256;
 const MAX_FINDINGS: usize = 200;
 const DEFAULT_MINUTES: u32 = 10;
@@ -105,6 +110,12 @@ struct BucketDestination {
     bytes_in: u64,
     errors: u64,
     examples: Vec<String>,
+    /// Sandboxes with traffic, sorted, at most [`MAX_CONTRIBUTORS`].
+    #[serde(default)]
+    members: Vec<String>,
+    /// Sandboxes with write requests, sorted, at most [`MAX_CONTRIBUTORS`].
+    #[serde(default)]
+    writers: Vec<String>,
 }
 
 impl BucketDestination {
@@ -127,7 +138,22 @@ impl BucketDestination {
         self.bytes_in += other.bytes_in;
         self.errors += other.errors;
         merge_examples(&mut self.examples, &other.examples);
+        merge_contributors(&mut self.members, &other.members);
+        merge_contributors(&mut self.writers, &other.writers);
     }
+}
+
+fn merge_contributors(contributors: &mut Vec<String>, other: &[String]) {
+    let mut union: BTreeSet<String> = contributors.drain(..).collect();
+    union.extend(other.iter().cloned());
+    contributors.extend(union.into_iter().take(MAX_CONTRIBUTORS));
+}
+
+fn sorted_capped(names: &HashSet<String>) -> Vec<String> {
+    let mut names: Vec<_> = names.iter().cloned().collect();
+    names.sort();
+    names.truncate(MAX_CONTRIBUTORS);
+    names
 }
 
 fn merge_examples(examples: &mut Vec<String>, other: &[String]) {
@@ -141,11 +167,13 @@ fn merge_examples(examples: &mut Vec<String>, other: &[String]) {
     }
 }
 
-/// Fan-in thresholds.
+/// Fan-in and volume thresholds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FleetSettings {
     ratio: f64,
     min_sandboxes: u64,
+    min_requests: u64,
+    min_bytes: u64,
 }
 
 impl Default for FleetSettings {
@@ -153,16 +181,29 @@ impl Default for FleetSettings {
         Self {
             ratio: DEFAULT_RATIO,
             min_sandboxes: DEFAULT_MIN_SANDBOXES,
+            min_requests: DEFAULT_DRIFT_MIN_REQUESTS * DEFAULT_MIN_SANDBOXES,
+            min_bytes: DEFAULT_DRIFT_MIN_BYTES * DEFAULT_MIN_SANDBOXES,
         }
     }
 }
 
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+}
+
 impl FleetSettings {
     /// Defaults, with the proof-of-concept overrides
-    /// `OPENSHELL_FLEET_FAN_IN_RATIO` and `OPENSHELL_FLEET_FAN_IN_MIN_SANDBOXES`.
+    /// `OPENSHELL_FLEET_FAN_IN_RATIO`, `OPENSHELL_FLEET_FAN_IN_MIN_SANDBOXES`,
+    /// `OPENSHELL_FLEET_VOLUME_MIN_REQUESTS`, and
+    /// `OPENSHELL_FLEET_VOLUME_MIN_BYTES`.
     pub fn from_env() -> Self {
         let defaults = Self::default();
         Self {
+            min_requests: env_u64("OPENSHELL_FLEET_VOLUME_MIN_REQUESTS")
+                .unwrap_or(defaults.min_requests),
+            min_bytes: env_u64("OPENSHELL_FLEET_VOLUME_MIN_BYTES").unwrap_or(defaults.min_bytes),
             ratio: std::env::var("OPENSHELL_FLEET_FAN_IN_RATIO")
                 .ok()
                 .and_then(|value| value.parse().ok())
@@ -268,6 +309,8 @@ impl EgressFleet {
                             bytes_in: accumulator.bytes_in,
                             errors: accumulator.errors,
                             examples,
+                            members: sorted_capped(&accumulator.sandboxes),
+                            writers: sorted_capped(&accumulator.writers),
                         }
                     })
                     .collect();
@@ -409,11 +452,17 @@ async fn merged_buckets(
     Ok(buckets)
 }
 
-/// Fan-in baseline of one destination.
+/// Fan-in and volume baseline of one destination.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-struct FanInBaseline {
+struct FleetBaseline {
     sandboxes: f64,
     writer_sandboxes: f64,
+    #[serde(default)]
+    requests: f64,
+    #[serde(default)]
+    bytes_out: f64,
+    #[serde(default)]
+    bytes_in: f64,
     last_bucket: i64,
     /// Counters above their threshold. A counter reports once and again
     /// only after a bucket below the threshold.
@@ -422,7 +471,7 @@ struct FanInBaseline {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct FleetBaselines {
-    baselines: BTreeMap<String, FanInBaseline>,
+    baselines: BTreeMap<String, FleetBaseline>,
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -430,23 +479,64 @@ fn as_f64(value: u64) -> f64 {
     value as f64
 }
 
+/// A fleet finding and the sandboxes that it involves.
+#[derive(Debug, Clone, PartialEq)]
+struct FleetFinding {
+    finding: EgressUsageFinding,
+    cohort: String,
+    sandboxes: Vec<String>,
+}
+
+/// One counter check of a destination.
+struct Check {
+    finding_type: &'static str,
+    counter: &'static str,
+    value: u64,
+    mean: f64,
+    floor: u64,
+}
+
+fn fleet_detail(check: &Check, key: &DestinationKey, reference: f64, ratio: f64) -> String {
+    let target = format!("{}:{}", key.host, key.port);
+    let value = check.value;
+    match check.counter {
+        "sandboxes" => format!(
+            "{value} sandboxes used {target} in one minute, more than {ratio} times the fleet baseline {reference:.1}"
+        ),
+        "writer_sandboxes" => format!(
+            "{value} sandboxes wrote to {target} in one minute, more than {ratio} times the fleet baseline {reference:.1}"
+        ),
+        counter if counter.starts_with("bytes") => format!(
+            "{counter} {} to {target} in one minute, more than {ratio} times the fleet baseline {}",
+            super::egress_usage::human_bytes(as_f64(value)),
+            super::egress_usage::human_bytes(reference)
+        ),
+        counter => format!(
+            "{counter} {value} to {target} in one minute, more than {ratio} times the fleet baseline {reference:.1}"
+        ),
+    }
+}
+
 /// Apply one merged bucket to the baselines. The first bucket of a
 /// destination sets its baseline. After it, a counter drifts when its value
-/// is more than `ratio` times the larger of its mean and the floor.
+/// is more than `ratio` times the larger of its mean and its floor.
 fn apply_bucket(
     baselines: &mut FleetBaselines,
     bucket: i64,
     destinations: &BTreeMap<DestinationKey, BucketDestination>,
     settings: FleetSettings,
-) -> Vec<EgressUsageFinding> {
+) -> Vec<FleetFinding> {
     let mut findings = Vec::new();
     for (key, destination) in destinations {
         let Some(baseline) = baselines.baselines.get_mut(&key.name()) else {
             baselines.baselines.insert(
                 key.name(),
-                FanInBaseline {
+                FleetBaseline {
                     sandboxes: as_f64(destination.sandboxes),
                     writer_sandboxes: as_f64(destination.writer_sandboxes),
+                    requests: as_f64(destination.requests),
+                    bytes_out: as_f64(destination.bytes_out),
+                    bytes_in: as_f64(destination.bytes_in),
                     last_bucket: bucket,
                     alerting: BTreeSet::new(),
                 },
@@ -454,52 +544,89 @@ fn apply_bucket(
             continue;
         };
         let checks = [
-            (
-                "sandboxes",
-                destination.sandboxes,
-                baseline.sandboxes,
-                "used",
-            ),
-            (
-                "writer_sandboxes",
-                destination.writer_sandboxes,
-                baseline.writer_sandboxes,
-                "wrote to",
-            ),
+            Check {
+                finding_type: "egress.fleet_fan_in",
+                counter: "sandboxes",
+                value: destination.sandboxes,
+                mean: baseline.sandboxes,
+                floor: settings.min_sandboxes,
+            },
+            Check {
+                finding_type: "egress.fleet_fan_in",
+                counter: "writer_sandboxes",
+                value: destination.writer_sandboxes,
+                mean: baseline.writer_sandboxes,
+                floor: settings.min_sandboxes,
+            },
+            Check {
+                finding_type: "egress.fleet_volume",
+                counter: "requests",
+                value: destination.requests,
+                mean: baseline.requests,
+                floor: settings.min_requests,
+            },
+            Check {
+                finding_type: "egress.fleet_volume",
+                counter: "bytes_out",
+                value: destination.bytes_out,
+                mean: baseline.bytes_out,
+                floor: settings.min_bytes,
+            },
+            Check {
+                finding_type: "egress.fleet_volume",
+                counter: "bytes_in",
+                value: destination.bytes_in,
+                mean: baseline.bytes_in,
+                floor: settings.min_bytes,
+            },
         ];
-        for (counter, value, mean, verb) in checks {
-            let reference = mean.max(as_f64(settings.min_sandboxes));
-            if as_f64(value) <= settings.ratio * reference {
-                baseline.alerting.remove(counter);
+        for check in checks {
+            let reference = check.mean.max(as_f64(check.floor));
+            if as_f64(check.value) <= settings.ratio * reference {
+                baseline.alerting.remove(check.counter);
                 continue;
             }
-            if baseline.alerting.insert(counter.to_string()) {
-                let others = destination
-                    .sandboxes
-                    .saturating_sub(destination.examples.len() as u64);
-                let mut examples = destination.examples.join(", ");
-                if others > 0 {
-                    examples = format!("{examples} +{others}");
-                }
-                findings.push(EgressUsageFinding {
-                    finding_type: "egress.fleet_fan_in".to_string(),
+            if !baseline.alerting.insert(check.counter.to_string()) {
+                continue;
+            }
+            let sandboxes = if check.counter == "writer_sandboxes" {
+                destination.writers.clone()
+            } else {
+                destination.members.clone()
+            };
+            let others = destination
+                .sandboxes
+                .saturating_sub(destination.examples.len() as u64);
+            let mut examples = destination.examples.join(", ");
+            if others > 0 {
+                examples = format!("{examples} +{others}");
+            }
+            findings.push(FleetFinding {
+                finding: EgressUsageFinding {
+                    finding_type: check.finding_type.to_string(),
                     severity: EgressFindingSeverity::Medium as i32,
                     host: key.host.clone(),
                     port: key.port,
-                    counter: counter.to_string(),
+                    counter: check.counter.to_string(),
                     detail: format!(
-                        "{value} sandboxes {verb} {}:{} in one minute, more than {} times the fleet baseline {reference:.1} (cohort {}: {examples})",
-                        key.host, key.port, settings.ratio, key.cohort
+                        "{} (cohort {}: {examples})",
+                        fleet_detail(&check, key, reference, settings.ratio),
+                        key.cohort
                     ),
                     ..Default::default()
-                });
-            }
+                },
+                cohort: key.cohort.clone(),
+                sandboxes,
+            });
         }
         let update = |mean: &mut f64, value: u64| {
             *mean = (1.0 - EWMA_WEIGHT).mul_add(*mean, EWMA_WEIGHT * as_f64(value));
         };
         update(&mut baseline.sandboxes, destination.sandboxes);
         update(&mut baseline.writer_sandboxes, destination.writer_sandboxes);
+        update(&mut baseline.requests, destination.requests);
+        update(&mut baseline.bytes_out, destination.bytes_out);
+        update(&mut baseline.bytes_in, destination.bytes_in);
         baseline.last_bucket = bucket;
     }
     while baselines.baselines.len() > MAX_BASELINES {
@@ -514,6 +641,36 @@ fn apply_bucket(
         baselines.baselines.remove(&oldest);
     }
     findings
+}
+
+/// Stored form of a fleet finding.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct StoredFleetFinding {
+    finding_type: String,
+    counter: String,
+    host: String,
+    port: u32,
+    detail: String,
+    observed_ms: i64,
+    /// Sandboxes involved, sorted, at most [`MAX_CONTRIBUTORS`].
+    sandboxes: Vec<String>,
+}
+
+impl StoredFleetFinding {
+    fn to_proto(&self) -> EgressUsageFinding {
+        EgressUsageFinding {
+            finding_type: self.finding_type.clone(),
+            severity: EgressFindingSeverity::Medium as i32,
+            host: self.host.clone(),
+            port: self.port,
+            counter: self.counter.clone(),
+            detail: self.detail.clone(),
+            observed_time: Some(prost_types::Timestamp::from(
+                UNIX_EPOCH + Duration::from_millis(u64::try_from(self.observed_ms).unwrap_or(0)),
+            )),
+            ..Default::default()
+        }
+    }
 }
 
 /// Claim, merge, and evaluate one workspace bucket. Only the replica that
@@ -548,7 +705,7 @@ async fn evaluate_bucket(
         return Ok(Vec::new());
     };
 
-    let mut findings = Vec::new();
+    let mut findings: Vec<FleetFinding> = Vec::new();
     let mut saved = false;
     for _ in 0..CAS_ATTEMPTS {
         let record = store
@@ -593,25 +750,37 @@ async fn evaluate_bucket(
         return Err("fleet baselines changed concurrently".to_string());
     }
 
-    let observed = prost_types::Timestamp::from(
-        UNIX_EPOCH + Duration::from_millis(u64::try_from(now_ms).unwrap_or(0)),
-    );
-    for finding in &mut findings {
-        finding.observed_time = Some(observed);
+    let mut stored_findings = Vec::new();
+    for FleetFinding {
+        finding,
+        cohort,
+        sandboxes,
+    } in findings
+    {
+        let stored = StoredFleetFinding {
+            finding_type: finding.finding_type,
+            counter: finding.counter,
+            host: finding.host,
+            port: finding.port,
+            detail: finding.detail,
+            observed_ms: now_ms,
+            sandboxes,
+        };
         let name = format!(
-            "{}|{}:{}|{}",
+            "{}|{cohort}|{}:{}|{}",
             bucket_name(bucket),
-            finding.host,
-            finding.port,
-            finding.counter
+            stored.host,
+            stored.port,
+            stored.counter
         );
+        let payload = serde_json::to_vec(&stored).map_err(|error| error.to_string())?;
         if let Err(error) = store
             .put_if(
                 FLEET_FINDING_OBJECT_TYPE,
                 &uuid::Uuid::new_v4().to_string(),
                 &name,
                 workspace,
-                &finding.encode_to_vec(),
+                &payload,
                 None,
                 WriteCondition::MustCreate,
             )
@@ -620,16 +789,17 @@ async fn evaluate_bucket(
             tracing::warn!(error = %error, workspace, "fleet finding write failed");
         }
         tracing::warn!(
-            finding_type = %finding.finding_type,
+            finding_type = %stored.finding_type,
             workspace,
-            host = %finding.host,
-            port = finding.port,
-            counter = %finding.counter,
+            host = %stored.host,
+            port = stored.port,
+            counter = %stored.counter,
             "{}",
-            finding.detail
+            stored.detail
         );
+        stored_findings.push(stored.to_proto());
     }
-    Ok(findings)
+    Ok(stored_findings)
 }
 
 fn now_ms() -> i64 {
@@ -772,13 +942,46 @@ fn fleet_destinations(
     destinations
 }
 
-async fn fleet_findings(store: &Store, workspace: &str) -> Result<Vec<EgressUsageFinding>, String> {
+/// Stored fleet findings of a workspace, newest first. Records that do not
+/// decode are skipped.
+async fn stored_fleet_findings(
+    store: &Store,
+    workspace: &str,
+) -> Result<Vec<StoredFleetFinding>, String> {
     let mut records = list_named(store, FLEET_FINDING_OBJECT_TYPE, workspace, "").await?;
     records.sort_by(|left, right| right.name.cmp(&left.name));
     Ok(records
         .iter()
+        .filter_map(|record| serde_json::from_slice(&record.payload).ok())
+        .collect())
+}
+
+async fn fleet_findings(store: &Store, workspace: &str) -> Result<Vec<EgressUsageFinding>, String> {
+    Ok(stored_fleet_findings(store, workspace)
+        .await?
+        .iter()
         .take(MAX_FINDINGS)
-        .filter_map(|record| EgressUsageFinding::decode(record.payload.as_slice()).ok())
+        .map(StoredFleetFinding::to_proto)
+        .collect())
+}
+
+/// Fleet findings that involve one sandbox, newest first.
+pub(super) async fn fleet_findings_for_sandbox(
+    store: &Store,
+    workspace: &str,
+    sandbox: &str,
+) -> Result<Vec<EgressUsageFinding>, String> {
+    Ok(stored_fleet_findings(store, workspace)
+        .await?
+        .iter()
+        .filter(|finding| {
+            finding
+                .sandboxes
+                .binary_search_by(|name| name.as_str().cmp(sandbox))
+                .is_ok()
+        })
+        .take(MAX_SANDBOX_FINDINGS)
+        .map(StoredFleetFinding::to_proto)
         .collect())
 }
 
@@ -858,9 +1061,10 @@ mod tests {
             settings(),
         );
         assert_eq!(findings.len(), 1, "{findings:?}");
-        assert_eq!(findings[0].counter, "writer_sandboxes");
+        assert_eq!(findings[0].finding.counter, "writer_sandboxes");
         assert!(
             findings[0]
+                .finding
                 .detail
                 .contains("16 sandboxes wrote to proxy.internal:443")
         );
@@ -931,7 +1135,7 @@ mod tests {
             settings(),
         );
         assert_eq!(findings.len(), 1, "{findings:?}");
-        assert_eq!(findings[0].counter, "sandboxes");
+        assert_eq!(findings[0].finding.counter, "sandboxes");
     }
 
     #[test]
@@ -1101,6 +1305,104 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), tonic::Code::PermissionDenied, "{error}");
+    }
+
+    fn volume_bucket(requests: u64, bytes_in: u64) -> BTreeMap<DestinationKey, BucketDestination> {
+        let destination = BucketDestination {
+            cohort: "policy:abc".into(),
+            host: "models.example".into(),
+            port: 443,
+            sandboxes: 5,
+            requests,
+            bytes_in,
+            examples: (1..=5).map(|index| format!("t{index}")).collect(),
+            members: (1..=5).map(|index| format!("t{index}")).collect(),
+            ..Default::default()
+        };
+        BTreeMap::from([(destination.key(), destination)])
+    }
+
+    #[test]
+    fn contributors_are_unioned_and_capped() {
+        let mut left = BucketDestination {
+            members: (0..200).map(|index| format!("a-{index:03}")).collect(),
+            writers: vec!["a-000".into()],
+            ..Default::default()
+        };
+        let right = BucketDestination {
+            members: (0..200).map(|index| format!("b-{index:03}")).collect(),
+            writers: vec!["a-000".into(), "b-000".into()],
+            ..Default::default()
+        };
+        left.merge(&right);
+        assert_eq!(left.members.len(), MAX_CONTRIBUTORS);
+        assert!(left.members.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(left.writers, ["a-000", "b-000"]);
+    }
+
+    #[test]
+    fn partial_without_contributors_decodes() {
+        let destinations: Vec<BucketDestination> = serde_json::from_str(
+            r#"[{"cohort":"c","host":"h","port":1,"sandboxes":2,"writer_sandboxes":0,"requests":2,"write_requests":0,"bytes_out":0,"bytes_in":0,"errors":0,"examples":["a","b"]}]"#,
+        )
+        .unwrap();
+        assert!(destinations[0].members.is_empty());
+    }
+
+    #[test]
+    fn fleet_volume_reports_bytes_in_once() {
+        const MIB: u64 = 1024 * 1024;
+        let mut baselines = FleetBaselines::default();
+        assert!(
+            apply_bucket(&mut baselines, 0, &volume_bucket(10, 5 * MIB), settings()).is_empty()
+        );
+        // Below ratio 5 times the 300 MiB floor.
+        assert!(
+            apply_bucket(
+                &mut baselines,
+                1,
+                &volume_bucket(10, 1400 * MIB),
+                settings()
+            )
+            .is_empty()
+        );
+        let findings = apply_bucket(
+            &mut baselines,
+            2,
+            &volume_bucket(10, 2600 * MIB),
+            settings(),
+        );
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].finding.finding_type, "egress.fleet_volume");
+        assert_eq!(findings[0].finding.counter, "bytes_in");
+        assert!(
+            findings[0]
+                .finding
+                .detail
+                .contains("bytes_in 2.5 GiB to models.example:443"),
+            "{}",
+            findings[0].finding.detail
+        );
+        assert_eq!(findings[0].sandboxes.len(), 5);
+        assert!(
+            apply_bucket(
+                &mut baselines,
+                3,
+                &volume_bucket(10, 2600 * MIB),
+                settings()
+            )
+            .is_empty(),
+            "the same level reports once"
+        );
+    }
+
+    #[test]
+    fn fleet_volume_reports_a_request_jump() {
+        let mut baselines = FleetBaselines::default();
+        apply_bucket(&mut baselines, 0, &volume_bucket(50, 0), settings());
+        let findings = apply_bucket(&mut baselines, 1, &volume_bucket(2000, 0), settings());
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].finding.counter, "requests");
     }
 
     #[tokio::test]

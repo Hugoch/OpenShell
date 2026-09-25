@@ -29,6 +29,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
         MiddlePaneTab::GlobalSettings => {
             super::global_settings::draw(frame, app, chunks[1], mid_focused);
         }
+        MiddlePaneTab::Fleet => {
+            super::fleet_usage::draw(frame, app, chunks[1], mid_focused);
+        }
     }
 
     super::sandboxes::draw(frame, app, chunks[2], app.focus == Focus::Sandboxes);

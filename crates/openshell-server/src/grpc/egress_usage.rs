@@ -35,7 +35,7 @@ use crate::ServerState;
 use crate::auth::principal::Principal;
 use crate::auth::workspace_authz::MinWorkspaceRole;
 use crate::persistence::{
-    ObjectCursor, ObjectId, ObjectName, PersistenceError, Store, WriteCondition,
+    ObjectCursor, ObjectId, ObjectName, ObjectWorkspace, PersistenceError, Store, WriteCondition,
 };
 
 /// Store object type for per-sandbox baselines and accepted sequences.
@@ -252,7 +252,7 @@ fn as_f64(value: u64) -> f64 {
     value as f64
 }
 
-fn human_bytes(bytes: f64) -> String {
+pub(super) fn human_bytes(bytes: f64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes;
     let mut unit = 0;
@@ -882,21 +882,40 @@ pub(super) async fn handle_get_egress_usage(
         MinWorkspaceRole::User,
     )
     .await?;
-    if let Some(owner) =
+    let mut response = if let Some(owner) =
         crate::supervisor_session::remote_supervisor_owner(state, sandbox.object_id()).await?
     {
-        let response = crate::supervisor_session::forward_egress_usage_query_to_owner(
+        crate::supervisor_session::forward_egress_usage_query_to_owner(
             state,
             &owner,
             sandbox.object_id(),
             request,
         )
-        .await?;
-        return Ok(Response::new(response));
+        .await?
+    } else {
+        state.egress_usage.snapshot(sandbox.object_id())
+    };
+    // Fleet findings are in the store, so every replica can add them.
+    match super::egress_fleet::fleet_findings_for_sandbox(
+        state.store.as_ref(),
+        sandbox.object_workspace(),
+        sandbox.object_name(),
+    )
+    .await
+    {
+        Ok(fleet) => {
+            response.findings.extend(fleet);
+            response.findings.sort_by_key(|finding| {
+                finding
+                    .observed_time
+                    .map_or((0, 0), |time| (time.seconds, time.nanos))
+            });
+        }
+        Err(error) => {
+            tracing::debug!(error = %error, "fleet findings unavailable for sandbox view");
+        }
     }
-    Ok(Response::new(
-        state.egress_usage.snapshot(sandbox.object_id()),
-    ))
+    Ok(Response::new(response))
 }
 
 /// Serve recent usage kept by this owner replica to another replica.
@@ -1394,6 +1413,45 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(partials.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn sandbox_view_includes_the_fleet_findings_that_list_it() {
+            let state = test_server_state().await;
+            put_sandbox(&state, "sb-01", None).await;
+            put_sandbox(&state, "sb-99", None).await;
+            state
+                .store
+                .put_if(
+                    super::super::super::egress_fleet::FLEET_FINDING_OBJECT_TYPE,
+                    "finding-id",
+                    "001700000000000|policy:abc|proxy.internal:443|writer_sandboxes",
+                    "default",
+                    br#"{"finding_type":"egress.fleet_fan_in","counter":"writer_sandboxes","host":"proxy.internal","port":443,"detail":"20 sandboxes wrote to proxy.internal:443","observed_ms":1700000000000,"sandboxes":["sb-01","sb-02"]}"#,
+                    None,
+                    WriteCondition::MustCreate,
+                )
+                .await
+                .unwrap();
+            let usage = |name: &str| {
+                crate::grpc::test_support::authed_request(GetEgressUsageRequest {
+                    workspace_scope: Some(openshell_core::proto::workspace_selector(
+                        "default".to_string(),
+                    )),
+                    sandbox: name.to_string(),
+                })
+            };
+            let listed = handle_get_egress_usage(&state, usage("sb-01"))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(listed.findings.len(), 1);
+            assert_eq!(listed.findings[0].finding_type, "egress.fleet_fan_in");
+            let other = handle_get_egress_usage(&state, usage("sb-99"))
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(other.findings.is_empty());
         }
 
         #[tokio::test]

@@ -103,13 +103,15 @@ impl LogSourceFilter {
 pub enum MiddlePaneTab {
     Providers,
     GlobalSettings,
+    Fleet,
 }
 
 impl MiddlePaneTab {
     pub fn next(self) -> Self {
         match self {
             Self::Providers => Self::GlobalSettings,
-            Self::GlobalSettings => Self::Providers,
+            Self::GlobalSettings => Self::Fleet,
+            Self::Fleet => Self::Providers,
         }
     }
 }
@@ -725,6 +727,10 @@ pub struct App {
 
     // Egress usage
     pub egress_usage: openshell_core::proto::GetEgressUsageResponse,
+    /// Fleet egress usage of the current workspace, for the Fleet tab.
+    pub fleet_usage: openshell_core::proto::GetFleetEgressUsageResponse,
+    /// Why the Fleet tab has no data, for example a missing admin role.
+    pub fleet_usage_error: Option<String>,
     /// Findings skipped from the top of the newest-first list.
     pub usage_findings_scroll: usize,
     pub pending_usage_fetch: bool,
@@ -1069,6 +1075,8 @@ impl App {
             log_selection_anchor: None,
             log_stream_handle: None,
             egress_usage: openshell_core::proto::GetEgressUsageResponse::default(),
+            fleet_usage: openshell_core::proto::GetFleetEgressUsageResponse::default(),
+            fleet_usage_error: None,
             usage_findings_scroll: 0,
             pending_usage_fetch: false,
             draft_chunks: Vec::new(),
@@ -1298,13 +1306,11 @@ impl App {
     fn handle_normal_key(&mut self, key: KeyEvent) {
         match self.focus {
             Focus::Gateways => self.handle_gateways_key(key),
-            Focus::Providers => {
-                if self.middle_pane_tab == MiddlePaneTab::GlobalSettings {
-                    self.handle_global_settings_key(key);
-                } else {
-                    self.handle_providers_key(key);
-                }
-            }
+            Focus::Providers => match self.middle_pane_tab {
+                MiddlePaneTab::Providers => self.handle_providers_key(key),
+                MiddlePaneTab::GlobalSettings => self.handle_global_settings_key(key),
+                MiddlePaneTab::Fleet => self.handle_fleet_key(key),
+            },
             Focus::Sandboxes => self.handle_sandboxes_key(key),
             Focus::SandboxPolicy => self.handle_policy_key(key),
             Focus::SandboxLogs => self.handle_logs_key(key),
@@ -1474,6 +1480,17 @@ impl App {
             KeyCode::Char('h' | 'l') | KeyCode::Left | KeyCode::Right => {
                 self.middle_pane_tab = self.middle_pane_tab.next();
             }
+            _ => {}
+        }
+    }
+
+    /// The Fleet tab is read-only: it switches tabs and workspaces.
+    fn handle_fleet_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('h' | 'l') | KeyCode::Left | KeyCode::Right => {
+                self.middle_pane_tab = self.middle_pane_tab.next();
+            }
+            KeyCode::Char('w') => self.cycle_workspace(),
             _ => {}
         }
     }

@@ -4,6 +4,7 @@
 pub mod create_provider;
 pub mod create_sandbox;
 mod dashboard;
+pub mod fleet_usage;
 pub mod global_settings;
 pub mod providers;
 pub mod sandbox_detail;
@@ -209,6 +210,22 @@ fn draw_nav_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 Span::styled("  ", t.text),
                 Span::styled("[d]", t.key_hint),
                 Span::styled(" Delete", t.text),
+                Span::styled("  |  ", t.border),
+                Span::styled("[:]", t.muted),
+                Span::styled(" Command  ", t.muted),
+                Span::styled("[q]", t.muted),
+                Span::styled(" Quit", t.muted),
+            ],
+            Focus::Providers if app.middle_pane_tab == app::MiddlePaneTab::Fleet => vec![
+                Span::styled(" ", t.text),
+                Span::styled("[Tab]", t.key_hint),
+                Span::styled(" Switch Panel", t.text),
+                Span::styled("  ", t.text),
+                Span::styled("[h/l]", t.key_hint),
+                Span::styled(" Switch Tab", t.text),
+                Span::styled("  ", t.text),
+                Span::styled("[w]", t.key_hint),
+                Span::styled(" Workspace", t.text),
                 Span::styled("  |  ", t.border),
                 Span::styled("[:]", t.muted),
                 Span::styled(" Command  ", t.muted),

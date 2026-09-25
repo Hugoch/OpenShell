@@ -98,24 +98,25 @@ pub fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, focused: bool) {
     }
 }
 
-/// Draw the tab title showing Providers | Global Settings.
+/// Draw the tab title showing Providers | Global Settings | Fleet.
 pub fn draw_tab_title(app: &App, focused: bool) -> Line<'_> {
     let t = &app.theme;
-    let prov_style = if app.middle_pane_tab == MiddlePaneTab::Providers {
-        if focused { t.heading } else { t.text }
-    } else {
-        t.muted
-    };
-    let gs_style = if app.middle_pane_tab == MiddlePaneTab::GlobalSettings {
-        if focused { t.heading } else { t.text }
-    } else {
-        t.muted
+    let style = |tab: MiddlePaneTab| {
+        if app.middle_pane_tab != tab {
+            t.muted
+        } else if focused {
+            t.heading
+        } else {
+            t.text
+        }
     };
 
     Line::from(vec![
-        Span::styled(" Providers", prov_style),
+        Span::styled(" Providers", style(MiddlePaneTab::Providers)),
         Span::styled(" | ", t.border),
-        Span::styled("Global Settings ", gs_style),
+        Span::styled("Global Settings", style(MiddlePaneTab::GlobalSettings)),
+        Span::styled(" | ", t.border),
+        Span::styled("Fleet ", style(MiddlePaneTab::Fleet)),
     ])
 }
 
