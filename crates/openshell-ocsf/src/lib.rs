@@ -51,8 +51,8 @@ pub use enums::{
 // --- Object types ---
 pub use objects::{
     Actor, AiModel, Api, Attack, ConnectionInfo, Container, Device, Endpoint, Evidence,
-    FindingInfo, FirewallRule, HttpRequest, HttpResponse, Image, Metadata, OsInfo, Process,
-    Product, Remediation, Tactic, Technique, Url,
+    FindingInfo, FirewallRule, HttpRequest, HttpResponse, Image, Metadata, NetworkTraffic, OsInfo,
+    Process, Product, Remediation, Tactic, Technique, Url,
 };
 
 // --- Builders ---

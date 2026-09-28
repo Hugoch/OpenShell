@@ -246,6 +246,56 @@ allow_request if {
 	not deny_request
 }
 
+# --- L7 usage attribution ---
+#
+# Reports which policies and rules admitted an L7 request, for egress usage
+# accounting and budget selection. Queried only after `allow_request`, so it
+# matches rules without repeating the complete allow evaluation: deny rules
+# already decided the request. The result maps each policy with a matching
+# rule to the IDs of its matching rules. Allow variants without a matching
+# rule (MCP method allow-all, MCP response frames and receive streams,
+# GraphQL operations) produce no entry, and the supervisor attributes them to
+# the endpoint and the connection's L4 policies.
+
+l7_request_attribution[name] := rule_ids if {
+	some name
+	policy := data.network_policies[name]
+	endpoint_allowed(policy, input.network)
+	binary_allowed(policy, input.exec)
+	rule_ids := _policy_matching_rule_ids(policy)
+	count(rule_ids) > 0
+}
+
+_policy_matching_rule_ids(policy) := {rule_id |
+	ep := policy.endpoints[_]
+	endpoint_matches_l7_request(ep, input.network, input.request)
+	rule := ep.rules[_]
+	_usage_rule_matches(input.request, ep, rule)
+	rule_id := object.get(rule, "rule_id", "")
+	rule_id != ""
+}
+
+_usage_rule_matches(request, endpoint, rule) if {
+	not jsonrpc_family_endpoint(endpoint)
+	rule.allow.method
+	method_matches(request.method, rule.allow.method)
+	path_matches(request.path, rule.allow.path)
+	query_params_match(request, rule)
+}
+
+_usage_rule_matches(request, endpoint, rule) if {
+	rule.allow.command
+	command_matches(request.command, rule.allow.command)
+}
+
+_usage_rule_matches(request, endpoint, rule) if {
+	jsonrpc_family_endpoint(endpoint)
+	request.method == "POST"
+	rule.allow.method
+	not jsonrpc_response_frame_present(request)
+	jsonrpc_rule_matches(request, endpoint, rule.allow)
+}
+
 # --- L7 deny rules ---
 #
 # Deny rules are evaluated after allow rules and take precedence.

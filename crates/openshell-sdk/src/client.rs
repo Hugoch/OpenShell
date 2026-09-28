@@ -1466,7 +1466,8 @@ fn convert_event(event: proto::SandboxStreamEvent, cursor: &mut String) -> Optio
             message: warning.message,
         }),
         proto::sandbox_stream_event::Payload::Sandbox(_)
-        | proto::sandbox_stream_event::Payload::DraftPolicyUpdate(_) => None,
+        | proto::sandbox_stream_event::Payload::DraftPolicyUpdate(_)
+        | proto::sandbox_stream_event::Payload::EgressUsage(_) => None,
     }
 }
 

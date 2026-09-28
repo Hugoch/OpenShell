@@ -50,6 +50,7 @@ pub enum Focus {
     SandboxPolicy,
     SandboxLogs,
     SandboxDraft,
+    SandboxUsage,
 }
 
 // ---------------------------------------------------------------------------
@@ -102,13 +103,15 @@ impl LogSourceFilter {
 pub enum MiddlePaneTab {
     Providers,
     GlobalSettings,
+    Fleet,
 }
 
 impl MiddlePaneTab {
     pub fn next(self) -> Self {
         match self {
             Self::Providers => Self::GlobalSettings,
-            Self::GlobalSettings => Self::Providers,
+            Self::GlobalSettings => Self::Fleet,
+            Self::Fleet => Self::Providers,
         }
     }
 }
@@ -722,6 +725,16 @@ pub struct App {
     /// Handle for the streaming log task. Dropped to cancel.
     pub log_stream_handle: Option<tokio::task::JoinHandle<()>>,
 
+    // Egress usage
+    pub egress_usage: openshell_core::proto::GetEgressUsageResponse,
+    /// Fleet egress usage of the current workspace, for the Fleet tab.
+    pub fleet_usage: openshell_core::proto::GetFleetEgressUsageResponse,
+    /// Why the Fleet tab has no data, for example a missing admin role.
+    pub fleet_usage_error: Option<String>,
+    /// Findings skipped from the top of the newest-first list.
+    pub usage_findings_scroll: usize,
+    pub pending_usage_fetch: bool,
+
     // Draft policy recommendations
     pub draft_chunks: Vec<openshell_core::proto::PolicyChunk>,
     pub draft_version: u64,
@@ -1061,6 +1074,11 @@ impl App {
             log_detail_index: None,
             log_selection_anchor: None,
             log_stream_handle: None,
+            egress_usage: openshell_core::proto::GetEgressUsageResponse::default(),
+            fleet_usage: openshell_core::proto::GetFleetEgressUsageResponse::default(),
+            fleet_usage_error: None,
+            usage_findings_scroll: 0,
+            pending_usage_fetch: false,
             draft_chunks: Vec::new(),
             draft_version: 0,
             draft_selected: 0,
@@ -1288,17 +1306,16 @@ impl App {
     fn handle_normal_key(&mut self, key: KeyEvent) {
         match self.focus {
             Focus::Gateways => self.handle_gateways_key(key),
-            Focus::Providers => {
-                if self.middle_pane_tab == MiddlePaneTab::GlobalSettings {
-                    self.handle_global_settings_key(key);
-                } else {
-                    self.handle_providers_key(key);
-                }
-            }
+            Focus::Providers => match self.middle_pane_tab {
+                MiddlePaneTab::Providers => self.handle_providers_key(key),
+                MiddlePaneTab::GlobalSettings => self.handle_global_settings_key(key),
+                MiddlePaneTab::Fleet => self.handle_fleet_key(key),
+            },
             Focus::Sandboxes => self.handle_sandboxes_key(key),
             Focus::SandboxPolicy => self.handle_policy_key(key),
             Focus::SandboxLogs => self.handle_logs_key(key),
             Focus::SandboxDraft => self.handle_draft_key(key),
+            Focus::SandboxUsage => self.handle_usage_key(key),
         }
     }
 
@@ -1463,6 +1480,17 @@ impl App {
             KeyCode::Char('h' | 'l') | KeyCode::Left | KeyCode::Right => {
                 self.middle_pane_tab = self.middle_pane_tab.next();
             }
+            _ => {}
+        }
+    }
+
+    /// The Fleet tab is read-only: it switches tabs and workspaces.
+    fn handle_fleet_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('h' | 'l') | KeyCode::Left | KeyCode::Right => {
+                self.middle_pane_tab = self.middle_pane_tab.next();
+            }
+            KeyCode::Char('w') => self.cycle_workspace(),
             _ => {}
         }
     }
@@ -1707,6 +1735,7 @@ impl App {
             KeyCode::Char('r') => {
                 self.focus = Focus::SandboxDraft;
             }
+            KeyCode::Char('u') => self.open_usage(),
             KeyCode::Char('s') if self.sandbox_count > 0 => {
                 self.pending_shell_connect = true;
             }
@@ -1915,6 +1944,42 @@ impl App {
         let current = isize::try_from(self.draft_detail_scroll).unwrap_or(0);
         let next = current.saturating_add(delta).clamp(0, max);
         self.draft_detail_scroll = usize::try_from(next).unwrap_or(0);
+    }
+
+    fn open_usage(&mut self) {
+        self.focus = Focus::SandboxUsage;
+        self.usage_findings_scroll = 0;
+        self.pending_usage_fetch = true;
+    }
+
+    fn handle_usage_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('p') => {
+                self.focus = Focus::SandboxPolicy;
+            }
+            KeyCode::Char('r') => {
+                self.focus = Focus::SandboxDraft;
+            }
+            KeyCode::Char('l') => {
+                self.sandbox_log_lines.clear();
+                self.sandbox_log_scroll = 0;
+                self.log_cursor = 0;
+                self.log_source_filter = LogSourceFilter::All;
+                self.log_autoscroll = true;
+                self.log_detail_index = None;
+                self.focus = Focus::SandboxLogs;
+                self.pending_log_fetch = true;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let max = self.egress_usage.findings.len().saturating_sub(1);
+                self.usage_findings_scroll = (self.usage_findings_scroll + 1).min(max);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.usage_findings_scroll = self.usage_findings_scroll.saturating_sub(1);
+            }
+            KeyCode::Char('q') => self.running = false,
+            _ => {}
+        }
     }
 
     fn handle_draft_key(&mut self, key: KeyEvent) {
@@ -3646,6 +3711,20 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[tokio::test]
+    async fn usage_key_opens_panel_and_escape_returns_to_policy() {
+        let mut app = test_app();
+        app.screen = Screen::Sandbox;
+        app.focus = Focus::SandboxPolicy;
+
+        app.handle_key(key(KeyCode::Char('u')));
+        assert_eq!(app.focus, Focus::SandboxUsage);
+        assert!(app.pending_usage_fetch);
+
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.focus, Focus::SandboxPolicy);
     }
 
     #[tokio::test]

@@ -1577,6 +1577,18 @@ enum SandboxCommands {
         output: OutputFormat,
     },
 
+    /// Show recent egress usage and findings of a sandbox.
+    #[command(help_template = LEAF_HELP_TEMPLATE, next_help_heading = "FLAGS")]
+    Usage {
+        /// Sandbox name (defaults to last-used sandbox).
+        #[arg(add = ArgValueCompleter::new(completers::complete_sandbox_names))]
+        name: Option<String>,
+
+        /// Output format.
+        #[arg(short = 'o', long = "output", value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
+    },
+
     /// List sandboxes.
     #[command(help_template = LEAF_HELP_TEMPLATE, next_help_heading = "FLAGS")]
     List {
@@ -2425,6 +2437,22 @@ enum WorkspaceCommands {
         /// Workspace name(s) to delete.
         #[arg(required = true, add = ArgValueCompleter::new(completers::complete_workspace_names))]
         names: Vec<String>,
+    },
+
+    /// Show egress usage of all sandboxes in a workspace, with fleet findings.
+    #[command(help_template = LEAF_HELP_TEMPLATE, next_help_heading = "FLAGS")]
+    Usage {
+        /// Workspace name (defaults to the selected workspace).
+        #[arg(add = ArgValueCompleter::new(completers::complete_workspace_names))]
+        name: Option<String>,
+
+        /// Minutes of usage to show, at most 60.
+        #[arg(long, default_value_t = 10)]
+        minutes: u32,
+
+        /// Output format.
+        #[arg(short = 'o', long = "output", value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
     },
 
     /// Manage workspace members.
@@ -3466,6 +3494,17 @@ async fn run_async() -> Result<()> {
                             )
                             .await?;
                         }
+                        SandboxCommands::Usage { name, output } => {
+                            let name = resolve_sandbox_name(name, &ctx.name, &cli.workspace)?;
+                            run::sandbox_usage(
+                                endpoint,
+                                &name,
+                                output.as_str(),
+                                &cli.workspace,
+                                &tls,
+                            )
+                            .await?;
+                        }
                         SandboxCommands::List {
                             page_size,
                             page_token,
@@ -3737,6 +3776,15 @@ async fn run_async() -> Result<()> {
                 }
                 WorkspaceCommands::Get { name } => {
                     run::workspace_get(endpoint, &name, &tls).await?;
+                }
+                WorkspaceCommands::Usage {
+                    name,
+                    minutes,
+                    output,
+                } => {
+                    let workspace = name.unwrap_or_else(|| cli.workspace.clone());
+                    run::workspace_usage(endpoint, &workspace, minutes, output.as_str(), &tls)
+                        .await?;
                 }
                 WorkspaceCommands::List {
                     page_size,

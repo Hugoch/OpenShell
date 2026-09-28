@@ -55,11 +55,11 @@ OpenShell maps sandbox events to these OCSF classes:
 | Shorthand prefix | OCSF class | Class UID | What it covers |
 |---|---|---|---|
 | `EVENT` | Base Event | 0 | Endpointless relay, proxy, and mediation failures |
-| `NET:` | Network Activity | 4001 | TCP proxy CONNECT tunnels, bypass detection, DNS failures |
+| `NET:` | Network Activity | 4001 | TCP proxy CONNECT tunnels, connection close totals, bypass detection, DNS failures |
 | `HTTP:` | HTTP Activity | 4002 | HTTP FORWARD requests, L7 enforcement decisions |
 | `SSH:` | SSH Activity | 4007 | SSH handshakes, authentication, channel operations |
 | `PROC:` | Process Activity | 1007 | Process start, exit, timeout, signal failures |
-| `FINDING:` | Detection Finding | 2004 | Security findings (nonce replay, proxy bypass, unsafe policy) |
+| `FINDING:` | Detection Finding | 2004 | Security findings (nonce replay, proxy bypass, unsafe policy) and egress usage findings |
 | `CONFIG:` | Device Config State Change | 5019 | Policy load/reload, Landlock, TLS setup, provider and settings changes |
 | `LIFECYCLE:` | Application Lifecycle | 6002 | Sandbox supervisor start, SSH server ready |
 
@@ -109,6 +109,18 @@ An allowed HTTPS connection:
 
 ```text
 OCSF NET:OPEN [INFO] ALLOWED /usr/bin/curl(58) -> api.github.com:443 [policy:github_api engine:opa]
+```
+
+A closed connection with its traffic totals:
+
+```text
+OCSF NET:CLOSE [INFO] ALLOWED api.github.com:443 [policy:github_api engine:opa] [bytes_out:512 bytes_in:4096 duration_ms:1500]
+```
+
+A request refused because an egress budget has no balance left:
+
+```text
+OCSF FINDING:BLOCKED [MED] "api.github.com:443 budget 'github-requests' has no requests_per_minute left" [type:egress.budget_exceeded]
 ```
 
 An L7 read-only policy denying a POST:
@@ -268,3 +280,4 @@ Both files rotate daily and retain the 3 most recent files to bound disk usage.
 - [Access logs](/observability/accessing-logs) through the CLI, TUI, or sandbox filesystem.
 - [Enable OCSF JSON export](/observability/ocsf-json-export) for SIEM integration and compliance.
 - Learn about [network policies](/sandboxes/policies) that generate these events.
+- Read [egress usage](/observability/egress-usage) and budget findings.

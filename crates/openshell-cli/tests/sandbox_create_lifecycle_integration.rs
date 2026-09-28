@@ -945,6 +945,51 @@ impl OpenShell for TestOpenShell {
         Err(Status::unimplemented("not implemented in test"))
     }
 
+    async fn report_egress_usage(
+        &self,
+        _request: tonic::Request<openshell_core::proto::ReportEgressUsageRequest>,
+    ) -> Result<Response<openshell_core::proto::ReportEgressUsageResponse>, Status> {
+        Ok(Response::new(
+            openshell_core::proto::ReportEgressUsageResponse {},
+        ))
+    }
+
+    async fn get_fleet_egress_usage(
+        &self,
+        _request: tonic::Request<openshell_core::proto::GetFleetEgressUsageRequest>,
+    ) -> Result<Response<openshell_core::proto::GetFleetEgressUsageResponse>, Status> {
+        Ok(Response::new(
+            openshell_core::proto::GetFleetEgressUsageResponse::default(),
+        ))
+    }
+
+    async fn get_egress_usage(
+        &self,
+        _request: tonic::Request<openshell_core::proto::GetEgressUsageRequest>,
+    ) -> Result<Response<openshell_core::proto::GetEgressUsageResponse>, Status> {
+        Ok(Response::new(
+            openshell_core::proto::GetEgressUsageResponse::default(),
+        ))
+    }
+
+    async fn peer_report_egress_usage(
+        &self,
+        _request: tonic::Request<openshell_core::proto::ReportEgressUsageRequest>,
+    ) -> Result<Response<openshell_core::proto::ReportEgressUsageResponse>, Status> {
+        Ok(Response::new(
+            openshell_core::proto::ReportEgressUsageResponse {},
+        ))
+    }
+
+    async fn peer_get_egress_usage(
+        &self,
+        _request: tonic::Request<openshell_core::proto::GetEgressUsageRequest>,
+    ) -> Result<Response<openshell_core::proto::GetEgressUsageResponse>, Status> {
+        Ok(Response::new(
+            openshell_core::proto::GetEgressUsageResponse::default(),
+        ))
+    }
+
     async fn get_sandbox_logs(
         &self,
         _request: tonic::Request<openshell_core::proto::GetSandboxLogsRequest>,

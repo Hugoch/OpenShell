@@ -44,6 +44,65 @@ pub(super) struct RelaySignals {
     pub(super) activity: Option<ActivitySender>,
     /// Receives terminal tool server results for endpoint status reporting.
     pub(super) endpoint_observation: Option<EndpointObservationSender>,
+    /// Egress usage handle of the admitted connection.
+    pub(super) usage: Option<crate::usage::ConnectionUsage>,
+}
+
+/// Admit an allowed connection to usage accounting and connection budgets.
+pub(super) fn admit_connection_usage(
+    engine: &OpaEngine,
+    decision: &EgressDecision,
+) -> std::result::Result<crate::usage::ConnectionUsage, crate::usage::BudgetDenial> {
+    let reported_policy = match &decision.action {
+        NetworkAction::Allow { matched_policy } => matched_policy.clone().unwrap_or_default(),
+        NetworkAction::Deny { .. } => String::new(),
+    };
+    let config = engine.usage().config();
+    let mut l4_policies: Vec<String> = decision
+        .endpoint
+        .matched_endpoints
+        .iter()
+        .map(|matched| matched.policy_name.clone())
+        .collect();
+    if l4_policies.is_empty() && !reported_policy.is_empty() {
+        l4_policies.push(reported_policy.clone());
+    }
+    l4_policies.sort();
+    l4_policies.dedup();
+    let endpoint_id = decision
+        .endpoint
+        .matched_endpoints
+        .iter()
+        .find(|matched| matched.policy_name == reported_policy)
+        .or_else(|| decision.endpoint.matched_endpoints.first())
+        .map(|matched| {
+            matched.endpoint["endpoint_id"]
+                .as_string()
+                .ok()
+                .map_or_else(
+                    || config.endpoint_id(&matched.policy_name, matched.endpoint_index),
+                    ToString::to_string,
+                )
+        })
+        .unwrap_or_default();
+    crate::usage::ConnectionUsage::admit_connection(
+        engine.usage(),
+        crate::usage::ConnectionMeta {
+            host: decision.intent.destination.host.clone(),
+            port: decision.intent.destination.port,
+            binary_path: decision
+                .binary
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            binary_sha256: decision.binary_sha256.clone().unwrap_or_default(),
+            reported_policy,
+            l4_policies,
+            endpoint_id,
+            started: std::time::Instant::now(),
+        },
+        !decision.endpoint.exact_declared_host,
+    )
 }
 
 /// Build the request-processing context shared by CONNECT and forward HTTP.
@@ -100,6 +159,7 @@ pub(super) fn http_context(
         agent_proposals,
         workspace,
         endpoint_observation_tx: signals.endpoint_observation,
+        usage: signals.usage,
     }
 }
 
@@ -349,6 +409,7 @@ mod tests {
             binary_pid: None,
             ancestors: vec![],
             cmdline_paths: vec![],
+            binary_sha256: None,
         }
     }
 
@@ -371,6 +432,7 @@ mod tests {
             agent_proposals: openshell_core::proposals::AgentProposals::default(),
             workspace: String::new(),
             endpoint_observation_tx: None,
+            usage: None,
         }
     }
 

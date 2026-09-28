@@ -1548,6 +1548,21 @@ impl CachedOpenShellClient {
         Ok(response.into_inner())
     }
 
+    /// Report one window of egress usage. The request carries its sandbox
+    /// name; the workspace scope comes from this client.
+    pub async fn report_egress_usage(
+        &self,
+        mut request: crate::proto::ReportEgressUsageRequest,
+    ) -> Result<()> {
+        request.workspace_scope = Some(crate::proto::workspace_selector(self.workspace()));
+        self.client
+            .clone()
+            .report_egress_usage(request)
+            .await
+            .into_diagnostic()?;
+        Ok(())
+    }
+
     /// Fetch the current draft chunks for a sandbox. `status_filter` may be
     /// `"pending"`, `"approved"`, `"rejected"`, or empty for all. Used by
     /// `policy.local`'s `GET /v1/proposals/{id}` and `/wait` routes to

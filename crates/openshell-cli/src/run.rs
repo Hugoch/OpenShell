@@ -991,9 +991,12 @@ pub async fn sandbox_create(
                     }
                 }
             }
-            Some(openshell_core::proto::sandbox_stream_event::Payload::DraftPolicyUpdate(_))
+            Some(
+                openshell_core::proto::sandbox_stream_event::Payload::DraftPolicyUpdate(_)
+                | openshell_core::proto::sandbox_stream_event::Payload::EgressUsage(_),
+            )
             | None => {
-                // Draft policy updates are handled in the draft panel, not during provisioning.
+                // Draft policy and usage updates are not part of provisioning output.
             }
         }
     }
@@ -1582,6 +1585,28 @@ pub async fn sandbox_get(
             .into_diagnostic()?;
     }
     Ok(())
+}
+
+/// Print recent egress usage and findings of one sandbox.
+pub async fn sandbox_usage(
+    server: &str,
+    name: &str,
+    output: &str,
+    workspace: &str,
+    tls: &TlsOptions,
+) -> Result<()> {
+    crate::commands::usage::sandbox_usage(server, name, output, workspace, tls).await
+}
+
+/// Print fleet egress usage and fleet findings of one workspace.
+pub async fn workspace_usage(
+    server: &str,
+    workspace: &str,
+    minutes: u32,
+    output: &str,
+    tls: &TlsOptions,
+) -> Result<()> {
+    crate::commands::fleet_usage::workspace_usage(server, workspace, minutes, output, tls).await
 }
 
 /// Fetch a sandbox by name.

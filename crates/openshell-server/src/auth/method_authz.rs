@@ -155,6 +155,8 @@ mod tests {
             "/openshell.v1.OpenShell/PeerReportProviderReadiness",
             "/openshell.v1.OpenShell/PeerReportEndpointStatus",
             "/openshell.v1.OpenShell/PeerGetSandboxProviderStatus",
+            "/openshell.v1.OpenShell/PeerReportEgressUsage",
+            "/openshell.v1.OpenShell/PeerGetEgressUsage",
         ] {
             assert!(!is_user_callable(path));
             assert!(is_peer_callable(path));

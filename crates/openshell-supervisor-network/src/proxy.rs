@@ -991,6 +991,16 @@ async fn handle_transparent_tcp_connection(
     let connector = mapping.connector_for(&endpoint_id).await.map_err(|error| {
         miette::miette!("transparent TCP pinned destination is invalid: {error}")
     })?;
+    let connection_usage = match relay::admit_connection_usage(&opa_engine, &decision) {
+        Ok(usage) => usage,
+        Err(denial) => {
+            emit_transparent_policy_denial(&decision, workload_addr, &host, port);
+            emit_activity(&activity_tx, true, "budget_exceeded");
+            debug!(budget = %denial.budget, host = %host, port, "transparent TCP budget exceeded");
+            return Ok(());
+        }
+    };
+    let _close_event = crate::usage::CloseEventGuard(Some(connection_usage.clone()));
     let mut ctx = relay::http_context(
         &decision,
         None,
@@ -1004,6 +1014,7 @@ async fn handle_transparent_tcp_connection(
         relay::RelaySignals {
             activity: activity_tx.clone(),
             endpoint_observation: None,
+            usage: Some(connection_usage.clone()),
         },
     );
     let middleware_gate = middleware_uninspectable_gate(&opa_engine, &ctx)?;
@@ -1016,7 +1027,7 @@ async fn handle_transparent_tcp_connection(
     }
     let approved_real_ip_candidates = connector.addrs().to_vec();
     generation_guard.ensure_current()?;
-    let mut upstream =
+    let upstream =
         dial_transparent_upstream(&upstream_proxy, &host, port, &approved_real_ip_candidates)
             .await
             .into_diagnostic()?;
@@ -1081,6 +1092,7 @@ async fn handle_transparent_tcp_connection(
         }
     ));
     emit_activity(&activity_tx, false, "transparent_tcp");
+    let mut upstream = crate::usage::CountingStream::new(upstream, connection_usage.cell());
     relay::relay_tcp(&mut client, &mut upstream, &generation_guard, &ctx).await
 }
 
@@ -2632,6 +2644,24 @@ async fn handle_mediated_connection(
         return Ok(());
     }
 
+    let connection_usage = match relay::admit_connection_usage(&opa_engine, &decision) {
+        Ok(usage) => usage,
+        Err(denial) => {
+            deny_connect_budget(
+                &mut client,
+                &denial,
+                workload_addr,
+                &host_lc,
+                port,
+                policy_str,
+                activity_tx.as_ref(),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    let _close_event = crate::usage::CloseEventGuard(Some(connection_usage.clone()));
+
     let upstream_result = tokio::select! {
         result = dial_upstream(&upstream_proxy, &host_lc, &raw_host_lc, port, connector.addrs()) => Some(result),
         () = connect_generation_guard.wait_until_stale() => None,
@@ -2653,7 +2683,7 @@ async fn handle_mediated_connection(
         return Ok(());
     };
     let mut upstream = match upstream_result {
-        Ok(upstream) => upstream,
+        Ok(upstream) => crate::usage::CountingStream::new(upstream, connection_usage.cell()),
         Err(error) => {
             if let Some(observer) = connect_endpoint_observer.as_ref() {
                 observer.observe(EndpointResult::TransportFailed);
@@ -2709,6 +2739,7 @@ async fn handle_mediated_connection(
         relay::RelaySignals {
             activity: activity_tx.clone(),
             endpoint_observation: endpoint_observation_tx,
+            usage: Some(connection_usage.clone()),
         },
     );
 
@@ -2775,14 +2806,18 @@ async fn handle_mediated_connection(
                         return Err(error);
                     }
                 };
+            // Count application bytes of the upstream TLS session, not the
+            // TLS records on the raw stream.
             let mut tls_upstream = match crate::l7::tls::tls_connect_upstream(
-                upstream,
+                upstream.into_inner(),
                 &host_lc,
                 tls.upstream_config(),
             )
             .await
             {
-                Ok(upstream) => upstream,
+                Ok(upstream) => {
+                    crate::usage::CountingStream::new(upstream, connection_usage.cell())
+                }
                 Err(error) => {
                     if let Some(observer) = connect_endpoint_observer.as_ref() {
                         observer.observe(EndpointResult::TlsFailed);
@@ -3214,6 +3249,7 @@ fn authorize_egress_intent(
             binary_pid,
             ancestors,
             cmdline_paths,
+            binary_sha256: None,
         }
     };
 
@@ -3272,6 +3308,7 @@ fn authorize_egress_intent(
             binary_pid: Some(binary_pid),
             ancestors,
             cmdline_paths,
+            binary_sha256: Some(input.binary_sha256.clone()),
         },
         Err(e) => deny(
             format!("policy evaluation error: {e}"),
@@ -3320,6 +3357,7 @@ fn evaluate_endpoint_only_opa(engine: &OpaEngine, intent: EgressIntent) -> Egres
             binary_pid: None,
             ancestors: vec![],
             cmdline_paths: vec![],
+            binary_sha256: None,
         },
         Err(e) => EgressDecision {
             intent,
@@ -3335,6 +3373,7 @@ fn evaluate_endpoint_only_opa(engine: &OpaEngine, intent: EgressIntent) -> Egres
             binary_pid: None,
             ancestors: vec![],
             cmdline_paths: vec![],
+            binary_sha256: None,
         },
     }
 }
@@ -3360,6 +3399,7 @@ fn authorize_supplied_identity(
         binary_pid: None,
         ancestors,
         cmdline_paths,
+        binary_sha256: None,
     };
 
     let identity = match identity {
@@ -3400,6 +3440,7 @@ fn authorize_supplied_identity(
             binary_pid: None,
             ancestors: identity.ancestors.clone(),
             cmdline_paths: identity.cmdline_paths.clone(),
+            binary_sha256: Some(digest.to_string()),
         },
         Err(error) => deny(
             format!("policy evaluation error: {error}"),
@@ -3433,7 +3474,69 @@ fn authorize_egress_intent(
         binary_pid: None,
         ancestors: vec![],
         cmdline_paths: vec![],
+        binary_sha256: None,
     }
+}
+
+/// Domain event for a forward HTTP request that a deny budget refused.
+fn emit_forward_budget_denial(
+    denial: &crate::usage::BudgetDenial,
+    method: &str,
+    host: &str,
+    port: u16,
+    path: &str,
+    policy: &str,
+) {
+    let event = HttpActivityBuilder::new(openshell_ocsf::ctx::ctx())
+        .activity(ActivityId::Other)
+        .action(ActionId::Denied)
+        .disposition(DispositionId::Blocked)
+        .severity(SeverityId::Medium)
+        .status(StatusId::Failure)
+        .http_request(HttpRequest::new(
+            method,
+            OcsfUrl::new("http", host, path, port),
+        ))
+        .http_response(HttpResponse { code: 429 })
+        .dst_endpoint(Endpoint::from_domain(host, port))
+        .firewall_rule(policy, "budget")
+        .message(format!(
+            "FORWARD denied {method} {host}:{port}{path}: budget {} exceeded",
+            denial.budget
+        ))
+        .status_detail("budget_exceeded")
+        .build();
+    ocsf_emit!(event);
+}
+
+/// Refuse a CONNECT when a deny budget has no connection balance left.
+async fn deny_connect_budget(
+    client: &mut ProxyClient,
+    denial: &crate::usage::BudgetDenial,
+    workload_addr: SocketAddr,
+    host: &str,
+    port: u16,
+    policy: &str,
+    activity_tx: Option<&ActivitySender>,
+) -> Result<()> {
+    let event = NetworkActivityBuilder::new(openshell_ocsf::ctx::ctx())
+        .activity(ActivityId::Open)
+        .action(ActionId::Denied)
+        .disposition(DispositionId::Blocked)
+        .severity(SeverityId::Medium)
+        .status(StatusId::Failure)
+        .dst_endpoint(Endpoint::from_domain(host, port))
+        .src_endpoint_addr(workload_addr.ip(), workload_addr.port())
+        .firewall_rule(policy, "budget")
+        .message(format!(
+            "CONNECT denied {host}:{port}: budget {} exceeded",
+            denial.budget
+        ))
+        .status_detail("budget_exceeded")
+        .build();
+    ocsf_emit!(event);
+    emit_activity_simple(activity_tx, true, "budget_exceeded");
+    respond(client, &crate::usage::budget_exceeded_response(denial)).await
 }
 
 fn emit_l7_tunnel_close_after_policy_change(host: &str, port: u16, error: miette::Report) {
@@ -5204,6 +5307,24 @@ async fn handle_forward_proxy(
         .as_ref()
         .map(|ctx| ctx.workspace())
         .unwrap_or_default();
+    let connection_usage = match relay::admit_connection_usage(&opa_engine, &decision) {
+        Ok(usage) => usage,
+        Err(denial) => {
+            emit_forward_budget_denial(
+                &denial,
+                method,
+                &host_lc,
+                port,
+                &telemetry_path,
+                policy_str,
+            );
+            emit_activity_simple(activity_tx, true, "budget_exceeded");
+            respond(client, &crate::usage::budget_exceeded_response(&denial)).await?;
+            return Ok(());
+        }
+    };
+    let _close_event = crate::usage::CloseEventGuard(Some(connection_usage.clone()));
+    let mut forward_request_admitted = false;
     let mut l7_ctx = relay::http_context(
         &decision,
         provider_credentials,
@@ -5214,6 +5335,7 @@ async fn handle_forward_proxy(
         relay::RelaySignals {
             activity: activity_tx.cloned(),
             endpoint_observation: endpoint_observation_tx,
+            usage: Some(connection_usage.clone()),
         },
     );
     l7_ctx.request_default_port = match scheme.as_str() {
@@ -5672,9 +5794,38 @@ async fn handle_forward_proxy(
             .await?;
             return Ok(());
         }
+        if let Err(denial) = crate::l7::relay::admit_l7_usage(
+            &tunnel_engine,
+            &l7_ctx,
+            &request_info,
+            allowed,
+            &l7_config.config.endpoint_id,
+        ) {
+            emit_forward_budget_denial(
+                &denial,
+                method,
+                &host_lc,
+                port,
+                &telemetry_path,
+                policy_str,
+            );
+            emit_activity_simple(activity_tx, true, "budget_exceeded");
+            respond(client, &crate::usage::budget_exceeded_response(&denial)).await?;
+            return Ok(());
+        }
+        forward_request_admitted = true;
         l7_activity_pending = true;
         forward_tunnel_engine = Some(tunnel_engine);
         forward_l7_reeval = Some((l7_config.config.clone(), request_info));
+    }
+    if !forward_request_admitted
+        && let Err(denial) =
+            connection_usage.admit_request(&[], "", &[], crate::usage::is_write_method(method))
+    {
+        emit_forward_budget_denial(&denial, method, &host_lc, port, &telemetry_path, policy_str);
+        emit_activity_simple(activity_tx, true, "budget_exceeded");
+        respond(client, &crate::usage::budget_exceeded_response(&denial)).await?;
+        return Ok(());
     }
 
     // 5. DNS resolution + SSRF defence (mirrors the CONNECT path logic).
@@ -6096,7 +6247,7 @@ async fn handle_forward_proxy(
     // rejected WebSocket preflight cannot contact the destination.
     let dial_result = connector.connect().await;
     let mut upstream = match dial_result {
-        Ok(s) => s,
+        Ok(s) => crate::usage::CountingStream::new(s, connection_usage.cell()),
         Err(e) => {
             let event = HttpActivityBuilder::new(openshell_ocsf::ctx::ctx())
                 .activity(ActivityId::Fail)
@@ -9131,6 +9282,7 @@ network_policies:
             binary_pid: None,
             ancestors: vec![],
             cmdline_paths: vec![],
+            binary_sha256: None,
         };
         let route = query_l7_route_snapshot(&decision, host, port).expect("L7 route should match");
         let config = select_l7_config_for_path(&route.configs, path)
@@ -12722,6 +12874,7 @@ network_policies:
                 binary_pid: Some(1),
                 ancestors: vec![],
                 cmdline_paths: vec![],
+                binary_sha256: None,
             };
             query_tls_mode(&decision, "203.0.113.10", 443)
         };

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::enums::{ActionId, DispositionId};
 use crate::events::base_event::BaseEventData;
-use crate::objects::{Actor, ConnectionInfo, Endpoint, FirewallRule};
+use crate::objects::{Actor, ConnectionInfo, Endpoint, FirewallRule, NetworkTraffic};
 
 /// OCSF Network Activity Event [4001].
 ///
@@ -61,6 +61,14 @@ pub struct NetworkActivityEvent {
     /// Whether src/dst assignment is known (v1.6.0+).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_src_dst_assignment_known: Option<bool>,
+
+    /// Totals over the life of the flow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cumulative_traffic: Option<NetworkTraffic>,
+
+    /// Flow duration in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<i64>,
 }
 
 impl Serialize for NetworkActivityEvent {
@@ -86,6 +94,8 @@ impl Serialize for NetworkActivityEvent {
             "is_src_dst_assignment_known",
             self.is_src_dst_assignment_known
         );
+        insert_optional!(obj, "cumulative_traffic", self.cumulative_traffic);
+        insert_optional!(obj, "duration", self.duration);
 
         base_val.serialize(serializer)
     }
@@ -126,6 +136,8 @@ mod tests {
             disposition: Some(DispositionId::Allowed),
             observation_point_id: Some(2),
             is_src_dst_assignment_known: Some(true),
+            cumulative_traffic: None,
+            duration: None,
         };
 
         let json = serde_json::to_value(&event).unwrap();

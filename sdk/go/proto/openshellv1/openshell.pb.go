@@ -1142,6 +1142,56 @@ func (EndpointResult) EnumDescriptor() ([]byte, []int) {
 	return file_openshell_proto_rawDescGZIP(), []int{17}
 }
 
+// Severity of an egress usage finding.
+type EgressFindingSeverity int32
+
+const (
+	EgressFindingSeverity_EGRESS_FINDING_SEVERITY_UNSPECIFIED EgressFindingSeverity = 0
+	EgressFindingSeverity_EGRESS_FINDING_SEVERITY_LOW         EgressFindingSeverity = 1
+	EgressFindingSeverity_EGRESS_FINDING_SEVERITY_MEDIUM      EgressFindingSeverity = 2
+)
+
+// Enum value maps for EgressFindingSeverity.
+var (
+	EgressFindingSeverity_name = map[int32]string{
+		0: "EGRESS_FINDING_SEVERITY_UNSPECIFIED",
+		1: "EGRESS_FINDING_SEVERITY_LOW",
+		2: "EGRESS_FINDING_SEVERITY_MEDIUM",
+	}
+	EgressFindingSeverity_value = map[string]int32{
+		"EGRESS_FINDING_SEVERITY_UNSPECIFIED": 0,
+		"EGRESS_FINDING_SEVERITY_LOW":         1,
+		"EGRESS_FINDING_SEVERITY_MEDIUM":      2,
+	}
+)
+
+func (x EgressFindingSeverity) Enum() *EgressFindingSeverity {
+	p := new(EgressFindingSeverity)
+	*p = x
+	return p
+}
+
+func (x EgressFindingSeverity) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EgressFindingSeverity) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshell_proto_enumTypes[18].Descriptor()
+}
+
+func (EgressFindingSeverity) Type() protoreflect.EnumType {
+	return &file_openshell_proto_enumTypes[18]
+}
+
+func (x EgressFindingSeverity) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EgressFindingSeverity.Descriptor instead.
+func (EgressFindingSeverity) EnumDescriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{18}
+}
+
 // IssueSandboxToken request. Empty body; identity is established by the
 // authentication credentials carried in the request headers (a projected
 // Kubernetes ServiceAccount JWT in the K8s driver path).
@@ -7626,6 +7676,7 @@ type SandboxStreamEvent struct {
 	//	*SandboxStreamEvent_Event
 	//	*SandboxStreamEvent_Warning
 	//	*SandboxStreamEvent_DraftPolicyUpdate
+	//	*SandboxStreamEvent_EgressUsage
 	Payload isSandboxStreamEvent_Payload `protobuf_oneof:"payload"`
 	// Opaque position in this sandbox's cursor space, shared across the resumable
 	// log and platform event sources. Empty for non-resumable events (status
@@ -7725,6 +7776,15 @@ func (x *SandboxStreamEvent) GetDraftPolicyUpdate() *DraftPolicyUpdate {
 	return nil
 }
 
+func (x *SandboxStreamEvent) GetEgressUsage() *EgressUsageUpdate {
+	if x != nil {
+		if x, ok := x.Payload.(*SandboxStreamEvent_EgressUsage); ok {
+			return x.EgressUsage
+		}
+	}
+	return nil
+}
+
 func (x *SandboxStreamEvent) GetCursor() string {
 	if x != nil {
 		return x.Cursor
@@ -7763,6 +7823,11 @@ type SandboxStreamEvent_DraftPolicyUpdate struct {
 	DraftPolicyUpdate *DraftPolicyUpdate `protobuf:"bytes,5,opt,name=draft_policy_update,json=draftPolicyUpdate,proto3,oneof"`
 }
 
+type SandboxStreamEvent_EgressUsage struct {
+	// New egress usage window or findings.
+	EgressUsage *EgressUsageUpdate `protobuf:"bytes,7,opt,name=egress_usage,json=egressUsage,proto3,oneof"`
+}
+
 func (*SandboxStreamEvent_Sandbox) isSandboxStreamEvent_Payload() {}
 
 func (*SandboxStreamEvent_Log) isSandboxStreamEvent_Payload() {}
@@ -7772,6 +7837,8 @@ func (*SandboxStreamEvent_Event) isSandboxStreamEvent_Payload() {}
 func (*SandboxStreamEvent_Warning) isSandboxStreamEvent_Payload() {}
 
 func (*SandboxStreamEvent_DraftPolicyUpdate) isSandboxStreamEvent_Payload() {}
+
+func (*SandboxStreamEvent_EgressUsage) isSandboxStreamEvent_Payload() {}
 
 // Log line correlated to a sandbox.
 type SandboxLogLine struct {
@@ -17222,6 +17289,1087 @@ func (x *ReportEndpointStatusRequest) GetReportSequence() uint64 {
 	return 0
 }
 
+// One window of egress usage from a sandbox supervisor.
+type ReportEgressUsageRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Workspace scope. Only a named workspace selection is accepted.
+	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,1,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
+	// Sandbox name. The authenticated sandbox principal remains authoritative.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// Ephemeral supervisor instance ID. Stable for the supervisor process
+	// lifetime, across gateway reconnects.
+	SupervisorInstanceId string `protobuf:"bytes,3,opt,name=supervisor_instance_id,json=supervisorInstanceId,proto3" json:"supervisor_instance_id,omitempty"`
+	// Monotonic window counter within one supervisor instance. The gateway adds
+	// a report only when its sequence is higher than the last accepted one.
+	WindowSequence uint64                 `protobuf:"varint,4,opt,name=window_sequence,json=windowSequence,proto3" json:"window_sequence,omitempty"`
+	WindowStart    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"`
+	WindowDuration *durationpb.Duration   `protobuf:"bytes,6,opt,name=window_duration,json=windowDuration,proto3" json:"window_duration,omitempty"`
+	Summaries      []*EgressUsageSummary  `protobuf:"bytes,7,rep,name=summaries,proto3" json:"summaries,omitempty"`
+	Findings       []*EgressUsageFinding  `protobuf:"bytes,8,rep,name=findings,proto3" json:"findings,omitempty"`
+	// Reports dropped because the supervisor outbox was full.
+	DroppedWindows uint64 `protobuf:"varint,9,opt,name=dropped_windows,json=droppedWindows,proto3" json:"dropped_windows,omitempty"`
+	// Findings not included because the report reached its finding bound.
+	DroppedFindings uint64 `protobuf:"varint,10,opt,name=dropped_findings,json=droppedFindings,proto3" json:"dropped_findings,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ReportEgressUsageRequest) Reset() {
+	*x = ReportEgressUsageRequest{}
+	mi := &file_openshell_proto_msgTypes[227]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportEgressUsageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportEgressUsageRequest) ProtoMessage() {}
+
+func (x *ReportEgressUsageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[227]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportEgressUsageRequest.ProtoReflect.Descriptor instead.
+func (*ReportEgressUsageRequest) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{227}
+}
+
+func (x *ReportEgressUsageRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelector {
+	if x != nil {
+		return x.WorkspaceScope
+	}
+	return nil
+}
+
+func (x *ReportEgressUsageRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ReportEgressUsageRequest) GetSupervisorInstanceId() string {
+	if x != nil {
+		return x.SupervisorInstanceId
+	}
+	return ""
+}
+
+func (x *ReportEgressUsageRequest) GetWindowSequence() uint64 {
+	if x != nil {
+		return x.WindowSequence
+	}
+	return 0
+}
+
+func (x *ReportEgressUsageRequest) GetWindowStart() *timestamppb.Timestamp {
+	if x != nil {
+		return x.WindowStart
+	}
+	return nil
+}
+
+func (x *ReportEgressUsageRequest) GetWindowDuration() *durationpb.Duration {
+	if x != nil {
+		return x.WindowDuration
+	}
+	return nil
+}
+
+func (x *ReportEgressUsageRequest) GetSummaries() []*EgressUsageSummary {
+	if x != nil {
+		return x.Summaries
+	}
+	return nil
+}
+
+func (x *ReportEgressUsageRequest) GetFindings() []*EgressUsageFinding {
+	if x != nil {
+		return x.Findings
+	}
+	return nil
+}
+
+func (x *ReportEgressUsageRequest) GetDroppedWindows() uint64 {
+	if x != nil {
+		return x.DroppedWindows
+	}
+	return 0
+}
+
+func (x *ReportEgressUsageRequest) GetDroppedFindings() uint64 {
+	if x != nil {
+		return x.DroppedFindings
+	}
+	return 0
+}
+
+// Acknowledgement of an egress usage report, including a repeated report.
+type ReportEgressUsageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportEgressUsageResponse) Reset() {
+	*x = ReportEgressUsageResponse{}
+	mi := &file_openshell_proto_msgTypes[228]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportEgressUsageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportEgressUsageResponse) ProtoMessage() {}
+
+func (x *ReportEgressUsageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[228]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportEgressUsageResponse.ProtoReflect.Descriptor instead.
+func (*ReportEgressUsageResponse) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{228}
+}
+
+// Counters of one usage key over one window. Carries no request paths,
+// query strings, headers, or bodies.
+type EgressUsageSummary struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Reported policy key: the smallest key in the authorizing policies.
+	PolicyKey  string `protobuf:"bytes,1,opt,name=policy_key,json=policyKey,proto3" json:"policy_key,omitempty"`
+	EndpointId string `protobuf:"bytes,2,opt,name=endpoint_id,json=endpointId,proto3" json:"endpoint_id,omitempty"`
+	// Observed host. Differs from the endpoint host for glob endpoints.
+	Host string `protobuf:"bytes,3,opt,name=host,proto3" json:"host,omitempty"`
+	Port uint32 `protobuf:"varint,4,opt,name=port,proto3" json:"port,omitempty"`
+	// Empty when process identity is unavailable.
+	BinaryPath     string `protobuf:"bytes,5,opt,name=binary_path,json=binaryPath,proto3" json:"binary_path,omitempty"`
+	BinarySha256   string `protobuf:"bytes,6,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"`
+	ConfigRevision uint64 `protobuf:"varint,7,opt,name=config_revision,json=configRevision,proto3" json:"config_revision,omitempty"`
+	PolicyHash     string `protobuf:"bytes,8,opt,name=policy_hash,json=policyHash,proto3" json:"policy_hash,omitempty"`
+	Connections    uint64 `protobuf:"varint,9,opt,name=connections,proto3" json:"connections,omitempty"`
+	Requests       uint64 `protobuf:"varint,10,opt,name=requests,proto3" json:"requests,omitempty"`
+	// Bytes sent by the sandbox.
+	BytesOut uint64 `protobuf:"varint,11,opt,name=bytes_out,json=bytesOut,proto3" json:"bytes_out,omitempty"`
+	// Bytes received by the sandbox.
+	BytesIn       uint64                `protobuf:"varint,12,opt,name=bytes_in,json=bytesIn,proto3" json:"bytes_in,omitempty"`
+	Responses     *EgressResponseCounts `protobuf:"bytes,13,opt,name=responses,proto3" json:"responses,omitempty"`
+	RuleHits      []*EgressRuleHit      `protobuf:"bytes,14,rep,name=rule_hits,json=ruleHits,proto3" json:"rule_hits,omitempty"`
+	BudgetDenials uint64                `protobuf:"varint,15,opt,name=budget_denials,json=budgetDenials,proto3" json:"budget_denials,omitempty"`
+	// True when this entry aggregates keys that did not fit the usage table.
+	Overflow bool `protobuf:"varint,16,opt,name=overflow,proto3" json:"overflow,omitempty"`
+	// Requests that can change remote state: HTTP methods other than GET,
+	// HEAD, and OPTIONS, and GraphQL mutations. JSON-RPC requests are not
+	// classified.
+	WriteRequests uint64 `protobuf:"varint,17,opt,name=write_requests,json=writeRequests,proto3" json:"write_requests,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressUsageSummary) Reset() {
+	*x = EgressUsageSummary{}
+	mi := &file_openshell_proto_msgTypes[229]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressUsageSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressUsageSummary) ProtoMessage() {}
+
+func (x *EgressUsageSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[229]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressUsageSummary.ProtoReflect.Descriptor instead.
+func (*EgressUsageSummary) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{229}
+}
+
+func (x *EgressUsageSummary) GetPolicyKey() string {
+	if x != nil {
+		return x.PolicyKey
+	}
+	return ""
+}
+
+func (x *EgressUsageSummary) GetEndpointId() string {
+	if x != nil {
+		return x.EndpointId
+	}
+	return ""
+}
+
+func (x *EgressUsageSummary) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *EgressUsageSummary) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *EgressUsageSummary) GetBinaryPath() string {
+	if x != nil {
+		return x.BinaryPath
+	}
+	return ""
+}
+
+func (x *EgressUsageSummary) GetBinarySha256() string {
+	if x != nil {
+		return x.BinarySha256
+	}
+	return ""
+}
+
+func (x *EgressUsageSummary) GetConfigRevision() uint64 {
+	if x != nil {
+		return x.ConfigRevision
+	}
+	return 0
+}
+
+func (x *EgressUsageSummary) GetPolicyHash() string {
+	if x != nil {
+		return x.PolicyHash
+	}
+	return ""
+}
+
+func (x *EgressUsageSummary) GetConnections() uint64 {
+	if x != nil {
+		return x.Connections
+	}
+	return 0
+}
+
+func (x *EgressUsageSummary) GetRequests() uint64 {
+	if x != nil {
+		return x.Requests
+	}
+	return 0
+}
+
+func (x *EgressUsageSummary) GetBytesOut() uint64 {
+	if x != nil {
+		return x.BytesOut
+	}
+	return 0
+}
+
+func (x *EgressUsageSummary) GetBytesIn() uint64 {
+	if x != nil {
+		return x.BytesIn
+	}
+	return 0
+}
+
+func (x *EgressUsageSummary) GetResponses() *EgressResponseCounts {
+	if x != nil {
+		return x.Responses
+	}
+	return nil
+}
+
+func (x *EgressUsageSummary) GetRuleHits() []*EgressRuleHit {
+	if x != nil {
+		return x.RuleHits
+	}
+	return nil
+}
+
+func (x *EgressUsageSummary) GetBudgetDenials() uint64 {
+	if x != nil {
+		return x.BudgetDenials
+	}
+	return 0
+}
+
+func (x *EgressUsageSummary) GetOverflow() bool {
+	if x != nil {
+		return x.Overflow
+	}
+	return false
+}
+
+func (x *EgressUsageSummary) GetWriteRequests() uint64 {
+	if x != nil {
+		return x.WriteRequests
+	}
+	return 0
+}
+
+// Upstream response status classes. Locally generated budget denials are
+// counted in `budget_denials`, not here.
+type EgressResponseCounts struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status_2Xx    uint64                 `protobuf:"varint,1,opt,name=status_2xx,json=status2xx,proto3" json:"status_2xx,omitempty"`
+	Status_3Xx    uint64                 `protobuf:"varint,2,opt,name=status_3xx,json=status3xx,proto3" json:"status_3xx,omitempty"`
+	Status_4Xx    uint64                 `protobuf:"varint,3,opt,name=status_4xx,json=status4xx,proto3" json:"status_4xx,omitempty"`
+	Status_5Xx    uint64                 `protobuf:"varint,4,opt,name=status_5xx,json=status5xx,proto3" json:"status_5xx,omitempty"`
+	Status_429    uint64                 `protobuf:"varint,5,opt,name=status_429,json=status429,proto3" json:"status_429,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressResponseCounts) Reset() {
+	*x = EgressResponseCounts{}
+	mi := &file_openshell_proto_msgTypes[230]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressResponseCounts) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressResponseCounts) ProtoMessage() {}
+
+func (x *EgressResponseCounts) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[230]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressResponseCounts.ProtoReflect.Descriptor instead.
+func (*EgressResponseCounts) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{230}
+}
+
+func (x *EgressResponseCounts) GetStatus_2Xx() uint64 {
+	if x != nil {
+		return x.Status_2Xx
+	}
+	return 0
+}
+
+func (x *EgressResponseCounts) GetStatus_3Xx() uint64 {
+	if x != nil {
+		return x.Status_3Xx
+	}
+	return 0
+}
+
+func (x *EgressResponseCounts) GetStatus_4Xx() uint64 {
+	if x != nil {
+		return x.Status_4Xx
+	}
+	return 0
+}
+
+func (x *EgressResponseCounts) GetStatus_5Xx() uint64 {
+	if x != nil {
+		return x.Status_5Xx
+	}
+	return 0
+}
+
+func (x *EgressResponseCounts) GetStatus_429() uint64 {
+	if x != nil {
+		return x.Status_429
+	}
+	return 0
+}
+
+// Requests admitted by one L7 rule.
+type EgressRuleHit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RuleId        string                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	Count         uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressRuleHit) Reset() {
+	*x = EgressRuleHit{}
+	mi := &file_openshell_proto_msgTypes[231]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressRuleHit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressRuleHit) ProtoMessage() {}
+
+func (x *EgressRuleHit) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[231]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressRuleHit.ProtoReflect.Descriptor instead.
+func (*EgressRuleHit) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{231}
+}
+
+func (x *EgressRuleHit) GetRuleId() string {
+	if x != nil {
+		return x.RuleId
+	}
+	return ""
+}
+
+func (x *EgressRuleHit) GetCount() uint64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+// One egress usage finding: budget, novelty, overflow, or drift.
+type EgressUsageFinding struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// For example `egress.budget_exceeded`, `egress.new_host`, `egress.drift`.
+	FindingType  string                `protobuf:"bytes,1,opt,name=finding_type,json=findingType,proto3" json:"finding_type,omitempty"`
+	Severity     EgressFindingSeverity `protobuf:"varint,2,opt,name=severity,proto3,enum=openshell.v1.EgressFindingSeverity" json:"severity,omitempty"`
+	PolicyKey    string                `protobuf:"bytes,3,opt,name=policy_key,json=policyKey,proto3" json:"policy_key,omitempty"`
+	EndpointId   string                `protobuf:"bytes,4,opt,name=endpoint_id,json=endpointId,proto3" json:"endpoint_id,omitempty"`
+	Host         string                `protobuf:"bytes,5,opt,name=host,proto3" json:"host,omitempty"`
+	Port         uint32                `protobuf:"varint,6,opt,name=port,proto3" json:"port,omitempty"`
+	BinarySha256 string                `protobuf:"bytes,7,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"`
+	// Budget name for budget findings.
+	Budget string `protobuf:"bytes,8,opt,name=budget,proto3" json:"budget,omitempty"`
+	// Counter name for budget and drift findings.
+	Counter string `protobuf:"bytes,9,opt,name=counter,proto3" json:"counter,omitempty"`
+	// `deny` or `alert` for budget findings.
+	Action        string                 `protobuf:"bytes,10,opt,name=action,proto3" json:"action,omitempty"`
+	Detail        string                 `protobuf:"bytes,11,opt,name=detail,proto3" json:"detail,omitempty"`
+	ObservedTime  *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=observed_time,json=observedTime,proto3" json:"observed_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressUsageFinding) Reset() {
+	*x = EgressUsageFinding{}
+	mi := &file_openshell_proto_msgTypes[232]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressUsageFinding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressUsageFinding) ProtoMessage() {}
+
+func (x *EgressUsageFinding) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[232]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressUsageFinding.ProtoReflect.Descriptor instead.
+func (*EgressUsageFinding) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{232}
+}
+
+func (x *EgressUsageFinding) GetFindingType() string {
+	if x != nil {
+		return x.FindingType
+	}
+	return ""
+}
+
+func (x *EgressUsageFinding) GetSeverity() EgressFindingSeverity {
+	if x != nil {
+		return x.Severity
+	}
+	return EgressFindingSeverity_EGRESS_FINDING_SEVERITY_UNSPECIFIED
+}
+
+func (x *EgressUsageFinding) GetPolicyKey() string {
+	if x != nil {
+		return x.PolicyKey
+	}
+	return ""
+}
+
+func (x *EgressUsageFinding) GetEndpointId() string {
+	if x != nil {
+		return x.EndpointId
+	}
+	return ""
+}
+
+func (x *EgressUsageFinding) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *EgressUsageFinding) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *EgressUsageFinding) GetBinarySha256() string {
+	if x != nil {
+		return x.BinarySha256
+	}
+	return ""
+}
+
+func (x *EgressUsageFinding) GetBudget() string {
+	if x != nil {
+		return x.Budget
+	}
+	return ""
+}
+
+func (x *EgressUsageFinding) GetCounter() string {
+	if x != nil {
+		return x.Counter
+	}
+	return ""
+}
+
+func (x *EgressUsageFinding) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *EgressUsageFinding) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+func (x *EgressUsageFinding) GetObservedTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedTime
+	}
+	return nil
+}
+
+// Get recent egress usage of one sandbox.
+type GetEgressUsageRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Workspace scope. Only a named workspace selection is accepted.
+	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,1,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
+	// Canonical sandbox name.
+	Sandbox       string `protobuf:"bytes,2,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetEgressUsageRequest) Reset() {
+	*x = GetEgressUsageRequest{}
+	mi := &file_openshell_proto_msgTypes[233]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetEgressUsageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetEgressUsageRequest) ProtoMessage() {}
+
+func (x *GetEgressUsageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[233]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetEgressUsageRequest.ProtoReflect.Descriptor instead.
+func (*GetEgressUsageRequest) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{233}
+}
+
+func (x *GetEgressUsageRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelector {
+	if x != nil {
+		return x.WorkspaceScope
+	}
+	return nil
+}
+
+func (x *GetEgressUsageRequest) GetSandbox() string {
+	if x != nil {
+		return x.Sandbox
+	}
+	return ""
+}
+
+// Recent egress usage windows and findings, oldest first.
+type GetEgressUsageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Windows       []*EgressUsageWindow   `protobuf:"bytes,1,rep,name=windows,proto3" json:"windows,omitempty"`
+	Findings      []*EgressUsageFinding  `protobuf:"bytes,2,rep,name=findings,proto3" json:"findings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetEgressUsageResponse) Reset() {
+	*x = GetEgressUsageResponse{}
+	mi := &file_openshell_proto_msgTypes[234]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetEgressUsageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetEgressUsageResponse) ProtoMessage() {}
+
+func (x *GetEgressUsageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[234]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetEgressUsageResponse.ProtoReflect.Descriptor instead.
+func (*GetEgressUsageResponse) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{234}
+}
+
+func (x *GetEgressUsageResponse) GetWindows() []*EgressUsageWindow {
+	if x != nil {
+		return x.Windows
+	}
+	return nil
+}
+
+func (x *GetEgressUsageResponse) GetFindings() []*EgressUsageFinding {
+	if x != nil {
+		return x.Findings
+	}
+	return nil
+}
+
+// Get egress usage of all sandboxes in a workspace.
+type GetFleetEgressUsageRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Workspace scope. Only a named workspace selection is accepted.
+	WorkspaceScope *datamodelv1.WorkspaceSelector `protobuf:"bytes,1,opt,name=workspace_scope,json=workspaceScope,proto3" json:"workspace_scope,omitempty"`
+	// Minutes of usage to return, newest first. 0 means 10. At most 60.
+	Minutes       uint32 `protobuf:"varint,2,opt,name=minutes,proto3" json:"minutes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetFleetEgressUsageRequest) Reset() {
+	*x = GetFleetEgressUsageRequest{}
+	mi := &file_openshell_proto_msgTypes[235]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetFleetEgressUsageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetFleetEgressUsageRequest) ProtoMessage() {}
+
+func (x *GetFleetEgressUsageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[235]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetFleetEgressUsageRequest.ProtoReflect.Descriptor instead.
+func (*GetFleetEgressUsageRequest) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{235}
+}
+
+func (x *GetFleetEgressUsageRequest) GetWorkspaceScope() *datamodelv1.WorkspaceSelector {
+	if x != nil {
+		return x.WorkspaceScope
+	}
+	return nil
+}
+
+func (x *GetFleetEgressUsageRequest) GetMinutes() uint32 {
+	if x != nil {
+		return x.Minutes
+	}
+	return 0
+}
+
+type GetFleetEgressUsageResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Destinations ordered by the largest number of sandboxes in one minute.
+	Destinations []*FleetEgressDestination `protobuf:"bytes,1,rep,name=destinations,proto3" json:"destinations,omitempty"`
+	// Fleet findings of the last 24 hours, newest first, at most 200.
+	Findings      []*EgressUsageFinding `protobuf:"bytes,2,rep,name=findings,proto3" json:"findings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetFleetEgressUsageResponse) Reset() {
+	*x = GetFleetEgressUsageResponse{}
+	mi := &file_openshell_proto_msgTypes[236]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetFleetEgressUsageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetFleetEgressUsageResponse) ProtoMessage() {}
+
+func (x *GetFleetEgressUsageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[236]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetFleetEgressUsageResponse.ProtoReflect.Descriptor instead.
+func (*GetFleetEgressUsageResponse) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{236}
+}
+
+func (x *GetFleetEgressUsageResponse) GetDestinations() []*FleetEgressDestination {
+	if x != nil {
+		return x.Destinations
+	}
+	return nil
+}
+
+func (x *GetFleetEgressUsageResponse) GetFindings() []*EgressUsageFinding {
+	if x != nil {
+		return x.Findings
+	}
+	return nil
+}
+
+// Usage of one destination by the sandboxes of one cohort.
+type FleetEgressDestination struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// `template:<name>` or `policy:<hash>`.
+	Cohort string `protobuf:"bytes,1,opt,name=cohort,proto3" json:"cohort,omitempty"`
+	Host   string `protobuf:"bytes,2,opt,name=host,proto3" json:"host,omitempty"`
+	Port   uint32 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	// Largest number of sandboxes with traffic in one minute.
+	MaxSandboxes uint64 `protobuf:"varint,4,opt,name=max_sandboxes,json=maxSandboxes,proto3" json:"max_sandboxes,omitempty"`
+	// Largest number of sandboxes with write requests in one minute.
+	MaxWriterSandboxes uint64 `protobuf:"varint,5,opt,name=max_writer_sandboxes,json=maxWriterSandboxes,proto3" json:"max_writer_sandboxes,omitempty"`
+	Requests           uint64 `protobuf:"varint,6,opt,name=requests,proto3" json:"requests,omitempty"`
+	WriteRequests      uint64 `protobuf:"varint,7,opt,name=write_requests,json=writeRequests,proto3" json:"write_requests,omitempty"`
+	BytesOut           uint64 `protobuf:"varint,8,opt,name=bytes_out,json=bytesOut,proto3" json:"bytes_out,omitempty"`
+	BytesIn            uint64 `protobuf:"varint,9,opt,name=bytes_in,json=bytesIn,proto3" json:"bytes_in,omitempty"`
+	Errors             uint64 `protobuf:"varint,10,opt,name=errors,proto3" json:"errors,omitempty"`
+	// Names of some sandboxes that used the destination.
+	ExampleSandboxes []string `protobuf:"bytes,11,rep,name=example_sandboxes,json=exampleSandboxes,proto3" json:"example_sandboxes,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *FleetEgressDestination) Reset() {
+	*x = FleetEgressDestination{}
+	mi := &file_openshell_proto_msgTypes[237]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FleetEgressDestination) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FleetEgressDestination) ProtoMessage() {}
+
+func (x *FleetEgressDestination) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[237]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FleetEgressDestination.ProtoReflect.Descriptor instead.
+func (*FleetEgressDestination) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{237}
+}
+
+func (x *FleetEgressDestination) GetCohort() string {
+	if x != nil {
+		return x.Cohort
+	}
+	return ""
+}
+
+func (x *FleetEgressDestination) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *FleetEgressDestination) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *FleetEgressDestination) GetMaxSandboxes() uint64 {
+	if x != nil {
+		return x.MaxSandboxes
+	}
+	return 0
+}
+
+func (x *FleetEgressDestination) GetMaxWriterSandboxes() uint64 {
+	if x != nil {
+		return x.MaxWriterSandboxes
+	}
+	return 0
+}
+
+func (x *FleetEgressDestination) GetRequests() uint64 {
+	if x != nil {
+		return x.Requests
+	}
+	return 0
+}
+
+func (x *FleetEgressDestination) GetWriteRequests() uint64 {
+	if x != nil {
+		return x.WriteRequests
+	}
+	return 0
+}
+
+func (x *FleetEgressDestination) GetBytesOut() uint64 {
+	if x != nil {
+		return x.BytesOut
+	}
+	return 0
+}
+
+func (x *FleetEgressDestination) GetBytesIn() uint64 {
+	if x != nil {
+		return x.BytesIn
+	}
+	return 0
+}
+
+func (x *FleetEgressDestination) GetErrors() uint64 {
+	if x != nil {
+		return x.Errors
+	}
+	return 0
+}
+
+func (x *FleetEgressDestination) GetExampleSandboxes() []string {
+	if x != nil {
+		return x.ExampleSandboxes
+	}
+	return nil
+}
+
+// One accepted usage window.
+type EgressUsageWindow struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	WindowStart    *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"`
+	WindowDuration *durationpb.Duration   `protobuf:"bytes,2,opt,name=window_duration,json=windowDuration,proto3" json:"window_duration,omitempty"`
+	Summaries      []*EgressUsageSummary  `protobuf:"bytes,3,rep,name=summaries,proto3" json:"summaries,omitempty"`
+	DroppedWindows uint64                 `protobuf:"varint,4,opt,name=dropped_windows,json=droppedWindows,proto3" json:"dropped_windows,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *EgressUsageWindow) Reset() {
+	*x = EgressUsageWindow{}
+	mi := &file_openshell_proto_msgTypes[238]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressUsageWindow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressUsageWindow) ProtoMessage() {}
+
+func (x *EgressUsageWindow) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[238]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressUsageWindow.ProtoReflect.Descriptor instead.
+func (*EgressUsageWindow) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{238}
+}
+
+func (x *EgressUsageWindow) GetWindowStart() *timestamppb.Timestamp {
+	if x != nil {
+		return x.WindowStart
+	}
+	return nil
+}
+
+func (x *EgressUsageWindow) GetWindowDuration() *durationpb.Duration {
+	if x != nil {
+		return x.WindowDuration
+	}
+	return nil
+}
+
+func (x *EgressUsageWindow) GetSummaries() []*EgressUsageSummary {
+	if x != nil {
+		return x.Summaries
+	}
+	return nil
+}
+
+func (x *EgressUsageWindow) GetDroppedWindows() uint64 {
+	if x != nil {
+		return x.DroppedWindows
+	}
+	return 0
+}
+
+// Egress usage stream event.
+type EgressUsageUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Window        *EgressUsageWindow     `protobuf:"bytes,1,opt,name=window,proto3" json:"window,omitempty"`
+	Findings      []*EgressUsageFinding  `protobuf:"bytes,2,rep,name=findings,proto3" json:"findings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressUsageUpdate) Reset() {
+	*x = EgressUsageUpdate{}
+	mi := &file_openshell_proto_msgTypes[239]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressUsageUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressUsageUpdate) ProtoMessage() {}
+
+func (x *EgressUsageUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_openshell_proto_msgTypes[239]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressUsageUpdate.ProtoReflect.Descriptor instead.
+func (*EgressUsageUpdate) Descriptor() ([]byte, []int) {
+	return file_openshell_proto_rawDescGZIP(), []int{239}
+}
+
+func (x *EgressUsageUpdate) GetWindow() *EgressUsageWindow {
+	if x != nil {
+		return x.Window
+	}
+	return nil
+}
+
+func (x *EgressUsageUpdate) GetFindings() []*EgressUsageFinding {
+	if x != nil {
+		return x.Findings
+	}
+	return nil
+}
+
 // Empty acknowledgement for a persisted endpoint status report.
 type ReportEndpointStatusResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -17231,7 +18379,7 @@ type ReportEndpointStatusResponse struct {
 
 func (x *ReportEndpointStatusResponse) Reset() {
 	*x = ReportEndpointStatusResponse{}
-	mi := &file_openshell_proto_msgTypes[227]
+	mi := &file_openshell_proto_msgTypes[240]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17243,7 +18391,7 @@ func (x *ReportEndpointStatusResponse) String() string {
 func (*ReportEndpointStatusResponse) ProtoMessage() {}
 
 func (x *ReportEndpointStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[227]
+	mi := &file_openshell_proto_msgTypes[240]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17256,7 +18404,7 @@ func (x *ReportEndpointStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportEndpointStatusResponse.ProtoReflect.Descriptor instead.
 func (*ReportEndpointStatusResponse) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{227}
+	return file_openshell_proto_rawDescGZIP(), []int{240}
 }
 
 // A configured endpoint and its last accepted network result in one record.
@@ -17285,7 +18433,7 @@ type EndpointStatus struct {
 
 func (x *EndpointStatus) Reset() {
 	*x = EndpointStatus{}
-	mi := &file_openshell_proto_msgTypes[228]
+	mi := &file_openshell_proto_msgTypes[241]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17297,7 +18445,7 @@ func (x *EndpointStatus) String() string {
 func (*EndpointStatus) ProtoMessage() {}
 
 func (x *EndpointStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[228]
+	mi := &file_openshell_proto_msgTypes[241]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17310,7 +18458,7 @@ func (x *EndpointStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndpointStatus.ProtoReflect.Descriptor instead.
 func (*EndpointStatus) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{228}
+	return file_openshell_proto_rawDescGZIP(), []int{241}
 }
 
 func (x *EndpointStatus) GetEndpointId() string {
@@ -17380,7 +18528,7 @@ type SandboxProvisioning struct {
 
 func (x *SandboxProvisioning) Reset() {
 	*x = SandboxProvisioning{}
-	mi := &file_openshell_proto_msgTypes[229]
+	mi := &file_openshell_proto_msgTypes[242]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17392,7 +18540,7 @@ func (x *SandboxProvisioning) String() string {
 func (*SandboxProvisioning) ProtoMessage() {}
 
 func (x *SandboxProvisioning) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[229]
+	mi := &file_openshell_proto_msgTypes[242]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17405,7 +18553,7 @@ func (x *SandboxProvisioning) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxProvisioning.ProtoReflect.Descriptor instead.
 func (*SandboxProvisioning) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{229}
+	return file_openshell_proto_rawDescGZIP(), []int{242}
 }
 
 func (x *SandboxProvisioning) GetAttemptId() string {
@@ -17498,7 +18646,7 @@ type SandboxServiceExposure struct {
 
 func (x *SandboxServiceExposure) Reset() {
 	*x = SandboxServiceExposure{}
-	mi := &file_openshell_proto_msgTypes[230]
+	mi := &file_openshell_proto_msgTypes[243]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -17510,7 +18658,7 @@ func (x *SandboxServiceExposure) String() string {
 func (*SandboxServiceExposure) ProtoMessage() {}
 
 func (x *SandboxServiceExposure) ProtoReflect() protoreflect.Message {
-	mi := &file_openshell_proto_msgTypes[230]
+	mi := &file_openshell_proto_msgTypes[243]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17523,7 +18671,7 @@ func (x *SandboxServiceExposure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxServiceExposure.ProtoReflect.Descriptor instead.
 func (*SandboxServiceExposure) Descriptor() ([]byte, []int) {
-	return file_openshell_proto_rawDescGZIP(), []int{230}
+	return file_openshell_proto_rawDescGZIP(), []int{243}
 }
 
 func (x *SandboxServiceExposure) GetService() string {
@@ -18059,13 +19207,14 @@ const file_openshell_proto_rawDesc = "" +
 	"logSources\x12\"\n" +
 	"\rlog_min_level\x18\n" +
 	" \x01(\tR\vlogMinLevel\x12.\n" +
-	"\x13resume_after_cursor\x18\f \x01(\tR\x11resumeAfterCursorJ\x04\b\b\x10\tR\flog_since_ms\"\xe4\x02\n" +
+	"\x13resume_after_cursor\x18\f \x01(\tR\x11resumeAfterCursorJ\x04\b\b\x10\tR\flog_since_ms\"\xaa\x03\n" +
 	"\x12SandboxStreamEvent\x121\n" +
 	"\asandbox\x18\x01 \x01(\v2\x15.openshell.v1.SandboxH\x00R\asandbox\x120\n" +
 	"\x03log\x18\x02 \x01(\v2\x1c.openshell.v1.SandboxLogLineH\x00R\x03log\x123\n" +
 	"\x05event\x18\x03 \x01(\v2\x1b.openshell.v1.PlatformEventH\x00R\x05event\x12>\n" +
 	"\awarning\x18\x04 \x01(\v2\".openshell.v1.SandboxStreamWarningH\x00R\awarning\x12Q\n" +
-	"\x13draft_policy_update\x18\x05 \x01(\v2\x1f.openshell.v1.DraftPolicyUpdateH\x00R\x11draftPolicyUpdate\x12\x16\n" +
+	"\x13draft_policy_update\x18\x05 \x01(\v2\x1f.openshell.v1.DraftPolicyUpdateH\x00R\x11draftPolicyUpdate\x12D\n" +
+	"\fegress_usage\x18\a \x01(\v2\x1f.openshell.v1.EgressUsageUpdateH\x00R\vegressUsage\x12\x16\n" +
 	"\x06cursor\x18\x06 \x01(\tR\x06cursorB\t\n" +
 	"\apayload\"\xdb\x02\n" +
 	"\x0eSandboxLogLine\x12\x1d\n" +
@@ -18827,7 +19976,106 @@ const file_openshell_proto_rawDesc = "" +
 	"\fobservations\x18\x04 \x03(\v2!.openshell.v1.EndpointObservationR\fobservations\x122\n" +
 	"\x15observed_endpoint_ids\x18\x05 \x03(\tR\x13observedEndpointIds\x122\n" +
 	"\x15supervisor_session_id\x18\x06 \x01(\tR\x13supervisorSessionId\x12'\n" +
-	"\x0freport_sequence\x18\a \x01(\x04R\x0ereportSequence\"\x1e\n" +
+	"\x0freport_sequence\x18\a \x01(\x04R\x0ereportSequence\"\xb6\x04\n" +
+	"\x18ReportEgressUsageRequest\x12R\n" +
+	"\x0fworkspace_scope\x18\x01 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x124\n" +
+	"\x16supervisor_instance_id\x18\x03 \x01(\tR\x14supervisorInstanceId\x12'\n" +
+	"\x0fwindow_sequence\x18\x04 \x01(\x04R\x0ewindowSequence\x12=\n" +
+	"\fwindow_start\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vwindowStart\x12B\n" +
+	"\x0fwindow_duration\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\x0ewindowDuration\x12>\n" +
+	"\tsummaries\x18\a \x03(\v2 .openshell.v1.EgressUsageSummaryR\tsummaries\x12<\n" +
+	"\bfindings\x18\b \x03(\v2 .openshell.v1.EgressUsageFindingR\bfindings\x12'\n" +
+	"\x0fdropped_windows\x18\t \x01(\x04R\x0edroppedWindows\x12)\n" +
+	"\x10dropped_findings\x18\n" +
+	" \x01(\x04R\x0fdroppedFindings\"\x1b\n" +
+	"\x19ReportEgressUsageResponse\"\xe8\x04\n" +
+	"\x12EgressUsageSummary\x12\x1d\n" +
+	"\n" +
+	"policy_key\x18\x01 \x01(\tR\tpolicyKey\x12\x1f\n" +
+	"\vendpoint_id\x18\x02 \x01(\tR\n" +
+	"endpointId\x12\x12\n" +
+	"\x04host\x18\x03 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x04 \x01(\rR\x04port\x12\x1f\n" +
+	"\vbinary_path\x18\x05 \x01(\tR\n" +
+	"binaryPath\x12#\n" +
+	"\rbinary_sha256\x18\x06 \x01(\tR\fbinarySha256\x12'\n" +
+	"\x0fconfig_revision\x18\a \x01(\x04R\x0econfigRevision\x12\x1f\n" +
+	"\vpolicy_hash\x18\b \x01(\tR\n" +
+	"policyHash\x12 \n" +
+	"\vconnections\x18\t \x01(\x04R\vconnections\x12\x1a\n" +
+	"\brequests\x18\n" +
+	" \x01(\x04R\brequests\x12\x1b\n" +
+	"\tbytes_out\x18\v \x01(\x04R\bbytesOut\x12\x19\n" +
+	"\bbytes_in\x18\f \x01(\x04R\abytesIn\x12@\n" +
+	"\tresponses\x18\r \x01(\v2\".openshell.v1.EgressResponseCountsR\tresponses\x128\n" +
+	"\trule_hits\x18\x0e \x03(\v2\x1b.openshell.v1.EgressRuleHitR\bruleHits\x12%\n" +
+	"\x0ebudget_denials\x18\x0f \x01(\x04R\rbudgetDenials\x12\x1a\n" +
+	"\boverflow\x18\x10 \x01(\bR\boverflow\x12%\n" +
+	"\x0ewrite_requests\x18\x11 \x01(\x04R\rwriteRequests\"\xb1\x01\n" +
+	"\x14EgressResponseCounts\x12\x1d\n" +
+	"\n" +
+	"status_2xx\x18\x01 \x01(\x04R\tstatus2xx\x12\x1d\n" +
+	"\n" +
+	"status_3xx\x18\x02 \x01(\x04R\tstatus3xx\x12\x1d\n" +
+	"\n" +
+	"status_4xx\x18\x03 \x01(\x04R\tstatus4xx\x12\x1d\n" +
+	"\n" +
+	"status_5xx\x18\x04 \x01(\x04R\tstatus5xx\x12\x1d\n" +
+	"\n" +
+	"status_429\x18\x05 \x01(\x04R\tstatus429\">\n" +
+	"\rEgressRuleHit\x12\x17\n" +
+	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12\x14\n" +
+	"\x05count\x18\x02 \x01(\x04R\x05count\"\xa8\x03\n" +
+	"\x12EgressUsageFinding\x12!\n" +
+	"\ffinding_type\x18\x01 \x01(\tR\vfindingType\x12?\n" +
+	"\bseverity\x18\x02 \x01(\x0e2#.openshell.v1.EgressFindingSeverityR\bseverity\x12\x1d\n" +
+	"\n" +
+	"policy_key\x18\x03 \x01(\tR\tpolicyKey\x12\x1f\n" +
+	"\vendpoint_id\x18\x04 \x01(\tR\n" +
+	"endpointId\x12\x12\n" +
+	"\x04host\x18\x05 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x06 \x01(\rR\x04port\x12#\n" +
+	"\rbinary_sha256\x18\a \x01(\tR\fbinarySha256\x12\x16\n" +
+	"\x06budget\x18\b \x01(\tR\x06budget\x12\x18\n" +
+	"\acounter\x18\t \x01(\tR\acounter\x12\x16\n" +
+	"\x06action\x18\n" +
+	" \x01(\tR\x06action\x12\x16\n" +
+	"\x06detail\x18\v \x01(\tR\x06detail\x12?\n" +
+	"\robserved_time\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\fobservedTime\"\x85\x01\n" +
+	"\x15GetEgressUsageRequest\x12R\n" +
+	"\x0fworkspace_scope\x18\x01 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x18\n" +
+	"\asandbox\x18\x02 \x01(\tR\asandbox\"\x91\x01\n" +
+	"\x16GetEgressUsageResponse\x129\n" +
+	"\awindows\x18\x01 \x03(\v2\x1f.openshell.v1.EgressUsageWindowR\awindows\x12<\n" +
+	"\bfindings\x18\x02 \x03(\v2 .openshell.v1.EgressUsageFindingR\bfindings\"\x8a\x01\n" +
+	"\x1aGetFleetEgressUsageRequest\x12R\n" +
+	"\x0fworkspace_scope\x18\x01 \x01(\v2).openshell.datamodel.v1.WorkspaceSelectorR\x0eworkspaceScope\x12\x18\n" +
+	"\aminutes\x18\x02 \x01(\rR\aminutes\"\xa5\x01\n" +
+	"\x1bGetFleetEgressUsageResponse\x12H\n" +
+	"\fdestinations\x18\x01 \x03(\v2$.openshell.v1.FleetEgressDestinationR\fdestinations\x12<\n" +
+	"\bfindings\x18\x02 \x03(\v2 .openshell.v1.EgressUsageFindingR\bfindings\"\xef\x02\n" +
+	"\x16FleetEgressDestination\x12\x16\n" +
+	"\x06cohort\x18\x01 \x01(\tR\x06cohort\x12\x12\n" +
+	"\x04host\x18\x02 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\rR\x04port\x12#\n" +
+	"\rmax_sandboxes\x18\x04 \x01(\x04R\fmaxSandboxes\x120\n" +
+	"\x14max_writer_sandboxes\x18\x05 \x01(\x04R\x12maxWriterSandboxes\x12\x1a\n" +
+	"\brequests\x18\x06 \x01(\x04R\brequests\x12%\n" +
+	"\x0ewrite_requests\x18\a \x01(\x04R\rwriteRequests\x12\x1b\n" +
+	"\tbytes_out\x18\b \x01(\x04R\bbytesOut\x12\x19\n" +
+	"\bbytes_in\x18\t \x01(\x04R\abytesIn\x12\x16\n" +
+	"\x06errors\x18\n" +
+	" \x01(\x04R\x06errors\x12+\n" +
+	"\x11example_sandboxes\x18\v \x03(\tR\x10exampleSandboxes\"\xff\x01\n" +
+	"\x11EgressUsageWindow\x12=\n" +
+	"\fwindow_start\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\vwindowStart\x12B\n" +
+	"\x0fwindow_duration\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x0ewindowDuration\x12>\n" +
+	"\tsummaries\x18\x03 \x03(\v2 .openshell.v1.EgressUsageSummaryR\tsummaries\x12'\n" +
+	"\x0fdropped_windows\x18\x04 \x01(\x04R\x0edroppedWindows\"\x8a\x01\n" +
+	"\x11EgressUsageUpdate\x127\n" +
+	"\x06window\x18\x01 \x01(\v2\x1f.openshell.v1.EgressUsageWindowR\x06window\x12<\n" +
+	"\bfindings\x18\x02 \x03(\v2 .openshell.v1.EgressUsageFindingR\bfindings\"\x1e\n" +
 	"\x1cReportEndpointStatusResponse\"\x90\x02\n" +
 	"\x0eEndpointStatus\x12\x1f\n" +
 	"\vendpoint_id\x18\x01 \x01(\tR\n" +
@@ -18988,7 +20236,11 @@ const file_openshell_proto_rawDesc = "" +
 	"&ENDPOINT_RESULT_CREDENTIAL_UNAVAILABLE\x10\x04\x12\x1e\n" +
 	"\x1aENDPOINT_RESULT_TLS_FAILED\x10\x05\x12$\n" +
 	" ENDPOINT_RESULT_TRANSPORT_FAILED\x10\x06\x12%\n" +
-	"!ENDPOINT_RESULT_UPSTREAM_REJECTED\x10\a2\xafU\n" +
+	"!ENDPOINT_RESULT_UPSTREAM_REJECTED\x10\a*\x85\x01\n" +
+	"\x15EgressFindingSeverity\x12'\n" +
+	"#EGRESS_FINDING_SEVERITY_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bEGRESS_FINDING_SEVERITY_LOW\x10\x01\x12\"\n" +
+	"\x1eEGRESS_FINDING_SEVERITY_MEDIUM\x10\x022\x96Z\n" +
 	"\tOpenShell\x12Z\n" +
 	"\x06Health\x12\x1b.openshell.v1.HealthRequest\x1a\x1c.openshell.v1.HealthResponse\"\x15\x82\xb5\x18\x11\n" +
 	"\x0funauthenticated\x12i\n" +
@@ -19090,6 +20342,8 @@ const file_openshell_proto_rawDesc = "" +
 	"\x12ReportPolicyStatus\x12'.openshell.v1.ReportPolicyStatusRequest\x1a(.openshell.v1.ReportPolicyStatusResponse\"\r\x82\xb5\x18\t\n" +
 	"\asandbox\x12|\n" +
 	"\x14ReportEndpointStatus\x12).openshell.v1.ReportEndpointStatusRequest\x1a*.openshell.v1.ReportEndpointStatusResponse\"\r\x82\xb5\x18\t\n" +
+	"\asandbox\x12s\n" +
+	"\x11ReportEgressUsage\x12&.openshell.v1.ReportEgressUsageRequest\x1a'.openshell.v1.ReportEgressUsageResponse\"\r\x82\xb5\x18\t\n" +
 	"\asandbox\x12\x85\x01\n" +
 	"\x17ReportProviderReadiness\x12,.openshell.v1.ReportProviderReadinessRequest\x1a-.openshell.v1.ReportProviderReadinessResponse\"\r\x82\xb5\x18\t\n" +
 	"\asandbox\x12\x8e\x01\n" +
@@ -19099,6 +20353,10 @@ const file_openshell_proto_rawDesc = "" +
 	"\asandbox\x12\x94\x01\n" +
 	"\x1cExchangeProviderSubjectToken\x121.openshell.v1.ExchangeProviderSubjectTokenRequest\x1a2.openshell.v1.ExchangeProviderSubjectTokenResponse\"\r\x82\xb5\x18\t\n" +
 	"\asandbox\x12}\n" +
+	"\x0eGetEgressUsage\x12#.openshell.v1.GetEgressUsageRequest\x1a$.openshell.v1.GetEgressUsageResponse\" \x82\xb5\x18\x1c\n" +
+	"\x06bearer\x12\x04user\"\fsandbox:read\x12\x8d\x01\n" +
+	"\x13GetFleetEgressUsage\x12(.openshell.v1.GetFleetEgressUsageRequest\x1a).openshell.v1.GetFleetEgressUsageResponse\"!\x82\xb5\x18\x1d\n" +
+	"\x06bearer\x12\x05admin\"\fsandbox:read\x12}\n" +
 	"\x0eGetSandboxLogs\x12#.openshell.v1.GetSandboxLogsRequest\x1a$.openshell.v1.GetSandboxLogsResponse\" \x82\xb5\x18\x1c\n" +
 	"\x06bearer\x12\x04user\"\fsandbox:read\x12o\n" +
 	"\x0fPushSandboxLogs\x12$.openshell.v1.PushSandboxLogsRequest\x1a%.openshell.v1.PushSandboxLogsResponse\"\r\x82\xb5\x18\t\n" +
@@ -19121,6 +20379,12 @@ const file_openshell_proto_rawDesc = "" +
 	"\x82\xb5\x18\x06\n" +
 	"\x04peer\x12\x89\x01\n" +
 	"\x1cPeerGetSandboxProviderStatus\x12-.openshell.v1.GetSandboxProviderStatusRequest\x1a..openshell.v1.GetSandboxProviderStatusResponse\"\n" +
+	"\x82\xb5\x18\x06\n" +
+	"\x04peer\x12t\n" +
+	"\x15PeerReportEgressUsage\x12&.openshell.v1.ReportEgressUsageRequest\x1a'.openshell.v1.ReportEgressUsageResponse\"\n" +
+	"\x82\xb5\x18\x06\n" +
+	"\x04peer\x12k\n" +
+	"\x12PeerGetEgressUsage\x12#.openshell.v1.GetEgressUsageRequest\x1a$.openshell.v1.GetEgressUsageResponse\"\n" +
 	"\x82\xb5\x18\x06\n" +
 	"\x04peer\x12w\n" +
 	"\fWatchSandbox\x12!.openshell.v1.WatchSandboxRequest\x1a .openshell.v1.SandboxStreamEvent\" \x82\xb5\x18\x1c\n" +
@@ -19174,8 +20438,8 @@ func file_openshell_proto_rawDescGZIP() []byte {
 	return file_openshell_proto_rawDescData
 }
 
-var file_openshell_proto_enumTypes = make([]protoimpl.EnumInfo, 18)
-var file_openshell_proto_msgTypes = make([]protoimpl.MessageInfo, 253)
+var file_openshell_proto_enumTypes = make([]protoimpl.EnumInfo, 19)
+var file_openshell_proto_msgTypes = make([]protoimpl.MessageInfo, 266)
 var file_openshell_proto_goTypes = []any{
 	(ExtensionKind)(0),                                   // 0: openshell.v1.ExtensionKind
 	(SandboxPhase)(0),                                    // 1: openshell.v1.SandboxPhase
@@ -19195,765 +20459,810 @@ var file_openshell_proto_goTypes = []any{
 	(ProviderCredentialRefreshRecoveryAction)(0),         // 15: openshell.v1.ProviderCredentialRefreshRecoveryAction
 	(DeletionOutcome)(0),                                 // 16: openshell.v1.DeletionOutcome
 	(EndpointResult)(0),                                  // 17: openshell.v1.EndpointResult
-	(*IssueSandboxTokenRequest)(nil),                     // 18: openshell.v1.IssueSandboxTokenRequest
-	(*IssueSandboxTokenResponse)(nil),                    // 19: openshell.v1.IssueSandboxTokenResponse
-	(*RefreshSandboxTokenRequest)(nil),                   // 20: openshell.v1.RefreshSandboxTokenRequest
-	(*RefreshSandboxTokenResponse)(nil),                  // 21: openshell.v1.RefreshSandboxTokenResponse
-	(*HealthRequest)(nil),                                // 22: openshell.v1.HealthRequest
-	(*HealthResponse)(nil),                               // 23: openshell.v1.HealthResponse
-	(*GetCurrentUserRequest)(nil),                        // 24: openshell.v1.GetCurrentUserRequest
-	(*GetCurrentUserResponse)(nil),                       // 25: openshell.v1.GetCurrentUserResponse
-	(*GetGatewayInfoRequest)(nil),                        // 26: openshell.v1.GetGatewayInfoRequest
-	(*GetGatewayInfoResponse)(nil),                       // 27: openshell.v1.GetGatewayInfoResponse
-	(*NegotiatedExtensionInfo)(nil),                      // 28: openshell.v1.NegotiatedExtensionInfo
-	(*ComputeDriverInfo)(nil),                            // 29: openshell.v1.ComputeDriverInfo
-	(*ComputeDriverCapabilities)(nil),                    // 30: openshell.v1.ComputeDriverCapabilities
-	(*ResourceCapabilities)(nil),                         // 31: openshell.v1.ResourceCapabilities
-	(*CpuResourceCapabilities)(nil),                      // 32: openshell.v1.CpuResourceCapabilities
-	(*MemoryResourceCapabilities)(nil),                   // 33: openshell.v1.MemoryResourceCapabilities
-	(*GpuResourceCapabilities)(nil),                      // 34: openshell.v1.GpuResourceCapabilities
-	(*Sandbox)(nil),                                      // 35: openshell.v1.Sandbox
-	(*SandboxSpec)(nil),                                  // 36: openshell.v1.SandboxSpec
-	(*ResourceRequirements)(nil),                         // 37: openshell.v1.ResourceRequirements
-	(*GpuResourceRequirements)(nil),                      // 38: openshell.v1.GpuResourceRequirements
-	(*SandboxTemplate)(nil),                              // 39: openshell.v1.SandboxTemplate
-	(*SandboxWorkloadTemplate)(nil),                      // 40: openshell.v1.SandboxWorkloadTemplate
-	(*SandboxWorkloadTemplateSpec)(nil),                  // 41: openshell.v1.SandboxWorkloadTemplateSpec
-	(*SandboxWorkloadConfig)(nil),                        // 42: openshell.v1.SandboxWorkloadConfig
-	(*SandboxResources)(nil),                             // 43: openshell.v1.SandboxResources
-	(*SandboxServiceLevel)(nil),                          // 44: openshell.v1.SandboxServiceLevel
-	(*SandboxStartup)(nil),                               // 45: openshell.v1.SandboxStartup
-	(*SandboxWorkloadTemplateProvenance)(nil),            // 46: openshell.v1.SandboxWorkloadTemplateProvenance
-	(*SandboxStatus)(nil),                                // 47: openshell.v1.SandboxStatus
-	(*SandboxCondition)(nil),                             // 48: openshell.v1.SandboxCondition
-	(*PlatformEvent)(nil),                                // 49: openshell.v1.PlatformEvent
-	(*CreateSandboxRequest)(nil),                         // 50: openshell.v1.CreateSandboxRequest
-	(*CreateSandboxTemplateRequest)(nil),                 // 51: openshell.v1.CreateSandboxTemplateRequest
-	(*GetSandboxTemplateRequest)(nil),                    // 52: openshell.v1.GetSandboxTemplateRequest
-	(*ListSandboxTemplatesRequest)(nil),                  // 53: openshell.v1.ListSandboxTemplatesRequest
-	(*DeleteSandboxTemplateRequest)(nil),                 // 54: openshell.v1.DeleteSandboxTemplateRequest
-	(*SandboxTemplateResponse)(nil),                      // 55: openshell.v1.SandboxTemplateResponse
-	(*ListSandboxTemplatesResponse)(nil),                 // 56: openshell.v1.ListSandboxTemplatesResponse
-	(*DeleteSandboxTemplateResponse)(nil),                // 57: openshell.v1.DeleteSandboxTemplateResponse
-	(*BeginRootfsTarStagingRequest)(nil),                 // 58: openshell.v1.BeginRootfsTarStagingRequest
-	(*BeginRootfsTarStagingResponse)(nil),                // 59: openshell.v1.BeginRootfsTarStagingResponse
-	(*GetSandboxRequest)(nil),                            // 60: openshell.v1.GetSandboxRequest
-	(*ListSandboxesRequest)(nil),                         // 61: openshell.v1.ListSandboxesRequest
-	(*ListSandboxProvidersRequest)(nil),                  // 62: openshell.v1.ListSandboxProvidersRequest
-	(*AttachSandboxProviderRequest)(nil),                 // 63: openshell.v1.AttachSandboxProviderRequest
-	(*DetachSandboxProviderRequest)(nil),                 // 64: openshell.v1.DetachSandboxProviderRequest
-	(*DeleteSandboxRequest)(nil),                         // 65: openshell.v1.DeleteSandboxRequest
-	(*StopSandboxRequest)(nil),                           // 66: openshell.v1.StopSandboxRequest
-	(*StartSandboxRequest)(nil),                          // 67: openshell.v1.StartSandboxRequest
-	(*SandboxResponse)(nil),                              // 68: openshell.v1.SandboxResponse
-	(*ListSandboxesResponse)(nil),                        // 69: openshell.v1.ListSandboxesResponse
-	(*ListSandboxProvidersResponse)(nil),                 // 70: openshell.v1.ListSandboxProvidersResponse
-	(*AttachSandboxProviderResponse)(nil),                // 71: openshell.v1.AttachSandboxProviderResponse
-	(*DetachSandboxProviderResponse)(nil),                // 72: openshell.v1.DetachSandboxProviderResponse
-	(*ProviderDesiredIdentity)(nil),                      // 73: openshell.v1.ProviderDesiredIdentity
-	(*ConfigSnapshotRevision)(nil),                       // 74: openshell.v1.ConfigSnapshotRevision
-	(*SandboxConfigRevision)(nil),                        // 75: openshell.v1.SandboxConfigRevision
-	(*ConfigUpdateOperation)(nil),                        // 76: openshell.v1.ConfigUpdateOperation
-	(*ProviderMutationReceipt)(nil),                      // 77: openshell.v1.ProviderMutationReceipt
-	(*ProviderReadinessObservation)(nil),                 // 78: openshell.v1.ProviderReadinessObservation
-	(*ProviderReadinessStatus)(nil),                      // 79: openshell.v1.ProviderReadinessStatus
-	(*GetSandboxProviderStatusRequest)(nil),              // 80: openshell.v1.GetSandboxProviderStatusRequest
-	(*GetSandboxProviderStatusResponse)(nil),             // 81: openshell.v1.GetSandboxProviderStatusResponse
-	(*ReportProviderReadinessRequest)(nil),               // 82: openshell.v1.ReportProviderReadinessRequest
-	(*ReportProviderReadinessResponse)(nil),              // 83: openshell.v1.ReportProviderReadinessResponse
-	(*DeleteSandboxResponse)(nil),                        // 84: openshell.v1.DeleteSandboxResponse
-	(*CreateSshSessionRequest)(nil),                      // 85: openshell.v1.CreateSshSessionRequest
-	(*CreateSshSessionResponse)(nil),                     // 86: openshell.v1.CreateSshSessionResponse
-	(*ExposeServiceRequest)(nil),                         // 87: openshell.v1.ExposeServiceRequest
-	(*GetServiceRequest)(nil),                            // 88: openshell.v1.GetServiceRequest
-	(*ListServicesRequest)(nil),                          // 89: openshell.v1.ListServicesRequest
-	(*ListServicesResponse)(nil),                         // 90: openshell.v1.ListServicesResponse
-	(*DeleteServiceRequest)(nil),                         // 91: openshell.v1.DeleteServiceRequest
-	(*DeleteServiceResponse)(nil),                        // 92: openshell.v1.DeleteServiceResponse
-	(*ServiceEndpoint)(nil),                              // 93: openshell.v1.ServiceEndpoint
-	(*ServiceEndpointResponse)(nil),                      // 94: openshell.v1.ServiceEndpointResponse
-	(*RevokeSshSessionRequest)(nil),                      // 95: openshell.v1.RevokeSshSessionRequest
-	(*RevokeSshSessionResponse)(nil),                     // 96: openshell.v1.RevokeSshSessionResponse
-	(*ExecSandboxRequest)(nil),                           // 97: openshell.v1.ExecSandboxRequest
-	(*ExecSandboxStdout)(nil),                            // 98: openshell.v1.ExecSandboxStdout
-	(*ExecSandboxStderr)(nil),                            // 99: openshell.v1.ExecSandboxStderr
-	(*ExecSandboxExit)(nil),                              // 100: openshell.v1.ExecSandboxExit
-	(*ExecSandboxEvent)(nil),                             // 101: openshell.v1.ExecSandboxEvent
-	(*TcpForwardInit)(nil),                               // 102: openshell.v1.TcpForwardInit
-	(*TcpForwardFrame)(nil),                              // 103: openshell.v1.TcpForwardFrame
-	(*ExecSandboxInput)(nil),                             // 104: openshell.v1.ExecSandboxInput
-	(*ExecSandboxWindowResize)(nil),                      // 105: openshell.v1.ExecSandboxWindowResize
-	(*SshSession)(nil),                                   // 106: openshell.v1.SshSession
-	(*WatchSandboxRequest)(nil),                          // 107: openshell.v1.WatchSandboxRequest
-	(*SandboxStreamEvent)(nil),                           // 108: openshell.v1.SandboxStreamEvent
-	(*SandboxLogLine)(nil),                               // 109: openshell.v1.SandboxLogLine
-	(*SandboxStreamWarning)(nil),                         // 110: openshell.v1.SandboxStreamWarning
-	(*CreateProviderRequest)(nil),                        // 111: openshell.v1.CreateProviderRequest
-	(*GetProviderRequest)(nil),                           // 112: openshell.v1.GetProviderRequest
-	(*ListProvidersRequest)(nil),                         // 113: openshell.v1.ListProvidersRequest
-	(*UpdateProviderRequest)(nil),                        // 114: openshell.v1.UpdateProviderRequest
-	(*DeleteProviderRequest)(nil),                        // 115: openshell.v1.DeleteProviderRequest
-	(*ProviderResponse)(nil),                             // 116: openshell.v1.ProviderResponse
-	(*ListProvidersResponse)(nil),                        // 117: openshell.v1.ListProvidersResponse
-	(*ListProviderProfilesRequest)(nil),                  // 118: openshell.v1.ListProviderProfilesRequest
-	(*GetProviderProfileRequest)(nil),                    // 119: openshell.v1.GetProviderProfileRequest
-	(*ProviderProfileImportItem)(nil),                    // 120: openshell.v1.ProviderProfileImportItem
-	(*ProviderProfileDiagnostic)(nil),                    // 121: openshell.v1.ProviderProfileDiagnostic
-	(*ProviderCredentialTokenGrantAudienceOverride)(nil), // 122: openshell.v1.ProviderCredentialTokenGrantAudienceOverride
-	(*ProviderCredentialTokenGrantSubjectToken)(nil),     // 123: openshell.v1.ProviderCredentialTokenGrantSubjectToken
-	(*ProviderCredentialTokenGrant)(nil),                 // 124: openshell.v1.ProviderCredentialTokenGrant
-	(*ProviderProfileCredential)(nil),                    // 125: openshell.v1.ProviderProfileCredential
-	(*ProviderCredentialRefreshMaterial)(nil),            // 126: openshell.v1.ProviderCredentialRefreshMaterial
-	(*ProviderCredentialRefreshOutput)(nil),              // 127: openshell.v1.ProviderCredentialRefreshOutput
-	(*ProviderCredentialRefresh)(nil),                    // 128: openshell.v1.ProviderCredentialRefresh
-	(*ProviderCredentialRefreshStatus)(nil),              // 129: openshell.v1.ProviderCredentialRefreshStatus
-	(*ProviderProfileDiscovery)(nil),                     // 130: openshell.v1.ProviderProfileDiscovery
-	(*GetProviderRefreshStatusRequest)(nil),              // 131: openshell.v1.GetProviderRefreshStatusRequest
-	(*GetProviderRefreshStatusResponse)(nil),             // 132: openshell.v1.GetProviderRefreshStatusResponse
-	(*ConfigureProviderRefreshRequest)(nil),              // 133: openshell.v1.ConfigureProviderRefreshRequest
-	(*ConfigureProviderRefreshResponse)(nil),             // 134: openshell.v1.ConfigureProviderRefreshResponse
-	(*RotateProviderCredentialRequest)(nil),              // 135: openshell.v1.RotateProviderCredentialRequest
-	(*RotateProviderCredentialResponse)(nil),             // 136: openshell.v1.RotateProviderCredentialResponse
-	(*DeleteProviderRefreshRequest)(nil),                 // 137: openshell.v1.DeleteProviderRefreshRequest
-	(*DeleteProviderRefreshResponse)(nil),                // 138: openshell.v1.DeleteProviderRefreshResponse
-	(*ProviderProfile)(nil),                              // 139: openshell.v1.ProviderProfile
-	(*ProviderProfileResponse)(nil),                      // 140: openshell.v1.ProviderProfileResponse
-	(*ListProviderProfilesResponse)(nil),                 // 141: openshell.v1.ListProviderProfilesResponse
-	(*ImportProviderProfilesRequest)(nil),                // 142: openshell.v1.ImportProviderProfilesRequest
-	(*ImportProviderProfilesResponse)(nil),               // 143: openshell.v1.ImportProviderProfilesResponse
-	(*UpdateProviderProfilesRequest)(nil),                // 144: openshell.v1.UpdateProviderProfilesRequest
-	(*UpdateProviderProfilesResponse)(nil),               // 145: openshell.v1.UpdateProviderProfilesResponse
-	(*LintProviderProfilesRequest)(nil),                  // 146: openshell.v1.LintProviderProfilesRequest
-	(*LintProviderProfilesResponse)(nil),                 // 147: openshell.v1.LintProviderProfilesResponse
-	(*DeleteProviderResponse)(nil),                       // 148: openshell.v1.DeleteProviderResponse
-	(*DeleteProviderProfileRequest)(nil),                 // 149: openshell.v1.DeleteProviderProfileRequest
-	(*DeleteProviderProfileResponse)(nil),                // 150: openshell.v1.DeleteProviderProfileResponse
-	(*GetSandboxProviderEnvironmentRequest)(nil),         // 151: openshell.v1.GetSandboxProviderEnvironmentRequest
-	(*StaticCredentialEndpointBinding)(nil),              // 152: openshell.v1.StaticCredentialEndpointBinding
-	(*StaticCredentialBinding)(nil),                      // 153: openshell.v1.StaticCredentialBinding
-	(*GetSandboxProviderEnvironmentResponse)(nil),        // 154: openshell.v1.GetSandboxProviderEnvironmentResponse
-	(*ExchangeProviderSubjectTokenRequest)(nil),          // 155: openshell.v1.ExchangeProviderSubjectTokenRequest
-	(*ExchangeProviderSubjectTokenResponse)(nil),         // 156: openshell.v1.ExchangeProviderSubjectTokenResponse
-	(*UpdateConfigRequest)(nil),                          // 157: openshell.v1.UpdateConfigRequest
-	(*PolicyMergeOperation)(nil),                         // 158: openshell.v1.PolicyMergeOperation
-	(*AddNetworkRule)(nil),                               // 159: openshell.v1.AddNetworkRule
-	(*RemoveNetworkEndpoint)(nil),                        // 160: openshell.v1.RemoveNetworkEndpoint
-	(*RemoveNetworkRule)(nil),                            // 161: openshell.v1.RemoveNetworkRule
-	(*L7RuleTarget)(nil),                                 // 162: openshell.v1.L7RuleTarget
-	(*AddDenyRules)(nil),                                 // 163: openshell.v1.AddDenyRules
-	(*AddAllowRules)(nil),                                // 164: openshell.v1.AddAllowRules
-	(*RemoveNetworkBinary)(nil),                          // 165: openshell.v1.RemoveNetworkBinary
-	(*UpdateConfigResponse)(nil),                         // 166: openshell.v1.UpdateConfigResponse
-	(*GetSandboxPolicyStatusRequest)(nil),                // 167: openshell.v1.GetSandboxPolicyStatusRequest
-	(*GetSandboxPolicyStatusResponse)(nil),               // 168: openshell.v1.GetSandboxPolicyStatusResponse
-	(*ListSandboxPoliciesRequest)(nil),                   // 169: openshell.v1.ListSandboxPoliciesRequest
-	(*ListSandboxPoliciesResponse)(nil),                  // 170: openshell.v1.ListSandboxPoliciesResponse
-	(*ReportPolicyStatusRequest)(nil),                    // 171: openshell.v1.ReportPolicyStatusRequest
-	(*ReportPolicyStatusResponse)(nil),                   // 172: openshell.v1.ReportPolicyStatusResponse
-	(*SandboxConfigurationAdmission)(nil),                // 173: openshell.v1.SandboxConfigurationAdmission
-	(*ReportSandboxConfigurationRequest)(nil),            // 174: openshell.v1.ReportSandboxConfigurationRequest
-	(*ReportSandboxConfigurationResponse)(nil),           // 175: openshell.v1.ReportSandboxConfigurationResponse
-	(*SandboxPolicyRevision)(nil),                        // 176: openshell.v1.SandboxPolicyRevision
-	(*GetSandboxLogsRequest)(nil),                        // 177: openshell.v1.GetSandboxLogsRequest
-	(*PushSandboxLogsRequest)(nil),                       // 178: openshell.v1.PushSandboxLogsRequest
-	(*PushSandboxLogsResponse)(nil),                      // 179: openshell.v1.PushSandboxLogsResponse
-	(*GetSandboxLogsResponse)(nil),                       // 180: openshell.v1.GetSandboxLogsResponse
-	(*SupervisorMessage)(nil),                            // 181: openshell.v1.SupervisorMessage
-	(*GatewayMessage)(nil),                               // 182: openshell.v1.GatewayMessage
-	(*SupervisorHello)(nil),                              // 183: openshell.v1.SupervisorHello
-	(*SessionAccepted)(nil),                              // 184: openshell.v1.SessionAccepted
-	(*SessionRejected)(nil),                              // 185: openshell.v1.SessionRejected
-	(*SupervisorHeartbeat)(nil),                          // 186: openshell.v1.SupervisorHeartbeat
-	(*GatewayHeartbeat)(nil),                             // 187: openshell.v1.GatewayHeartbeat
-	(*ReportMainProcessExitRequest)(nil),                 // 188: openshell.v1.ReportMainProcessExitRequest
-	(*ReportMainProcessExitResponse)(nil),                // 189: openshell.v1.ReportMainProcessExitResponse
-	(*FinalizeMainProcessExitRequest)(nil),               // 190: openshell.v1.FinalizeMainProcessExitRequest
-	(*FinalizeMainProcessExitResponse)(nil),              // 191: openshell.v1.FinalizeMainProcessExitResponse
-	(*RelayOpen)(nil),                                    // 192: openshell.v1.RelayOpen
-	(*SshRelayTarget)(nil),                               // 193: openshell.v1.SshRelayTarget
-	(*TcpRelayTarget)(nil),                               // 194: openshell.v1.TcpRelayTarget
-	(*RelayInit)(nil),                                    // 195: openshell.v1.RelayInit
-	(*RelayFrame)(nil),                                   // 196: openshell.v1.RelayFrame
-	(*PeerRelayInit)(nil),                                // 197: openshell.v1.PeerRelayInit
-	(*PeerRelayFrame)(nil),                               // 198: openshell.v1.PeerRelayFrame
-	(*RelayOpenResult)(nil),                              // 199: openshell.v1.RelayOpenResult
-	(*RelayClose)(nil),                                   // 200: openshell.v1.RelayClose
-	(*L7RequestSample)(nil),                              // 201: openshell.v1.L7RequestSample
-	(*DenialSummary)(nil),                                // 202: openshell.v1.DenialSummary
-	(*DenialGroupCount)(nil),                             // 203: openshell.v1.DenialGroupCount
-	(*NetworkActivitySummary)(nil),                       // 204: openshell.v1.NetworkActivitySummary
-	(*PolicyChunk)(nil),                                  // 205: openshell.v1.PolicyChunk
-	(*DraftPolicyUpdate)(nil),                            // 206: openshell.v1.DraftPolicyUpdate
-	(*SubmitPolicyAnalysisRequest)(nil),                  // 207: openshell.v1.SubmitPolicyAnalysisRequest
-	(*SubmitPolicyAnalysisResponse)(nil),                 // 208: openshell.v1.SubmitPolicyAnalysisResponse
-	(*GetDraftPolicyRequest)(nil),                        // 209: openshell.v1.GetDraftPolicyRequest
-	(*GetDraftPolicyResponse)(nil),                       // 210: openshell.v1.GetDraftPolicyResponse
-	(*ApproveDraftChunkRequest)(nil),                     // 211: openshell.v1.ApproveDraftChunkRequest
-	(*ApproveDraftChunkResponse)(nil),                    // 212: openshell.v1.ApproveDraftChunkResponse
-	(*RejectDraftChunkRequest)(nil),                      // 213: openshell.v1.RejectDraftChunkRequest
-	(*RejectDraftChunkResponse)(nil),                     // 214: openshell.v1.RejectDraftChunkResponse
-	(*DraftChunkApproval)(nil),                           // 215: openshell.v1.DraftChunkApproval
-	(*ApproveAllDraftChunksRequest)(nil),                 // 216: openshell.v1.ApproveAllDraftChunksRequest
-	(*ApproveAllDraftChunksResponse)(nil),                // 217: openshell.v1.ApproveAllDraftChunksResponse
-	(*EditDraftChunkRequest)(nil),                        // 218: openshell.v1.EditDraftChunkRequest
-	(*EditDraftChunkResponse)(nil),                       // 219: openshell.v1.EditDraftChunkResponse
-	(*UndoDraftChunkRequest)(nil),                        // 220: openshell.v1.UndoDraftChunkRequest
-	(*UndoDraftChunkResponse)(nil),                       // 221: openshell.v1.UndoDraftChunkResponse
-	(*ClearDraftChunksRequest)(nil),                      // 222: openshell.v1.ClearDraftChunksRequest
-	(*ClearDraftChunksResponse)(nil),                     // 223: openshell.v1.ClearDraftChunksResponse
-	(*GetDraftHistoryRequest)(nil),                       // 224: openshell.v1.GetDraftHistoryRequest
-	(*DraftHistoryEntry)(nil),                            // 225: openshell.v1.DraftHistoryEntry
-	(*GetDraftHistoryResponse)(nil),                      // 226: openshell.v1.GetDraftHistoryResponse
-	(*CreateWorkspaceRequest)(nil),                       // 227: openshell.v1.CreateWorkspaceRequest
-	(*CreateWorkspaceResponse)(nil),                      // 228: openshell.v1.CreateWorkspaceResponse
-	(*GetWorkspaceRequest)(nil),                          // 229: openshell.v1.GetWorkspaceRequest
-	(*GetWorkspaceResponse)(nil),                         // 230: openshell.v1.GetWorkspaceResponse
-	(*ListWorkspacesRequest)(nil),                        // 231: openshell.v1.ListWorkspacesRequest
-	(*ListWorkspacesResponse)(nil),                       // 232: openshell.v1.ListWorkspacesResponse
-	(*DeleteWorkspaceRequest)(nil),                       // 233: openshell.v1.DeleteWorkspaceRequest
-	(*DeleteWorkspaceResponse)(nil),                      // 234: openshell.v1.DeleteWorkspaceResponse
-	(*WorkspaceMember)(nil),                              // 235: openshell.v1.WorkspaceMember
-	(*AddWorkspaceMemberRequest)(nil),                    // 236: openshell.v1.AddWorkspaceMemberRequest
-	(*AddWorkspaceMemberResponse)(nil),                   // 237: openshell.v1.AddWorkspaceMemberResponse
-	(*RemoveWorkspaceMemberRequest)(nil),                 // 238: openshell.v1.RemoveWorkspaceMemberRequest
-	(*RemoveWorkspaceMemberResponse)(nil),                // 239: openshell.v1.RemoveWorkspaceMemberResponse
-	(*ListWorkspaceMembersRequest)(nil),                  // 240: openshell.v1.ListWorkspaceMembersRequest
-	(*ListWorkspaceMembersResponse)(nil),                 // 241: openshell.v1.ListWorkspaceMembersResponse
-	(*ExtensionServiceCredential)(nil),                   // 242: openshell.v1.ExtensionServiceCredential
-	(*EndpointObservation)(nil),                          // 243: openshell.v1.EndpointObservation
-	(*ReportEndpointStatusRequest)(nil),                  // 244: openshell.v1.ReportEndpointStatusRequest
-	(*ReportEndpointStatusResponse)(nil),                 // 245: openshell.v1.ReportEndpointStatusResponse
-	(*EndpointStatus)(nil),                               // 246: openshell.v1.EndpointStatus
-	(*SandboxProvisioning)(nil),                          // 247: openshell.v1.SandboxProvisioning
-	(*SandboxServiceExposure)(nil),                       // 248: openshell.v1.SandboxServiceExposure
-	nil,                                                  // 249: openshell.v1.SandboxSpec.EnvironmentEntry
-	nil,                                                  // 250: openshell.v1.SandboxTemplate.LabelsEntry
-	nil,                                                  // 251: openshell.v1.SandboxTemplate.AnnotationsEntry
-	nil,                                                  // 252: openshell.v1.SandboxTemplate.EnvironmentEntry
-	nil,                                                  // 253: openshell.v1.SandboxWorkloadConfig.EnvironmentEntry
-	nil,                                                  // 254: openshell.v1.PlatformEvent.MetadataEntry
-	nil,                                                  // 255: openshell.v1.CreateSandboxRequest.LabelsEntry
-	nil,                                                  // 256: openshell.v1.CreateSandboxRequest.AnnotationsEntry
-	nil,                                                  // 257: openshell.v1.SandboxResponse.ServiceUrlsEntry
-	nil,                                                  // 258: openshell.v1.ExecSandboxRequest.EnvironmentEntry
-	nil,                                                  // 259: openshell.v1.SandboxLogLine.FieldsEntry
-	nil,                                                  // 260: openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry
-	nil,                                                  // 261: openshell.v1.ConfigureProviderRefreshRequest.MaterialEntry
-	nil,                                                  // 262: openshell.v1.ProviderProfile.AnnotationsEntry
-	nil,                                                  // 263: openshell.v1.GetSandboxProviderEnvironmentResponse.EnvironmentEntry
-	nil,                                                  // 264: openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry
-	nil,                                                  // 265: openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry
-	nil,                                                  // 266: openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry
-	nil,                                                  // 267: openshell.v1.UpdateConfigRequest.AnnotationsEntry
-	nil,                                                  // 268: openshell.v1.UpdateConfigResponse.AnnotationsEntry
-	nil,                                                  // 269: openshell.v1.SandboxPolicyRevision.ProvenanceEntry
-	nil,                                                  // 270: openshell.v1.CreateWorkspaceRequest.LabelsEntry
-	(*timestamppb.Timestamp)(nil),                        // 271: google.protobuf.Timestamp
-	(*datamodelv1.ObjectMeta)(nil),                       // 272: openshell.datamodel.v1.ObjectMeta
-	(*sandboxv1.SandboxPolicy)(nil),                      // 273: openshell.sandbox.v1.SandboxPolicy
-	(*structpb.Struct)(nil),                              // 274: google.protobuf.Struct
-	(*durationpb.Duration)(nil),                          // 275: google.protobuf.Duration
-	(*datamodelv1.WorkspaceSelector)(nil),                // 276: openshell.datamodel.v1.WorkspaceSelector
-	(*datamodelv1.Provider)(nil),                         // 277: openshell.datamodel.v1.Provider
-	(sandboxv1.PolicySource)(0),                          // 278: openshell.sandbox.v1.PolicySource
-	(*sandboxv1.NetworkEndpoint)(nil),                    // 279: openshell.sandbox.v1.NetworkEndpoint
-	(*sandboxv1.NetworkBinary)(nil),                      // 280: openshell.sandbox.v1.NetworkBinary
-	(*sandboxv1.SettingValue)(nil),                       // 281: openshell.sandbox.v1.SettingValue
-	(*sandboxv1.NetworkPolicyRule)(nil),                  // 282: openshell.sandbox.v1.NetworkPolicyRule
-	(*sandboxv1.L7DenyRule)(nil),                         // 283: openshell.sandbox.v1.L7DenyRule
-	(*sandboxv1.L7Rule)(nil),                             // 284: openshell.sandbox.v1.L7Rule
-	(*datamodelv1.Workspace)(nil),                        // 285: openshell.datamodel.v1.Workspace
-	(*sandboxv1.GetSandboxConfigRequest)(nil),            // 286: openshell.sandbox.v1.GetSandboxConfigRequest
-	(*sandboxv1.GetGatewayConfigRequest)(nil),            // 287: openshell.sandbox.v1.GetGatewayConfigRequest
-	(*sandboxv1.GetSandboxConfigResponse)(nil),           // 288: openshell.sandbox.v1.GetSandboxConfigResponse
-	(*sandboxv1.GetGatewayConfigResponse)(nil),           // 289: openshell.sandbox.v1.GetGatewayConfigResponse
+	(EgressFindingSeverity)(0),                           // 18: openshell.v1.EgressFindingSeverity
+	(*IssueSandboxTokenRequest)(nil),                     // 19: openshell.v1.IssueSandboxTokenRequest
+	(*IssueSandboxTokenResponse)(nil),                    // 20: openshell.v1.IssueSandboxTokenResponse
+	(*RefreshSandboxTokenRequest)(nil),                   // 21: openshell.v1.RefreshSandboxTokenRequest
+	(*RefreshSandboxTokenResponse)(nil),                  // 22: openshell.v1.RefreshSandboxTokenResponse
+	(*HealthRequest)(nil),                                // 23: openshell.v1.HealthRequest
+	(*HealthResponse)(nil),                               // 24: openshell.v1.HealthResponse
+	(*GetCurrentUserRequest)(nil),                        // 25: openshell.v1.GetCurrentUserRequest
+	(*GetCurrentUserResponse)(nil),                       // 26: openshell.v1.GetCurrentUserResponse
+	(*GetGatewayInfoRequest)(nil),                        // 27: openshell.v1.GetGatewayInfoRequest
+	(*GetGatewayInfoResponse)(nil),                       // 28: openshell.v1.GetGatewayInfoResponse
+	(*NegotiatedExtensionInfo)(nil),                      // 29: openshell.v1.NegotiatedExtensionInfo
+	(*ComputeDriverInfo)(nil),                            // 30: openshell.v1.ComputeDriverInfo
+	(*ComputeDriverCapabilities)(nil),                    // 31: openshell.v1.ComputeDriverCapabilities
+	(*ResourceCapabilities)(nil),                         // 32: openshell.v1.ResourceCapabilities
+	(*CpuResourceCapabilities)(nil),                      // 33: openshell.v1.CpuResourceCapabilities
+	(*MemoryResourceCapabilities)(nil),                   // 34: openshell.v1.MemoryResourceCapabilities
+	(*GpuResourceCapabilities)(nil),                      // 35: openshell.v1.GpuResourceCapabilities
+	(*Sandbox)(nil),                                      // 36: openshell.v1.Sandbox
+	(*SandboxSpec)(nil),                                  // 37: openshell.v1.SandboxSpec
+	(*ResourceRequirements)(nil),                         // 38: openshell.v1.ResourceRequirements
+	(*GpuResourceRequirements)(nil),                      // 39: openshell.v1.GpuResourceRequirements
+	(*SandboxTemplate)(nil),                              // 40: openshell.v1.SandboxTemplate
+	(*SandboxWorkloadTemplate)(nil),                      // 41: openshell.v1.SandboxWorkloadTemplate
+	(*SandboxWorkloadTemplateSpec)(nil),                  // 42: openshell.v1.SandboxWorkloadTemplateSpec
+	(*SandboxWorkloadConfig)(nil),                        // 43: openshell.v1.SandboxWorkloadConfig
+	(*SandboxResources)(nil),                             // 44: openshell.v1.SandboxResources
+	(*SandboxServiceLevel)(nil),                          // 45: openshell.v1.SandboxServiceLevel
+	(*SandboxStartup)(nil),                               // 46: openshell.v1.SandboxStartup
+	(*SandboxWorkloadTemplateProvenance)(nil),            // 47: openshell.v1.SandboxWorkloadTemplateProvenance
+	(*SandboxStatus)(nil),                                // 48: openshell.v1.SandboxStatus
+	(*SandboxCondition)(nil),                             // 49: openshell.v1.SandboxCondition
+	(*PlatformEvent)(nil),                                // 50: openshell.v1.PlatformEvent
+	(*CreateSandboxRequest)(nil),                         // 51: openshell.v1.CreateSandboxRequest
+	(*CreateSandboxTemplateRequest)(nil),                 // 52: openshell.v1.CreateSandboxTemplateRequest
+	(*GetSandboxTemplateRequest)(nil),                    // 53: openshell.v1.GetSandboxTemplateRequest
+	(*ListSandboxTemplatesRequest)(nil),                  // 54: openshell.v1.ListSandboxTemplatesRequest
+	(*DeleteSandboxTemplateRequest)(nil),                 // 55: openshell.v1.DeleteSandboxTemplateRequest
+	(*SandboxTemplateResponse)(nil),                      // 56: openshell.v1.SandboxTemplateResponse
+	(*ListSandboxTemplatesResponse)(nil),                 // 57: openshell.v1.ListSandboxTemplatesResponse
+	(*DeleteSandboxTemplateResponse)(nil),                // 58: openshell.v1.DeleteSandboxTemplateResponse
+	(*BeginRootfsTarStagingRequest)(nil),                 // 59: openshell.v1.BeginRootfsTarStagingRequest
+	(*BeginRootfsTarStagingResponse)(nil),                // 60: openshell.v1.BeginRootfsTarStagingResponse
+	(*GetSandboxRequest)(nil),                            // 61: openshell.v1.GetSandboxRequest
+	(*ListSandboxesRequest)(nil),                         // 62: openshell.v1.ListSandboxesRequest
+	(*ListSandboxProvidersRequest)(nil),                  // 63: openshell.v1.ListSandboxProvidersRequest
+	(*AttachSandboxProviderRequest)(nil),                 // 64: openshell.v1.AttachSandboxProviderRequest
+	(*DetachSandboxProviderRequest)(nil),                 // 65: openshell.v1.DetachSandboxProviderRequest
+	(*DeleteSandboxRequest)(nil),                         // 66: openshell.v1.DeleteSandboxRequest
+	(*StopSandboxRequest)(nil),                           // 67: openshell.v1.StopSandboxRequest
+	(*StartSandboxRequest)(nil),                          // 68: openshell.v1.StartSandboxRequest
+	(*SandboxResponse)(nil),                              // 69: openshell.v1.SandboxResponse
+	(*ListSandboxesResponse)(nil),                        // 70: openshell.v1.ListSandboxesResponse
+	(*ListSandboxProvidersResponse)(nil),                 // 71: openshell.v1.ListSandboxProvidersResponse
+	(*AttachSandboxProviderResponse)(nil),                // 72: openshell.v1.AttachSandboxProviderResponse
+	(*DetachSandboxProviderResponse)(nil),                // 73: openshell.v1.DetachSandboxProviderResponse
+	(*ProviderDesiredIdentity)(nil),                      // 74: openshell.v1.ProviderDesiredIdentity
+	(*ConfigSnapshotRevision)(nil),                       // 75: openshell.v1.ConfigSnapshotRevision
+	(*SandboxConfigRevision)(nil),                        // 76: openshell.v1.SandboxConfigRevision
+	(*ConfigUpdateOperation)(nil),                        // 77: openshell.v1.ConfigUpdateOperation
+	(*ProviderMutationReceipt)(nil),                      // 78: openshell.v1.ProviderMutationReceipt
+	(*ProviderReadinessObservation)(nil),                 // 79: openshell.v1.ProviderReadinessObservation
+	(*ProviderReadinessStatus)(nil),                      // 80: openshell.v1.ProviderReadinessStatus
+	(*GetSandboxProviderStatusRequest)(nil),              // 81: openshell.v1.GetSandboxProviderStatusRequest
+	(*GetSandboxProviderStatusResponse)(nil),             // 82: openshell.v1.GetSandboxProviderStatusResponse
+	(*ReportProviderReadinessRequest)(nil),               // 83: openshell.v1.ReportProviderReadinessRequest
+	(*ReportProviderReadinessResponse)(nil),              // 84: openshell.v1.ReportProviderReadinessResponse
+	(*DeleteSandboxResponse)(nil),                        // 85: openshell.v1.DeleteSandboxResponse
+	(*CreateSshSessionRequest)(nil),                      // 86: openshell.v1.CreateSshSessionRequest
+	(*CreateSshSessionResponse)(nil),                     // 87: openshell.v1.CreateSshSessionResponse
+	(*ExposeServiceRequest)(nil),                         // 88: openshell.v1.ExposeServiceRequest
+	(*GetServiceRequest)(nil),                            // 89: openshell.v1.GetServiceRequest
+	(*ListServicesRequest)(nil),                          // 90: openshell.v1.ListServicesRequest
+	(*ListServicesResponse)(nil),                         // 91: openshell.v1.ListServicesResponse
+	(*DeleteServiceRequest)(nil),                         // 92: openshell.v1.DeleteServiceRequest
+	(*DeleteServiceResponse)(nil),                        // 93: openshell.v1.DeleteServiceResponse
+	(*ServiceEndpoint)(nil),                              // 94: openshell.v1.ServiceEndpoint
+	(*ServiceEndpointResponse)(nil),                      // 95: openshell.v1.ServiceEndpointResponse
+	(*RevokeSshSessionRequest)(nil),                      // 96: openshell.v1.RevokeSshSessionRequest
+	(*RevokeSshSessionResponse)(nil),                     // 97: openshell.v1.RevokeSshSessionResponse
+	(*ExecSandboxRequest)(nil),                           // 98: openshell.v1.ExecSandboxRequest
+	(*ExecSandboxStdout)(nil),                            // 99: openshell.v1.ExecSandboxStdout
+	(*ExecSandboxStderr)(nil),                            // 100: openshell.v1.ExecSandboxStderr
+	(*ExecSandboxExit)(nil),                              // 101: openshell.v1.ExecSandboxExit
+	(*ExecSandboxEvent)(nil),                             // 102: openshell.v1.ExecSandboxEvent
+	(*TcpForwardInit)(nil),                               // 103: openshell.v1.TcpForwardInit
+	(*TcpForwardFrame)(nil),                              // 104: openshell.v1.TcpForwardFrame
+	(*ExecSandboxInput)(nil),                             // 105: openshell.v1.ExecSandboxInput
+	(*ExecSandboxWindowResize)(nil),                      // 106: openshell.v1.ExecSandboxWindowResize
+	(*SshSession)(nil),                                   // 107: openshell.v1.SshSession
+	(*WatchSandboxRequest)(nil),                          // 108: openshell.v1.WatchSandboxRequest
+	(*SandboxStreamEvent)(nil),                           // 109: openshell.v1.SandboxStreamEvent
+	(*SandboxLogLine)(nil),                               // 110: openshell.v1.SandboxLogLine
+	(*SandboxStreamWarning)(nil),                         // 111: openshell.v1.SandboxStreamWarning
+	(*CreateProviderRequest)(nil),                        // 112: openshell.v1.CreateProviderRequest
+	(*GetProviderRequest)(nil),                           // 113: openshell.v1.GetProviderRequest
+	(*ListProvidersRequest)(nil),                         // 114: openshell.v1.ListProvidersRequest
+	(*UpdateProviderRequest)(nil),                        // 115: openshell.v1.UpdateProviderRequest
+	(*DeleteProviderRequest)(nil),                        // 116: openshell.v1.DeleteProviderRequest
+	(*ProviderResponse)(nil),                             // 117: openshell.v1.ProviderResponse
+	(*ListProvidersResponse)(nil),                        // 118: openshell.v1.ListProvidersResponse
+	(*ListProviderProfilesRequest)(nil),                  // 119: openshell.v1.ListProviderProfilesRequest
+	(*GetProviderProfileRequest)(nil),                    // 120: openshell.v1.GetProviderProfileRequest
+	(*ProviderProfileImportItem)(nil),                    // 121: openshell.v1.ProviderProfileImportItem
+	(*ProviderProfileDiagnostic)(nil),                    // 122: openshell.v1.ProviderProfileDiagnostic
+	(*ProviderCredentialTokenGrantAudienceOverride)(nil), // 123: openshell.v1.ProviderCredentialTokenGrantAudienceOverride
+	(*ProviderCredentialTokenGrantSubjectToken)(nil),     // 124: openshell.v1.ProviderCredentialTokenGrantSubjectToken
+	(*ProviderCredentialTokenGrant)(nil),                 // 125: openshell.v1.ProviderCredentialTokenGrant
+	(*ProviderProfileCredential)(nil),                    // 126: openshell.v1.ProviderProfileCredential
+	(*ProviderCredentialRefreshMaterial)(nil),            // 127: openshell.v1.ProviderCredentialRefreshMaterial
+	(*ProviderCredentialRefreshOutput)(nil),              // 128: openshell.v1.ProviderCredentialRefreshOutput
+	(*ProviderCredentialRefresh)(nil),                    // 129: openshell.v1.ProviderCredentialRefresh
+	(*ProviderCredentialRefreshStatus)(nil),              // 130: openshell.v1.ProviderCredentialRefreshStatus
+	(*ProviderProfileDiscovery)(nil),                     // 131: openshell.v1.ProviderProfileDiscovery
+	(*GetProviderRefreshStatusRequest)(nil),              // 132: openshell.v1.GetProviderRefreshStatusRequest
+	(*GetProviderRefreshStatusResponse)(nil),             // 133: openshell.v1.GetProviderRefreshStatusResponse
+	(*ConfigureProviderRefreshRequest)(nil),              // 134: openshell.v1.ConfigureProviderRefreshRequest
+	(*ConfigureProviderRefreshResponse)(nil),             // 135: openshell.v1.ConfigureProviderRefreshResponse
+	(*RotateProviderCredentialRequest)(nil),              // 136: openshell.v1.RotateProviderCredentialRequest
+	(*RotateProviderCredentialResponse)(nil),             // 137: openshell.v1.RotateProviderCredentialResponse
+	(*DeleteProviderRefreshRequest)(nil),                 // 138: openshell.v1.DeleteProviderRefreshRequest
+	(*DeleteProviderRefreshResponse)(nil),                // 139: openshell.v1.DeleteProviderRefreshResponse
+	(*ProviderProfile)(nil),                              // 140: openshell.v1.ProviderProfile
+	(*ProviderProfileResponse)(nil),                      // 141: openshell.v1.ProviderProfileResponse
+	(*ListProviderProfilesResponse)(nil),                 // 142: openshell.v1.ListProviderProfilesResponse
+	(*ImportProviderProfilesRequest)(nil),                // 143: openshell.v1.ImportProviderProfilesRequest
+	(*ImportProviderProfilesResponse)(nil),               // 144: openshell.v1.ImportProviderProfilesResponse
+	(*UpdateProviderProfilesRequest)(nil),                // 145: openshell.v1.UpdateProviderProfilesRequest
+	(*UpdateProviderProfilesResponse)(nil),               // 146: openshell.v1.UpdateProviderProfilesResponse
+	(*LintProviderProfilesRequest)(nil),                  // 147: openshell.v1.LintProviderProfilesRequest
+	(*LintProviderProfilesResponse)(nil),                 // 148: openshell.v1.LintProviderProfilesResponse
+	(*DeleteProviderResponse)(nil),                       // 149: openshell.v1.DeleteProviderResponse
+	(*DeleteProviderProfileRequest)(nil),                 // 150: openshell.v1.DeleteProviderProfileRequest
+	(*DeleteProviderProfileResponse)(nil),                // 151: openshell.v1.DeleteProviderProfileResponse
+	(*GetSandboxProviderEnvironmentRequest)(nil),         // 152: openshell.v1.GetSandboxProviderEnvironmentRequest
+	(*StaticCredentialEndpointBinding)(nil),              // 153: openshell.v1.StaticCredentialEndpointBinding
+	(*StaticCredentialBinding)(nil),                      // 154: openshell.v1.StaticCredentialBinding
+	(*GetSandboxProviderEnvironmentResponse)(nil),        // 155: openshell.v1.GetSandboxProviderEnvironmentResponse
+	(*ExchangeProviderSubjectTokenRequest)(nil),          // 156: openshell.v1.ExchangeProviderSubjectTokenRequest
+	(*ExchangeProviderSubjectTokenResponse)(nil),         // 157: openshell.v1.ExchangeProviderSubjectTokenResponse
+	(*UpdateConfigRequest)(nil),                          // 158: openshell.v1.UpdateConfigRequest
+	(*PolicyMergeOperation)(nil),                         // 159: openshell.v1.PolicyMergeOperation
+	(*AddNetworkRule)(nil),                               // 160: openshell.v1.AddNetworkRule
+	(*RemoveNetworkEndpoint)(nil),                        // 161: openshell.v1.RemoveNetworkEndpoint
+	(*RemoveNetworkRule)(nil),                            // 162: openshell.v1.RemoveNetworkRule
+	(*L7RuleTarget)(nil),                                 // 163: openshell.v1.L7RuleTarget
+	(*AddDenyRules)(nil),                                 // 164: openshell.v1.AddDenyRules
+	(*AddAllowRules)(nil),                                // 165: openshell.v1.AddAllowRules
+	(*RemoveNetworkBinary)(nil),                          // 166: openshell.v1.RemoveNetworkBinary
+	(*UpdateConfigResponse)(nil),                         // 167: openshell.v1.UpdateConfigResponse
+	(*GetSandboxPolicyStatusRequest)(nil),                // 168: openshell.v1.GetSandboxPolicyStatusRequest
+	(*GetSandboxPolicyStatusResponse)(nil),               // 169: openshell.v1.GetSandboxPolicyStatusResponse
+	(*ListSandboxPoliciesRequest)(nil),                   // 170: openshell.v1.ListSandboxPoliciesRequest
+	(*ListSandboxPoliciesResponse)(nil),                  // 171: openshell.v1.ListSandboxPoliciesResponse
+	(*ReportPolicyStatusRequest)(nil),                    // 172: openshell.v1.ReportPolicyStatusRequest
+	(*ReportPolicyStatusResponse)(nil),                   // 173: openshell.v1.ReportPolicyStatusResponse
+	(*SandboxConfigurationAdmission)(nil),                // 174: openshell.v1.SandboxConfigurationAdmission
+	(*ReportSandboxConfigurationRequest)(nil),            // 175: openshell.v1.ReportSandboxConfigurationRequest
+	(*ReportSandboxConfigurationResponse)(nil),           // 176: openshell.v1.ReportSandboxConfigurationResponse
+	(*SandboxPolicyRevision)(nil),                        // 177: openshell.v1.SandboxPolicyRevision
+	(*GetSandboxLogsRequest)(nil),                        // 178: openshell.v1.GetSandboxLogsRequest
+	(*PushSandboxLogsRequest)(nil),                       // 179: openshell.v1.PushSandboxLogsRequest
+	(*PushSandboxLogsResponse)(nil),                      // 180: openshell.v1.PushSandboxLogsResponse
+	(*GetSandboxLogsResponse)(nil),                       // 181: openshell.v1.GetSandboxLogsResponse
+	(*SupervisorMessage)(nil),                            // 182: openshell.v1.SupervisorMessage
+	(*GatewayMessage)(nil),                               // 183: openshell.v1.GatewayMessage
+	(*SupervisorHello)(nil),                              // 184: openshell.v1.SupervisorHello
+	(*SessionAccepted)(nil),                              // 185: openshell.v1.SessionAccepted
+	(*SessionRejected)(nil),                              // 186: openshell.v1.SessionRejected
+	(*SupervisorHeartbeat)(nil),                          // 187: openshell.v1.SupervisorHeartbeat
+	(*GatewayHeartbeat)(nil),                             // 188: openshell.v1.GatewayHeartbeat
+	(*ReportMainProcessExitRequest)(nil),                 // 189: openshell.v1.ReportMainProcessExitRequest
+	(*ReportMainProcessExitResponse)(nil),                // 190: openshell.v1.ReportMainProcessExitResponse
+	(*FinalizeMainProcessExitRequest)(nil),               // 191: openshell.v1.FinalizeMainProcessExitRequest
+	(*FinalizeMainProcessExitResponse)(nil),              // 192: openshell.v1.FinalizeMainProcessExitResponse
+	(*RelayOpen)(nil),                                    // 193: openshell.v1.RelayOpen
+	(*SshRelayTarget)(nil),                               // 194: openshell.v1.SshRelayTarget
+	(*TcpRelayTarget)(nil),                               // 195: openshell.v1.TcpRelayTarget
+	(*RelayInit)(nil),                                    // 196: openshell.v1.RelayInit
+	(*RelayFrame)(nil),                                   // 197: openshell.v1.RelayFrame
+	(*PeerRelayInit)(nil),                                // 198: openshell.v1.PeerRelayInit
+	(*PeerRelayFrame)(nil),                               // 199: openshell.v1.PeerRelayFrame
+	(*RelayOpenResult)(nil),                              // 200: openshell.v1.RelayOpenResult
+	(*RelayClose)(nil),                                   // 201: openshell.v1.RelayClose
+	(*L7RequestSample)(nil),                              // 202: openshell.v1.L7RequestSample
+	(*DenialSummary)(nil),                                // 203: openshell.v1.DenialSummary
+	(*DenialGroupCount)(nil),                             // 204: openshell.v1.DenialGroupCount
+	(*NetworkActivitySummary)(nil),                       // 205: openshell.v1.NetworkActivitySummary
+	(*PolicyChunk)(nil),                                  // 206: openshell.v1.PolicyChunk
+	(*DraftPolicyUpdate)(nil),                            // 207: openshell.v1.DraftPolicyUpdate
+	(*SubmitPolicyAnalysisRequest)(nil),                  // 208: openshell.v1.SubmitPolicyAnalysisRequest
+	(*SubmitPolicyAnalysisResponse)(nil),                 // 209: openshell.v1.SubmitPolicyAnalysisResponse
+	(*GetDraftPolicyRequest)(nil),                        // 210: openshell.v1.GetDraftPolicyRequest
+	(*GetDraftPolicyResponse)(nil),                       // 211: openshell.v1.GetDraftPolicyResponse
+	(*ApproveDraftChunkRequest)(nil),                     // 212: openshell.v1.ApproveDraftChunkRequest
+	(*ApproveDraftChunkResponse)(nil),                    // 213: openshell.v1.ApproveDraftChunkResponse
+	(*RejectDraftChunkRequest)(nil),                      // 214: openshell.v1.RejectDraftChunkRequest
+	(*RejectDraftChunkResponse)(nil),                     // 215: openshell.v1.RejectDraftChunkResponse
+	(*DraftChunkApproval)(nil),                           // 216: openshell.v1.DraftChunkApproval
+	(*ApproveAllDraftChunksRequest)(nil),                 // 217: openshell.v1.ApproveAllDraftChunksRequest
+	(*ApproveAllDraftChunksResponse)(nil),                // 218: openshell.v1.ApproveAllDraftChunksResponse
+	(*EditDraftChunkRequest)(nil),                        // 219: openshell.v1.EditDraftChunkRequest
+	(*EditDraftChunkResponse)(nil),                       // 220: openshell.v1.EditDraftChunkResponse
+	(*UndoDraftChunkRequest)(nil),                        // 221: openshell.v1.UndoDraftChunkRequest
+	(*UndoDraftChunkResponse)(nil),                       // 222: openshell.v1.UndoDraftChunkResponse
+	(*ClearDraftChunksRequest)(nil),                      // 223: openshell.v1.ClearDraftChunksRequest
+	(*ClearDraftChunksResponse)(nil),                     // 224: openshell.v1.ClearDraftChunksResponse
+	(*GetDraftHistoryRequest)(nil),                       // 225: openshell.v1.GetDraftHistoryRequest
+	(*DraftHistoryEntry)(nil),                            // 226: openshell.v1.DraftHistoryEntry
+	(*GetDraftHistoryResponse)(nil),                      // 227: openshell.v1.GetDraftHistoryResponse
+	(*CreateWorkspaceRequest)(nil),                       // 228: openshell.v1.CreateWorkspaceRequest
+	(*CreateWorkspaceResponse)(nil),                      // 229: openshell.v1.CreateWorkspaceResponse
+	(*GetWorkspaceRequest)(nil),                          // 230: openshell.v1.GetWorkspaceRequest
+	(*GetWorkspaceResponse)(nil),                         // 231: openshell.v1.GetWorkspaceResponse
+	(*ListWorkspacesRequest)(nil),                        // 232: openshell.v1.ListWorkspacesRequest
+	(*ListWorkspacesResponse)(nil),                       // 233: openshell.v1.ListWorkspacesResponse
+	(*DeleteWorkspaceRequest)(nil),                       // 234: openshell.v1.DeleteWorkspaceRequest
+	(*DeleteWorkspaceResponse)(nil),                      // 235: openshell.v1.DeleteWorkspaceResponse
+	(*WorkspaceMember)(nil),                              // 236: openshell.v1.WorkspaceMember
+	(*AddWorkspaceMemberRequest)(nil),                    // 237: openshell.v1.AddWorkspaceMemberRequest
+	(*AddWorkspaceMemberResponse)(nil),                   // 238: openshell.v1.AddWorkspaceMemberResponse
+	(*RemoveWorkspaceMemberRequest)(nil),                 // 239: openshell.v1.RemoveWorkspaceMemberRequest
+	(*RemoveWorkspaceMemberResponse)(nil),                // 240: openshell.v1.RemoveWorkspaceMemberResponse
+	(*ListWorkspaceMembersRequest)(nil),                  // 241: openshell.v1.ListWorkspaceMembersRequest
+	(*ListWorkspaceMembersResponse)(nil),                 // 242: openshell.v1.ListWorkspaceMembersResponse
+	(*ExtensionServiceCredential)(nil),                   // 243: openshell.v1.ExtensionServiceCredential
+	(*EndpointObservation)(nil),                          // 244: openshell.v1.EndpointObservation
+	(*ReportEndpointStatusRequest)(nil),                  // 245: openshell.v1.ReportEndpointStatusRequest
+	(*ReportEgressUsageRequest)(nil),                     // 246: openshell.v1.ReportEgressUsageRequest
+	(*ReportEgressUsageResponse)(nil),                    // 247: openshell.v1.ReportEgressUsageResponse
+	(*EgressUsageSummary)(nil),                           // 248: openshell.v1.EgressUsageSummary
+	(*EgressResponseCounts)(nil),                         // 249: openshell.v1.EgressResponseCounts
+	(*EgressRuleHit)(nil),                                // 250: openshell.v1.EgressRuleHit
+	(*EgressUsageFinding)(nil),                           // 251: openshell.v1.EgressUsageFinding
+	(*GetEgressUsageRequest)(nil),                        // 252: openshell.v1.GetEgressUsageRequest
+	(*GetEgressUsageResponse)(nil),                       // 253: openshell.v1.GetEgressUsageResponse
+	(*GetFleetEgressUsageRequest)(nil),                   // 254: openshell.v1.GetFleetEgressUsageRequest
+	(*GetFleetEgressUsageResponse)(nil),                  // 255: openshell.v1.GetFleetEgressUsageResponse
+	(*FleetEgressDestination)(nil),                       // 256: openshell.v1.FleetEgressDestination
+	(*EgressUsageWindow)(nil),                            // 257: openshell.v1.EgressUsageWindow
+	(*EgressUsageUpdate)(nil),                            // 258: openshell.v1.EgressUsageUpdate
+	(*ReportEndpointStatusResponse)(nil),                 // 259: openshell.v1.ReportEndpointStatusResponse
+	(*EndpointStatus)(nil),                               // 260: openshell.v1.EndpointStatus
+	(*SandboxProvisioning)(nil),                          // 261: openshell.v1.SandboxProvisioning
+	(*SandboxServiceExposure)(nil),                       // 262: openshell.v1.SandboxServiceExposure
+	nil,                                                  // 263: openshell.v1.SandboxSpec.EnvironmentEntry
+	nil,                                                  // 264: openshell.v1.SandboxTemplate.LabelsEntry
+	nil,                                                  // 265: openshell.v1.SandboxTemplate.AnnotationsEntry
+	nil,                                                  // 266: openshell.v1.SandboxTemplate.EnvironmentEntry
+	nil,                                                  // 267: openshell.v1.SandboxWorkloadConfig.EnvironmentEntry
+	nil,                                                  // 268: openshell.v1.PlatformEvent.MetadataEntry
+	nil,                                                  // 269: openshell.v1.CreateSandboxRequest.LabelsEntry
+	nil,                                                  // 270: openshell.v1.CreateSandboxRequest.AnnotationsEntry
+	nil,                                                  // 271: openshell.v1.SandboxResponse.ServiceUrlsEntry
+	nil,                                                  // 272: openshell.v1.ExecSandboxRequest.EnvironmentEntry
+	nil,                                                  // 273: openshell.v1.SandboxLogLine.FieldsEntry
+	nil,                                                  // 274: openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry
+	nil,                                                  // 275: openshell.v1.ConfigureProviderRefreshRequest.MaterialEntry
+	nil,                                                  // 276: openshell.v1.ProviderProfile.AnnotationsEntry
+	nil,                                                  // 277: openshell.v1.GetSandboxProviderEnvironmentResponse.EnvironmentEntry
+	nil,                                                  // 278: openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry
+	nil,                                                  // 279: openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry
+	nil,                                                  // 280: openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry
+	nil,                                                  // 281: openshell.v1.UpdateConfigRequest.AnnotationsEntry
+	nil,                                                  // 282: openshell.v1.UpdateConfigResponse.AnnotationsEntry
+	nil,                                                  // 283: openshell.v1.SandboxPolicyRevision.ProvenanceEntry
+	nil,                                                  // 284: openshell.v1.CreateWorkspaceRequest.LabelsEntry
+	(*timestamppb.Timestamp)(nil),                        // 285: google.protobuf.Timestamp
+	(*datamodelv1.ObjectMeta)(nil),                       // 286: openshell.datamodel.v1.ObjectMeta
+	(*sandboxv1.SandboxPolicy)(nil),                      // 287: openshell.sandbox.v1.SandboxPolicy
+	(*structpb.Struct)(nil),                              // 288: google.protobuf.Struct
+	(*durationpb.Duration)(nil),                          // 289: google.protobuf.Duration
+	(*datamodelv1.WorkspaceSelector)(nil),                // 290: openshell.datamodel.v1.WorkspaceSelector
+	(*datamodelv1.Provider)(nil),                         // 291: openshell.datamodel.v1.Provider
+	(sandboxv1.PolicySource)(0),                          // 292: openshell.sandbox.v1.PolicySource
+	(*sandboxv1.NetworkEndpoint)(nil),                    // 293: openshell.sandbox.v1.NetworkEndpoint
+	(*sandboxv1.NetworkBinary)(nil),                      // 294: openshell.sandbox.v1.NetworkBinary
+	(*sandboxv1.SettingValue)(nil),                       // 295: openshell.sandbox.v1.SettingValue
+	(*sandboxv1.NetworkPolicyRule)(nil),                  // 296: openshell.sandbox.v1.NetworkPolicyRule
+	(*sandboxv1.L7DenyRule)(nil),                         // 297: openshell.sandbox.v1.L7DenyRule
+	(*sandboxv1.L7Rule)(nil),                             // 298: openshell.sandbox.v1.L7Rule
+	(*datamodelv1.Workspace)(nil),                        // 299: openshell.datamodel.v1.Workspace
+	(*sandboxv1.GetSandboxConfigRequest)(nil),            // 300: openshell.sandbox.v1.GetSandboxConfigRequest
+	(*sandboxv1.GetGatewayConfigRequest)(nil),            // 301: openshell.sandbox.v1.GetGatewayConfigRequest
+	(*sandboxv1.GetSandboxConfigResponse)(nil),           // 302: openshell.sandbox.v1.GetSandboxConfigResponse
+	(*sandboxv1.GetGatewayConfigResponse)(nil),           // 303: openshell.sandbox.v1.GetGatewayConfigResponse
 }
 var file_openshell_proto_depIdxs = []int32{
-	271, // 0: openshell.v1.IssueSandboxTokenResponse.expiration_time:type_name -> google.protobuf.Timestamp
-	271, // 1: openshell.v1.RefreshSandboxTokenResponse.expiration_time:type_name -> google.protobuf.Timestamp
-	242, // 2: openshell.v1.RefreshSandboxTokenResponse.extension_credentials:type_name -> openshell.v1.ExtensionServiceCredential
-	271, // 3: openshell.v1.RefreshSandboxTokenResponse.sandbox_expiration_time:type_name -> google.protobuf.Timestamp
+	285, // 0: openshell.v1.IssueSandboxTokenResponse.expiration_time:type_name -> google.protobuf.Timestamp
+	285, // 1: openshell.v1.RefreshSandboxTokenResponse.expiration_time:type_name -> google.protobuf.Timestamp
+	243, // 2: openshell.v1.RefreshSandboxTokenResponse.extension_credentials:type_name -> openshell.v1.ExtensionServiceCredential
+	285, // 3: openshell.v1.RefreshSandboxTokenResponse.sandbox_expiration_time:type_name -> google.protobuf.Timestamp
 	13,  // 4: openshell.v1.HealthResponse.status:type_name -> openshell.v1.ServiceStatus
 	13,  // 5: openshell.v1.GetGatewayInfoResponse.status:type_name -> openshell.v1.ServiceStatus
-	29,  // 6: openshell.v1.GetGatewayInfoResponse.compute_drivers:type_name -> openshell.v1.ComputeDriverInfo
-	28,  // 7: openshell.v1.GetGatewayInfoResponse.extensions:type_name -> openshell.v1.NegotiatedExtensionInfo
+	30,  // 6: openshell.v1.GetGatewayInfoResponse.compute_drivers:type_name -> openshell.v1.ComputeDriverInfo
+	29,  // 7: openshell.v1.GetGatewayInfoResponse.extensions:type_name -> openshell.v1.NegotiatedExtensionInfo
 	0,   // 8: openshell.v1.NegotiatedExtensionInfo.kind:type_name -> openshell.v1.ExtensionKind
-	30,  // 9: openshell.v1.ComputeDriverInfo.capabilities:type_name -> openshell.v1.ComputeDriverCapabilities
-	31,  // 10: openshell.v1.ComputeDriverCapabilities.resource_capabilities:type_name -> openshell.v1.ResourceCapabilities
-	32,  // 11: openshell.v1.ResourceCapabilities.cpu:type_name -> openshell.v1.CpuResourceCapabilities
-	33,  // 12: openshell.v1.ResourceCapabilities.memory:type_name -> openshell.v1.MemoryResourceCapabilities
-	34,  // 13: openshell.v1.ResourceCapabilities.gpu:type_name -> openshell.v1.GpuResourceCapabilities
-	272, // 14: openshell.v1.Sandbox.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	36,  // 15: openshell.v1.Sandbox.spec:type_name -> openshell.v1.SandboxSpec
-	47,  // 16: openshell.v1.Sandbox.status:type_name -> openshell.v1.SandboxStatus
-	46,  // 17: openshell.v1.Sandbox.created_from_workload_template:type_name -> openshell.v1.SandboxWorkloadTemplateProvenance
-	249, // 18: openshell.v1.SandboxSpec.environment:type_name -> openshell.v1.SandboxSpec.EnvironmentEntry
-	39,  // 19: openshell.v1.SandboxSpec.template:type_name -> openshell.v1.SandboxTemplate
-	273, // 20: openshell.v1.SandboxSpec.policy:type_name -> openshell.sandbox.v1.SandboxPolicy
-	37,  // 21: openshell.v1.SandboxSpec.resource_requirements:type_name -> openshell.v1.ResourceRequirements
-	38,  // 22: openshell.v1.ResourceRequirements.gpu:type_name -> openshell.v1.GpuResourceRequirements
-	250, // 23: openshell.v1.SandboxTemplate.labels:type_name -> openshell.v1.SandboxTemplate.LabelsEntry
-	251, // 24: openshell.v1.SandboxTemplate.annotations:type_name -> openshell.v1.SandboxTemplate.AnnotationsEntry
-	252, // 25: openshell.v1.SandboxTemplate.environment:type_name -> openshell.v1.SandboxTemplate.EnvironmentEntry
-	274, // 26: openshell.v1.SandboxTemplate.resources:type_name -> google.protobuf.Struct
-	274, // 27: openshell.v1.SandboxTemplate.driver_config:type_name -> google.protobuf.Struct
-	272, // 28: openshell.v1.SandboxWorkloadTemplate.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	41,  // 29: openshell.v1.SandboxWorkloadTemplate.spec:type_name -> openshell.v1.SandboxWorkloadTemplateSpec
-	42,  // 30: openshell.v1.SandboxWorkloadTemplateSpec.workload:type_name -> openshell.v1.SandboxWorkloadConfig
-	274, // 31: openshell.v1.SandboxWorkloadTemplateSpec.driver_config:type_name -> google.protobuf.Struct
-	44,  // 32: openshell.v1.SandboxWorkloadTemplateSpec.desired_service_level:type_name -> openshell.v1.SandboxServiceLevel
-	253, // 33: openshell.v1.SandboxWorkloadConfig.environment:type_name -> openshell.v1.SandboxWorkloadConfig.EnvironmentEntry
-	43,  // 34: openshell.v1.SandboxWorkloadConfig.resources:type_name -> openshell.v1.SandboxResources
-	38,  // 35: openshell.v1.SandboxResources.gpu:type_name -> openshell.v1.GpuResourceRequirements
-	45,  // 36: openshell.v1.SandboxServiceLevel.startup:type_name -> openshell.v1.SandboxStartup
-	275, // 37: openshell.v1.SandboxStartup.ready_within:type_name -> google.protobuf.Duration
-	48,  // 38: openshell.v1.SandboxStatus.conditions:type_name -> openshell.v1.SandboxCondition
+	31,  // 9: openshell.v1.ComputeDriverInfo.capabilities:type_name -> openshell.v1.ComputeDriverCapabilities
+	32,  // 10: openshell.v1.ComputeDriverCapabilities.resource_capabilities:type_name -> openshell.v1.ResourceCapabilities
+	33,  // 11: openshell.v1.ResourceCapabilities.cpu:type_name -> openshell.v1.CpuResourceCapabilities
+	34,  // 12: openshell.v1.ResourceCapabilities.memory:type_name -> openshell.v1.MemoryResourceCapabilities
+	35,  // 13: openshell.v1.ResourceCapabilities.gpu:type_name -> openshell.v1.GpuResourceCapabilities
+	286, // 14: openshell.v1.Sandbox.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	37,  // 15: openshell.v1.Sandbox.spec:type_name -> openshell.v1.SandboxSpec
+	48,  // 16: openshell.v1.Sandbox.status:type_name -> openshell.v1.SandboxStatus
+	47,  // 17: openshell.v1.Sandbox.created_from_workload_template:type_name -> openshell.v1.SandboxWorkloadTemplateProvenance
+	263, // 18: openshell.v1.SandboxSpec.environment:type_name -> openshell.v1.SandboxSpec.EnvironmentEntry
+	40,  // 19: openshell.v1.SandboxSpec.template:type_name -> openshell.v1.SandboxTemplate
+	287, // 20: openshell.v1.SandboxSpec.policy:type_name -> openshell.sandbox.v1.SandboxPolicy
+	38,  // 21: openshell.v1.SandboxSpec.resource_requirements:type_name -> openshell.v1.ResourceRequirements
+	39,  // 22: openshell.v1.ResourceRequirements.gpu:type_name -> openshell.v1.GpuResourceRequirements
+	264, // 23: openshell.v1.SandboxTemplate.labels:type_name -> openshell.v1.SandboxTemplate.LabelsEntry
+	265, // 24: openshell.v1.SandboxTemplate.annotations:type_name -> openshell.v1.SandboxTemplate.AnnotationsEntry
+	266, // 25: openshell.v1.SandboxTemplate.environment:type_name -> openshell.v1.SandboxTemplate.EnvironmentEntry
+	288, // 26: openshell.v1.SandboxTemplate.resources:type_name -> google.protobuf.Struct
+	288, // 27: openshell.v1.SandboxTemplate.driver_config:type_name -> google.protobuf.Struct
+	286, // 28: openshell.v1.SandboxWorkloadTemplate.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	42,  // 29: openshell.v1.SandboxWorkloadTemplate.spec:type_name -> openshell.v1.SandboxWorkloadTemplateSpec
+	43,  // 30: openshell.v1.SandboxWorkloadTemplateSpec.workload:type_name -> openshell.v1.SandboxWorkloadConfig
+	288, // 31: openshell.v1.SandboxWorkloadTemplateSpec.driver_config:type_name -> google.protobuf.Struct
+	45,  // 32: openshell.v1.SandboxWorkloadTemplateSpec.desired_service_level:type_name -> openshell.v1.SandboxServiceLevel
+	267, // 33: openshell.v1.SandboxWorkloadConfig.environment:type_name -> openshell.v1.SandboxWorkloadConfig.EnvironmentEntry
+	44,  // 34: openshell.v1.SandboxWorkloadConfig.resources:type_name -> openshell.v1.SandboxResources
+	39,  // 35: openshell.v1.SandboxResources.gpu:type_name -> openshell.v1.GpuResourceRequirements
+	46,  // 36: openshell.v1.SandboxServiceLevel.startup:type_name -> openshell.v1.SandboxStartup
+	289, // 37: openshell.v1.SandboxStartup.ready_within:type_name -> google.protobuf.Duration
+	49,  // 38: openshell.v1.SandboxStatus.conditions:type_name -> openshell.v1.SandboxCondition
 	1,   // 39: openshell.v1.SandboxStatus.phase:type_name -> openshell.v1.SandboxPhase
-	246, // 40: openshell.v1.SandboxStatus.endpoint_statuses:type_name -> openshell.v1.EndpointStatus
-	173, // 41: openshell.v1.SandboxStatus.configuration_admission:type_name -> openshell.v1.SandboxConfigurationAdmission
-	247, // 42: openshell.v1.SandboxStatus.provisioning:type_name -> openshell.v1.SandboxProvisioning
-	271, // 43: openshell.v1.SandboxCondition.transition_time:type_name -> google.protobuf.Timestamp
-	271, // 44: openshell.v1.PlatformEvent.event_time:type_name -> google.protobuf.Timestamp
-	254, // 45: openshell.v1.PlatformEvent.metadata:type_name -> openshell.v1.PlatformEvent.MetadataEntry
-	276, // 46: openshell.v1.CreateSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	36,  // 47: openshell.v1.CreateSandboxRequest.spec:type_name -> openshell.v1.SandboxSpec
-	255, // 48: openshell.v1.CreateSandboxRequest.labels:type_name -> openshell.v1.CreateSandboxRequest.LabelsEntry
-	256, // 49: openshell.v1.CreateSandboxRequest.annotations:type_name -> openshell.v1.CreateSandboxRequest.AnnotationsEntry
-	248, // 50: openshell.v1.CreateSandboxRequest.service_exposures:type_name -> openshell.v1.SandboxServiceExposure
-	276, // 51: openshell.v1.CreateSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	40,  // 52: openshell.v1.CreateSandboxTemplateRequest.template:type_name -> openshell.v1.SandboxWorkloadTemplate
-	276, // 53: openshell.v1.GetSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 54: openshell.v1.ListSandboxTemplatesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 55: openshell.v1.DeleteSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	40,  // 56: openshell.v1.SandboxTemplateResponse.template:type_name -> openshell.v1.SandboxWorkloadTemplate
-	40,  // 57: openshell.v1.ListSandboxTemplatesResponse.templates:type_name -> openshell.v1.SandboxWorkloadTemplate
+	260, // 40: openshell.v1.SandboxStatus.endpoint_statuses:type_name -> openshell.v1.EndpointStatus
+	174, // 41: openshell.v1.SandboxStatus.configuration_admission:type_name -> openshell.v1.SandboxConfigurationAdmission
+	261, // 42: openshell.v1.SandboxStatus.provisioning:type_name -> openshell.v1.SandboxProvisioning
+	285, // 43: openshell.v1.SandboxCondition.transition_time:type_name -> google.protobuf.Timestamp
+	285, // 44: openshell.v1.PlatformEvent.event_time:type_name -> google.protobuf.Timestamp
+	268, // 45: openshell.v1.PlatformEvent.metadata:type_name -> openshell.v1.PlatformEvent.MetadataEntry
+	290, // 46: openshell.v1.CreateSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	37,  // 47: openshell.v1.CreateSandboxRequest.spec:type_name -> openshell.v1.SandboxSpec
+	269, // 48: openshell.v1.CreateSandboxRequest.labels:type_name -> openshell.v1.CreateSandboxRequest.LabelsEntry
+	270, // 49: openshell.v1.CreateSandboxRequest.annotations:type_name -> openshell.v1.CreateSandboxRequest.AnnotationsEntry
+	262, // 50: openshell.v1.CreateSandboxRequest.service_exposures:type_name -> openshell.v1.SandboxServiceExposure
+	290, // 51: openshell.v1.CreateSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	41,  // 52: openshell.v1.CreateSandboxTemplateRequest.template:type_name -> openshell.v1.SandboxWorkloadTemplate
+	290, // 53: openshell.v1.GetSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 54: openshell.v1.ListSandboxTemplatesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 55: openshell.v1.DeleteSandboxTemplateRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	41,  // 56: openshell.v1.SandboxTemplateResponse.template:type_name -> openshell.v1.SandboxWorkloadTemplate
+	41,  // 57: openshell.v1.ListSandboxTemplatesResponse.templates:type_name -> openshell.v1.SandboxWorkloadTemplate
 	16,  // 58: openshell.v1.DeleteSandboxTemplateResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	276, // 59: openshell.v1.BeginRootfsTarStagingRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	271, // 60: openshell.v1.BeginRootfsTarStagingResponse.expiration_time:type_name -> google.protobuf.Timestamp
-	276, // 61: openshell.v1.GetSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 62: openshell.v1.ListSandboxesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 63: openshell.v1.ListSandboxProvidersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 64: openshell.v1.AttachSandboxProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 65: openshell.v1.DetachSandboxProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 66: openshell.v1.DeleteSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 67: openshell.v1.StopSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 68: openshell.v1.StartSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	35,  // 69: openshell.v1.SandboxResponse.sandbox:type_name -> openshell.v1.Sandbox
-	257, // 70: openshell.v1.SandboxResponse.service_urls:type_name -> openshell.v1.SandboxResponse.ServiceUrlsEntry
-	35,  // 71: openshell.v1.ListSandboxesResponse.sandboxes:type_name -> openshell.v1.Sandbox
-	277, // 72: openshell.v1.ListSandboxProvidersResponse.providers:type_name -> openshell.datamodel.v1.Provider
-	35,  // 73: openshell.v1.AttachSandboxProviderResponse.sandbox:type_name -> openshell.v1.Sandbox
-	77,  // 74: openshell.v1.AttachSandboxProviderResponse.receipt:type_name -> openshell.v1.ProviderMutationReceipt
-	35,  // 75: openshell.v1.DetachSandboxProviderResponse.sandbox:type_name -> openshell.v1.Sandbox
-	77,  // 76: openshell.v1.DetachSandboxProviderResponse.receipt:type_name -> openshell.v1.ProviderMutationReceipt
-	75,  // 77: openshell.v1.ConfigSnapshotRevision.sandbox_config:type_name -> openshell.v1.SandboxConfigRevision
-	73,  // 78: openshell.v1.ConfigSnapshotRevision.provider_target:type_name -> openshell.v1.ProviderDesiredIdentity
-	278, // 79: openshell.v1.SandboxConfigRevision.policy_source:type_name -> openshell.sandbox.v1.PolicySource
+	290, // 59: openshell.v1.BeginRootfsTarStagingRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	285, // 60: openshell.v1.BeginRootfsTarStagingResponse.expiration_time:type_name -> google.protobuf.Timestamp
+	290, // 61: openshell.v1.GetSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 62: openshell.v1.ListSandboxesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 63: openshell.v1.ListSandboxProvidersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 64: openshell.v1.AttachSandboxProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 65: openshell.v1.DetachSandboxProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 66: openshell.v1.DeleteSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 67: openshell.v1.StopSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 68: openshell.v1.StartSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	36,  // 69: openshell.v1.SandboxResponse.sandbox:type_name -> openshell.v1.Sandbox
+	271, // 70: openshell.v1.SandboxResponse.service_urls:type_name -> openshell.v1.SandboxResponse.ServiceUrlsEntry
+	36,  // 71: openshell.v1.ListSandboxesResponse.sandboxes:type_name -> openshell.v1.Sandbox
+	291, // 72: openshell.v1.ListSandboxProvidersResponse.providers:type_name -> openshell.datamodel.v1.Provider
+	36,  // 73: openshell.v1.AttachSandboxProviderResponse.sandbox:type_name -> openshell.v1.Sandbox
+	78,  // 74: openshell.v1.AttachSandboxProviderResponse.receipt:type_name -> openshell.v1.ProviderMutationReceipt
+	36,  // 75: openshell.v1.DetachSandboxProviderResponse.sandbox:type_name -> openshell.v1.Sandbox
+	78,  // 76: openshell.v1.DetachSandboxProviderResponse.receipt:type_name -> openshell.v1.ProviderMutationReceipt
+	76,  // 77: openshell.v1.ConfigSnapshotRevision.sandbox_config:type_name -> openshell.v1.SandboxConfigRevision
+	74,  // 78: openshell.v1.ConfigSnapshotRevision.provider_target:type_name -> openshell.v1.ProviderDesiredIdentity
+	292, // 79: openshell.v1.SandboxConfigRevision.policy_source:type_name -> openshell.sandbox.v1.PolicySource
 	5,   // 80: openshell.v1.ConfigUpdateOperation.component:type_name -> openshell.v1.ConfigComponent
-	74,  // 81: openshell.v1.ConfigUpdateOperation.target_revision:type_name -> openshell.v1.ConfigSnapshotRevision
+	75,  // 81: openshell.v1.ConfigUpdateOperation.target_revision:type_name -> openshell.v1.ConfigSnapshotRevision
 	7,   // 82: openshell.v1.ConfigUpdateOperation.state:type_name -> openshell.v1.ConfigUpdateOperationState
 	6,   // 83: openshell.v1.ConfigUpdateOperation.outcome:type_name -> openshell.v1.ConfigApplyOutcome
-	271, // 84: openshell.v1.ConfigUpdateOperation.created_time:type_name -> google.protobuf.Timestamp
-	271, // 85: openshell.v1.ConfigUpdateOperation.updated_time:type_name -> google.protobuf.Timestamp
-	271, // 86: openshell.v1.ConfigUpdateOperation.completed_time:type_name -> google.protobuf.Timestamp
+	285, // 84: openshell.v1.ConfigUpdateOperation.created_time:type_name -> google.protobuf.Timestamp
+	285, // 85: openshell.v1.ConfigUpdateOperation.updated_time:type_name -> google.protobuf.Timestamp
+	285, // 86: openshell.v1.ConfigUpdateOperation.completed_time:type_name -> google.protobuf.Timestamp
 	2,   // 87: openshell.v1.ProviderMutationReceipt.kind:type_name -> openshell.v1.ProviderMutationKind
-	73,  // 88: openshell.v1.ProviderMutationReceipt.desired:type_name -> openshell.v1.ProviderDesiredIdentity
-	271, // 89: openshell.v1.ProviderMutationReceipt.persisted_time:type_name -> google.protobuf.Timestamp
+	74,  // 88: openshell.v1.ProviderMutationReceipt.desired:type_name -> openshell.v1.ProviderDesiredIdentity
+	285, // 89: openshell.v1.ProviderMutationReceipt.persisted_time:type_name -> google.protobuf.Timestamp
 	4,   // 90: openshell.v1.ProviderReadinessObservation.reason:type_name -> openshell.v1.ProviderReadinessReason
-	77,  // 91: openshell.v1.ProviderReadinessStatus.receipt:type_name -> openshell.v1.ProviderMutationReceipt
+	78,  // 91: openshell.v1.ProviderReadinessStatus.receipt:type_name -> openshell.v1.ProviderMutationReceipt
 	3,   // 92: openshell.v1.ProviderReadinessStatus.state:type_name -> openshell.v1.ProviderReadinessState
 	4,   // 93: openshell.v1.ProviderReadinessStatus.reason:type_name -> openshell.v1.ProviderReadinessReason
-	78,  // 94: openshell.v1.ProviderReadinessStatus.observed:type_name -> openshell.v1.ProviderReadinessObservation
-	271, // 95: openshell.v1.ProviderReadinessStatus.observed_time:type_name -> google.protobuf.Timestamp
-	271, // 96: openshell.v1.ProviderReadinessStatus.evaluated_time:type_name -> google.protobuf.Timestamp
-	76,  // 97: openshell.v1.ProviderReadinessStatus.operation:type_name -> openshell.v1.ConfigUpdateOperation
-	276, // 98: openshell.v1.GetSandboxProviderStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	79,  // 99: openshell.v1.GetSandboxProviderStatusResponse.status:type_name -> openshell.v1.ProviderReadinessStatus
-	78,  // 100: openshell.v1.ReportProviderReadinessRequest.observation:type_name -> openshell.v1.ProviderReadinessObservation
-	275, // 101: openshell.v1.ReportProviderReadinessResponse.report_interval:type_name -> google.protobuf.Duration
-	275, // 102: openshell.v1.ReportProviderReadinessResponse.observation_ttl:type_name -> google.protobuf.Duration
+	79,  // 94: openshell.v1.ProviderReadinessStatus.observed:type_name -> openshell.v1.ProviderReadinessObservation
+	285, // 95: openshell.v1.ProviderReadinessStatus.observed_time:type_name -> google.protobuf.Timestamp
+	285, // 96: openshell.v1.ProviderReadinessStatus.evaluated_time:type_name -> google.protobuf.Timestamp
+	77,  // 97: openshell.v1.ProviderReadinessStatus.operation:type_name -> openshell.v1.ConfigUpdateOperation
+	290, // 98: openshell.v1.GetSandboxProviderStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	80,  // 99: openshell.v1.GetSandboxProviderStatusResponse.status:type_name -> openshell.v1.ProviderReadinessStatus
+	79,  // 100: openshell.v1.ReportProviderReadinessRequest.observation:type_name -> openshell.v1.ProviderReadinessObservation
+	289, // 101: openshell.v1.ReportProviderReadinessResponse.report_interval:type_name -> google.protobuf.Duration
+	289, // 102: openshell.v1.ReportProviderReadinessResponse.observation_ttl:type_name -> google.protobuf.Duration
 	16,  // 103: openshell.v1.DeleteSandboxResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	276, // 104: openshell.v1.CreateSshSessionRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	271, // 105: openshell.v1.CreateSshSessionResponse.expiration_time:type_name -> google.protobuf.Timestamp
-	276, // 106: openshell.v1.ExposeServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 107: openshell.v1.GetServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 108: openshell.v1.ListServicesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	94,  // 109: openshell.v1.ListServicesResponse.services:type_name -> openshell.v1.ServiceEndpointResponse
-	276, // 110: openshell.v1.DeleteServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 104: openshell.v1.CreateSshSessionRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	285, // 105: openshell.v1.CreateSshSessionResponse.expiration_time:type_name -> google.protobuf.Timestamp
+	290, // 106: openshell.v1.ExposeServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 107: openshell.v1.GetServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 108: openshell.v1.ListServicesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	95,  // 109: openshell.v1.ListServicesResponse.services:type_name -> openshell.v1.ServiceEndpointResponse
+	290, // 110: openshell.v1.DeleteServiceRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
 	16,  // 111: openshell.v1.DeleteServiceResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	272, // 112: openshell.v1.ServiceEndpoint.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	93,  // 113: openshell.v1.ServiceEndpointResponse.endpoint:type_name -> openshell.v1.ServiceEndpoint
+	286, // 112: openshell.v1.ServiceEndpoint.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	94,  // 113: openshell.v1.ServiceEndpointResponse.endpoint:type_name -> openshell.v1.ServiceEndpoint
 	16,  // 114: openshell.v1.RevokeSshSessionResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	276, // 115: openshell.v1.ExecSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	258, // 116: openshell.v1.ExecSandboxRequest.environment:type_name -> openshell.v1.ExecSandboxRequest.EnvironmentEntry
-	275, // 117: openshell.v1.ExecSandboxRequest.execution_timeout:type_name -> google.protobuf.Duration
-	98,  // 118: openshell.v1.ExecSandboxEvent.stdout:type_name -> openshell.v1.ExecSandboxStdout
-	99,  // 119: openshell.v1.ExecSandboxEvent.stderr:type_name -> openshell.v1.ExecSandboxStderr
-	100, // 120: openshell.v1.ExecSandboxEvent.exit:type_name -> openshell.v1.ExecSandboxExit
-	193, // 121: openshell.v1.TcpForwardInit.ssh:type_name -> openshell.v1.SshRelayTarget
-	194, // 122: openshell.v1.TcpForwardInit.tcp:type_name -> openshell.v1.TcpRelayTarget
-	102, // 123: openshell.v1.TcpForwardFrame.init:type_name -> openshell.v1.TcpForwardInit
-	97,  // 124: openshell.v1.ExecSandboxInput.start:type_name -> openshell.v1.ExecSandboxRequest
-	105, // 125: openshell.v1.ExecSandboxInput.resize:type_name -> openshell.v1.ExecSandboxWindowResize
-	272, // 126: openshell.v1.SshSession.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	271, // 127: openshell.v1.SshSession.expiration_time:type_name -> google.protobuf.Timestamp
-	276, // 128: openshell.v1.WatchSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	271, // 129: openshell.v1.WatchSandboxRequest.since_time:type_name -> google.protobuf.Timestamp
-	35,  // 130: openshell.v1.SandboxStreamEvent.sandbox:type_name -> openshell.v1.Sandbox
-	109, // 131: openshell.v1.SandboxStreamEvent.log:type_name -> openshell.v1.SandboxLogLine
-	49,  // 132: openshell.v1.SandboxStreamEvent.event:type_name -> openshell.v1.PlatformEvent
-	110, // 133: openshell.v1.SandboxStreamEvent.warning:type_name -> openshell.v1.SandboxStreamWarning
-	206, // 134: openshell.v1.SandboxStreamEvent.draft_policy_update:type_name -> openshell.v1.DraftPolicyUpdate
-	271, // 135: openshell.v1.SandboxLogLine.event_time:type_name -> google.protobuf.Timestamp
-	259, // 136: openshell.v1.SandboxLogLine.fields:type_name -> openshell.v1.SandboxLogLine.FieldsEntry
-	276, // 137: openshell.v1.CreateProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	277, // 138: openshell.v1.CreateProviderRequest.provider:type_name -> openshell.datamodel.v1.Provider
-	276, // 139: openshell.v1.GetProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 140: openshell.v1.ListProvidersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 141: openshell.v1.UpdateProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	277, // 142: openshell.v1.UpdateProviderRequest.provider:type_name -> openshell.datamodel.v1.Provider
-	260, // 143: openshell.v1.UpdateProviderRequest.credential_expiration_times:type_name -> openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry
-	276, // 144: openshell.v1.DeleteProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	277, // 145: openshell.v1.ProviderResponse.provider:type_name -> openshell.datamodel.v1.Provider
-	77,  // 146: openshell.v1.ProviderResponse.target_receipts:type_name -> openshell.v1.ProviderMutationReceipt
-	277, // 147: openshell.v1.ListProvidersResponse.providers:type_name -> openshell.datamodel.v1.Provider
-	276, // 148: openshell.v1.ListProviderProfilesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 149: openshell.v1.GetProviderProfileRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	139, // 150: openshell.v1.ProviderProfileImportItem.profile:type_name -> openshell.v1.ProviderProfile
-	275, // 151: openshell.v1.ProviderCredentialTokenGrant.cache_ttl:type_name -> google.protobuf.Duration
-	122, // 152: openshell.v1.ProviderCredentialTokenGrant.audience_overrides:type_name -> openshell.v1.ProviderCredentialTokenGrantAudienceOverride
-	8,   // 153: openshell.v1.ProviderCredentialTokenGrant.grant_type:type_name -> openshell.v1.ProviderCredentialTokenGrantType
-	123, // 154: openshell.v1.ProviderCredentialTokenGrant.subject_token:type_name -> openshell.v1.ProviderCredentialTokenGrantSubjectToken
-	128, // 155: openshell.v1.ProviderProfileCredential.refresh:type_name -> openshell.v1.ProviderCredentialRefresh
-	124, // 156: openshell.v1.ProviderProfileCredential.token_grant:type_name -> openshell.v1.ProviderCredentialTokenGrant
-	9,   // 157: openshell.v1.ProviderCredentialRefresh.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
-	275, // 158: openshell.v1.ProviderCredentialRefresh.refresh_before:type_name -> google.protobuf.Duration
-	275, // 159: openshell.v1.ProviderCredentialRefresh.max_lifetime:type_name -> google.protobuf.Duration
-	126, // 160: openshell.v1.ProviderCredentialRefresh.material:type_name -> openshell.v1.ProviderCredentialRefreshMaterial
-	127, // 161: openshell.v1.ProviderCredentialRefresh.additional_outputs:type_name -> openshell.v1.ProviderCredentialRefreshOutput
-	9,   // 162: openshell.v1.ProviderCredentialRefreshStatus.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
-	271, // 163: openshell.v1.ProviderCredentialRefreshStatus.expiration_time:type_name -> google.protobuf.Timestamp
-	271, // 164: openshell.v1.ProviderCredentialRefreshStatus.next_refresh_time:type_name -> google.protobuf.Timestamp
-	271, // 165: openshell.v1.ProviderCredentialRefreshStatus.last_refresh_time:type_name -> google.protobuf.Timestamp
-	15,  // 166: openshell.v1.ProviderCredentialRefreshStatus.recovery_action:type_name -> openshell.v1.ProviderCredentialRefreshRecoveryAction
-	271, // 167: openshell.v1.ProviderCredentialRefreshStatus.last_error_time:type_name -> google.protobuf.Timestamp
-	276, // 168: openshell.v1.GetProviderRefreshStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	129, // 169: openshell.v1.GetProviderRefreshStatusResponse.credentials:type_name -> openshell.v1.ProviderCredentialRefreshStatus
-	276, // 170: openshell.v1.ConfigureProviderRefreshRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	9,   // 171: openshell.v1.ConfigureProviderRefreshRequest.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
-	261, // 172: openshell.v1.ConfigureProviderRefreshRequest.material:type_name -> openshell.v1.ConfigureProviderRefreshRequest.MaterialEntry
-	271, // 173: openshell.v1.ConfigureProviderRefreshRequest.expiration_time:type_name -> google.protobuf.Timestamp
-	129, // 174: openshell.v1.ConfigureProviderRefreshResponse.status:type_name -> openshell.v1.ProviderCredentialRefreshStatus
-	276, // 175: openshell.v1.RotateProviderCredentialRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	129, // 176: openshell.v1.RotateProviderCredentialResponse.status:type_name -> openshell.v1.ProviderCredentialRefreshStatus
-	276, // 177: openshell.v1.DeleteProviderRefreshRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	16,  // 178: openshell.v1.DeleteProviderRefreshResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	10,  // 179: openshell.v1.ProviderProfile.category:type_name -> openshell.v1.ProviderProfileCategory
-	125, // 180: openshell.v1.ProviderProfile.credentials:type_name -> openshell.v1.ProviderProfileCredential
-	279, // 181: openshell.v1.ProviderProfile.endpoints:type_name -> openshell.sandbox.v1.NetworkEndpoint
-	280, // 182: openshell.v1.ProviderProfile.binaries:type_name -> openshell.sandbox.v1.NetworkBinary
-	130, // 183: openshell.v1.ProviderProfile.discovery:type_name -> openshell.v1.ProviderProfileDiscovery
-	262, // 184: openshell.v1.ProviderProfile.annotations:type_name -> openshell.v1.ProviderProfile.AnnotationsEntry
-	139, // 185: openshell.v1.ProviderProfileResponse.profile:type_name -> openshell.v1.ProviderProfile
-	139, // 186: openshell.v1.ListProviderProfilesResponse.profiles:type_name -> openshell.v1.ProviderProfile
-	276, // 187: openshell.v1.ImportProviderProfilesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	120, // 188: openshell.v1.ImportProviderProfilesRequest.profiles:type_name -> openshell.v1.ProviderProfileImportItem
-	121, // 189: openshell.v1.ImportProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
-	139, // 190: openshell.v1.ImportProviderProfilesResponse.profiles:type_name -> openshell.v1.ProviderProfile
-	276, // 191: openshell.v1.UpdateProviderProfilesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	120, // 192: openshell.v1.UpdateProviderProfilesRequest.profile:type_name -> openshell.v1.ProviderProfileImportItem
-	121, // 193: openshell.v1.UpdateProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
-	139, // 194: openshell.v1.UpdateProviderProfilesResponse.profile:type_name -> openshell.v1.ProviderProfile
-	276, // 195: openshell.v1.LintProviderProfilesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	120, // 196: openshell.v1.LintProviderProfilesRequest.profiles:type_name -> openshell.v1.ProviderProfileImportItem
-	121, // 197: openshell.v1.LintProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
-	16,  // 198: openshell.v1.DeleteProviderResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	276, // 199: openshell.v1.DeleteProviderProfileRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	16,  // 200: openshell.v1.DeleteProviderProfileResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	152, // 201: openshell.v1.StaticCredentialBinding.endpoints:type_name -> openshell.v1.StaticCredentialEndpointBinding
-	263, // 202: openshell.v1.GetSandboxProviderEnvironmentResponse.environment:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.EnvironmentEntry
-	264, // 203: openshell.v1.GetSandboxProviderEnvironmentResponse.credential_expiration_times:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry
-	265, // 204: openshell.v1.GetSandboxProviderEnvironmentResponse.dynamic_credentials:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry
-	266, // 205: openshell.v1.GetSandboxProviderEnvironmentResponse.static_credential_bindings:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry
-	4,   // 206: openshell.v1.GetSandboxProviderEnvironmentResponse.readiness_reason:type_name -> openshell.v1.ProviderReadinessReason
-	275, // 207: openshell.v1.ExchangeProviderSubjectTokenResponse.expires_after:type_name -> google.protobuf.Duration
-	276, // 208: openshell.v1.UpdateConfigRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	273, // 209: openshell.v1.UpdateConfigRequest.policy:type_name -> openshell.sandbox.v1.SandboxPolicy
-	281, // 210: openshell.v1.UpdateConfigRequest.setting_value:type_name -> openshell.sandbox.v1.SettingValue
-	158, // 211: openshell.v1.UpdateConfigRequest.merge_operations:type_name -> openshell.v1.PolicyMergeOperation
-	267, // 212: openshell.v1.UpdateConfigRequest.annotations:type_name -> openshell.v1.UpdateConfigRequest.AnnotationsEntry
-	159, // 213: openshell.v1.PolicyMergeOperation.add_rule:type_name -> openshell.v1.AddNetworkRule
-	160, // 214: openshell.v1.PolicyMergeOperation.remove_endpoint:type_name -> openshell.v1.RemoveNetworkEndpoint
-	161, // 215: openshell.v1.PolicyMergeOperation.remove_rule:type_name -> openshell.v1.RemoveNetworkRule
-	163, // 216: openshell.v1.PolicyMergeOperation.add_deny_rules:type_name -> openshell.v1.AddDenyRules
-	164, // 217: openshell.v1.PolicyMergeOperation.add_allow_rules:type_name -> openshell.v1.AddAllowRules
-	165, // 218: openshell.v1.PolicyMergeOperation.remove_binary:type_name -> openshell.v1.RemoveNetworkBinary
-	282, // 219: openshell.v1.AddNetworkRule.rule:type_name -> openshell.sandbox.v1.NetworkPolicyRule
-	280, // 220: openshell.v1.L7RuleTarget.binaries:type_name -> openshell.sandbox.v1.NetworkBinary
-	283, // 221: openshell.v1.AddDenyRules.deny_rules:type_name -> openshell.sandbox.v1.L7DenyRule
-	162, // 222: openshell.v1.AddDenyRules.target:type_name -> openshell.v1.L7RuleTarget
-	284, // 223: openshell.v1.AddAllowRules.rules:type_name -> openshell.sandbox.v1.L7Rule
-	162, // 224: openshell.v1.AddAllowRules.target:type_name -> openshell.v1.L7RuleTarget
-	268, // 225: openshell.v1.UpdateConfigResponse.annotations:type_name -> openshell.v1.UpdateConfigResponse.AnnotationsEntry
-	276, // 226: openshell.v1.GetSandboxPolicyStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	176, // 227: openshell.v1.GetSandboxPolicyStatusResponse.revision:type_name -> openshell.v1.SandboxPolicyRevision
-	276, // 228: openshell.v1.ListSandboxPoliciesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	176, // 229: openshell.v1.ListSandboxPoliciesResponse.revisions:type_name -> openshell.v1.SandboxPolicyRevision
-	12,  // 230: openshell.v1.ReportPolicyStatusRequest.status:type_name -> openshell.v1.PolicyStatus
-	11,  // 231: openshell.v1.SandboxConfigurationAdmission.state:type_name -> openshell.v1.ConfigurationAdmissionState
-	173, // 232: openshell.v1.ReportSandboxConfigurationRequest.admission:type_name -> openshell.v1.SandboxConfigurationAdmission
-	12,  // 233: openshell.v1.SandboxPolicyRevision.status:type_name -> openshell.v1.PolicyStatus
-	271, // 234: openshell.v1.SandboxPolicyRevision.created_time:type_name -> google.protobuf.Timestamp
-	271, // 235: openshell.v1.SandboxPolicyRevision.loaded_time:type_name -> google.protobuf.Timestamp
-	273, // 236: openshell.v1.SandboxPolicyRevision.policy:type_name -> openshell.sandbox.v1.SandboxPolicy
-	269, // 237: openshell.v1.SandboxPolicyRevision.provenance:type_name -> openshell.v1.SandboxPolicyRevision.ProvenanceEntry
-	276, // 238: openshell.v1.GetSandboxLogsRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	271, // 239: openshell.v1.GetSandboxLogsRequest.since_time:type_name -> google.protobuf.Timestamp
-	109, // 240: openshell.v1.PushSandboxLogsRequest.logs:type_name -> openshell.v1.SandboxLogLine
-	109, // 241: openshell.v1.GetSandboxLogsResponse.logs:type_name -> openshell.v1.SandboxLogLine
-	183, // 242: openshell.v1.SupervisorMessage.hello:type_name -> openshell.v1.SupervisorHello
-	186, // 243: openshell.v1.SupervisorMessage.heartbeat:type_name -> openshell.v1.SupervisorHeartbeat
-	199, // 244: openshell.v1.SupervisorMessage.relay_open_result:type_name -> openshell.v1.RelayOpenResult
-	200, // 245: openshell.v1.SupervisorMessage.relay_close:type_name -> openshell.v1.RelayClose
-	184, // 246: openshell.v1.GatewayMessage.session_accepted:type_name -> openshell.v1.SessionAccepted
-	185, // 247: openshell.v1.GatewayMessage.session_rejected:type_name -> openshell.v1.SessionRejected
-	187, // 248: openshell.v1.GatewayMessage.heartbeat:type_name -> openshell.v1.GatewayHeartbeat
-	192, // 249: openshell.v1.GatewayMessage.relay_open:type_name -> openshell.v1.RelayOpen
-	200, // 250: openshell.v1.GatewayMessage.relay_close:type_name -> openshell.v1.RelayClose
-	275, // 251: openshell.v1.SessionAccepted.heartbeat_interval:type_name -> google.protobuf.Duration
-	193, // 252: openshell.v1.RelayOpen.ssh:type_name -> openshell.v1.SshRelayTarget
-	194, // 253: openshell.v1.RelayOpen.tcp:type_name -> openshell.v1.TcpRelayTarget
-	195, // 254: openshell.v1.RelayFrame.init:type_name -> openshell.v1.RelayInit
-	192, // 255: openshell.v1.PeerRelayInit.relay_open:type_name -> openshell.v1.RelayOpen
-	197, // 256: openshell.v1.PeerRelayFrame.init:type_name -> openshell.v1.PeerRelayInit
-	271, // 257: openshell.v1.DenialSummary.first_seen_time:type_name -> google.protobuf.Timestamp
-	271, // 258: openshell.v1.DenialSummary.last_seen_time:type_name -> google.protobuf.Timestamp
-	201, // 259: openshell.v1.DenialSummary.l7_request_samples:type_name -> openshell.v1.L7RequestSample
-	203, // 260: openshell.v1.NetworkActivitySummary.denials_by_group:type_name -> openshell.v1.DenialGroupCount
-	282, // 261: openshell.v1.PolicyChunk.proposed_rule:type_name -> openshell.sandbox.v1.NetworkPolicyRule
-	271, // 262: openshell.v1.PolicyChunk.created_time:type_name -> google.protobuf.Timestamp
-	271, // 263: openshell.v1.PolicyChunk.decided_time:type_name -> google.protobuf.Timestamp
-	271, // 264: openshell.v1.PolicyChunk.first_seen_time:type_name -> google.protobuf.Timestamp
-	271, // 265: openshell.v1.PolicyChunk.last_seen_time:type_name -> google.protobuf.Timestamp
-	273, // 266: openshell.v1.PolicyChunk.current_effective_policy:type_name -> openshell.sandbox.v1.SandboxPolicy
-	273, // 267: openshell.v1.PolicyChunk.candidate_effective_policy:type_name -> openshell.sandbox.v1.SandboxPolicy
-	276, // 268: openshell.v1.SubmitPolicyAnalysisRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	202, // 269: openshell.v1.SubmitPolicyAnalysisRequest.summaries:type_name -> openshell.v1.DenialSummary
-	205, // 270: openshell.v1.SubmitPolicyAnalysisRequest.proposed_chunks:type_name -> openshell.v1.PolicyChunk
-	204, // 271: openshell.v1.SubmitPolicyAnalysisRequest.network_activity_summaries:type_name -> openshell.v1.NetworkActivitySummary
-	276, // 272: openshell.v1.GetDraftPolicyRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	205, // 273: openshell.v1.GetDraftPolicyResponse.chunks:type_name -> openshell.v1.PolicyChunk
-	271, // 274: openshell.v1.GetDraftPolicyResponse.last_analyzed_time:type_name -> google.protobuf.Timestamp
-	276, // 275: openshell.v1.ApproveDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 276: openshell.v1.RejectDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 277: openshell.v1.ApproveAllDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	215, // 278: openshell.v1.ApproveAllDraftChunksRequest.approvals:type_name -> openshell.v1.DraftChunkApproval
-	276, // 279: openshell.v1.EditDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	282, // 280: openshell.v1.EditDraftChunkRequest.proposed_rule:type_name -> openshell.sandbox.v1.NetworkPolicyRule
-	276, // 281: openshell.v1.UndoDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 282: openshell.v1.ClearDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	276, // 283: openshell.v1.GetDraftHistoryRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	271, // 284: openshell.v1.DraftHistoryEntry.event_time:type_name -> google.protobuf.Timestamp
-	225, // 285: openshell.v1.GetDraftHistoryResponse.entries:type_name -> openshell.v1.DraftHistoryEntry
-	270, // 286: openshell.v1.CreateWorkspaceRequest.labels:type_name -> openshell.v1.CreateWorkspaceRequest.LabelsEntry
-	285, // 287: openshell.v1.CreateWorkspaceResponse.workspace:type_name -> openshell.datamodel.v1.Workspace
-	285, // 288: openshell.v1.GetWorkspaceResponse.workspace:type_name -> openshell.datamodel.v1.Workspace
-	285, // 289: openshell.v1.ListWorkspacesResponse.workspaces:type_name -> openshell.datamodel.v1.Workspace
-	16,  // 290: openshell.v1.DeleteWorkspaceResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	272, // 291: openshell.v1.WorkspaceMember.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
-	14,  // 292: openshell.v1.WorkspaceMember.role:type_name -> openshell.v1.WorkspaceRole
-	276, // 293: openshell.v1.AddWorkspaceMemberRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	14,  // 294: openshell.v1.AddWorkspaceMemberRequest.role:type_name -> openshell.v1.WorkspaceRole
-	235, // 295: openshell.v1.AddWorkspaceMemberResponse.member:type_name -> openshell.v1.WorkspaceMember
-	276, // 296: openshell.v1.RemoveWorkspaceMemberRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	16,  // 297: openshell.v1.RemoveWorkspaceMemberResponse.outcome:type_name -> openshell.v1.DeletionOutcome
-	276, // 298: openshell.v1.ListWorkspaceMembersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
-	235, // 299: openshell.v1.ListWorkspaceMembersResponse.members:type_name -> openshell.v1.WorkspaceMember
-	271, // 300: openshell.v1.ExtensionServiceCredential.expiration_time:type_name -> google.protobuf.Timestamp
-	17,  // 301: openshell.v1.EndpointObservation.result:type_name -> openshell.v1.EndpointResult
-	243, // 302: openshell.v1.ReportEndpointStatusRequest.observations:type_name -> openshell.v1.EndpointObservation
-	17,  // 303: openshell.v1.EndpointStatus.last_result:type_name -> openshell.v1.EndpointResult
-	271, // 304: openshell.v1.EndpointStatus.last_reported_time:type_name -> google.protobuf.Timestamp
-	271, // 305: openshell.v1.SandboxProvisioning.configuration_change_time:type_name -> google.protobuf.Timestamp
-	271, // 306: openshell.v1.SandboxProvisioning.first_rejection_time:type_name -> google.protobuf.Timestamp
-	271, // 307: openshell.v1.SandboxProvisioning.deadline:type_name -> google.protobuf.Timestamp
-	271, // 308: openshell.v1.SandboxProvisioning.timeout_time:type_name -> google.protobuf.Timestamp
-	271, // 309: openshell.v1.SandboxProvisioning.cleanup_completed_time:type_name -> google.protobuf.Timestamp
-	271, // 310: openshell.v1.SandboxProvisioning.cleanup_retry_time:type_name -> google.protobuf.Timestamp
-	271, // 311: openshell.v1.SandboxProvisioning.attachment_change_time:type_name -> google.protobuf.Timestamp
-	271, // 312: openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry.value:type_name -> google.protobuf.Timestamp
-	271, // 313: openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry.value:type_name -> google.protobuf.Timestamp
-	125, // 314: openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry.value:type_name -> openshell.v1.ProviderProfileCredential
-	153, // 315: openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry.value:type_name -> openshell.v1.StaticCredentialBinding
-	22,  // 316: openshell.v1.OpenShell.Health:input_type -> openshell.v1.HealthRequest
-	24,  // 317: openshell.v1.OpenShell.GetCurrentUser:input_type -> openshell.v1.GetCurrentUserRequest
-	26,  // 318: openshell.v1.OpenShell.GetGatewayInfo:input_type -> openshell.v1.GetGatewayInfoRequest
-	50,  // 319: openshell.v1.OpenShell.CreateSandbox:input_type -> openshell.v1.CreateSandboxRequest
-	58,  // 320: openshell.v1.OpenShell.BeginRootfsTarStaging:input_type -> openshell.v1.BeginRootfsTarStagingRequest
-	60,  // 321: openshell.v1.OpenShell.GetSandbox:input_type -> openshell.v1.GetSandboxRequest
-	61,  // 322: openshell.v1.OpenShell.ListSandboxes:input_type -> openshell.v1.ListSandboxesRequest
-	51,  // 323: openshell.v1.OpenShell.CreateSandboxTemplate:input_type -> openshell.v1.CreateSandboxTemplateRequest
-	52,  // 324: openshell.v1.OpenShell.GetSandboxTemplate:input_type -> openshell.v1.GetSandboxTemplateRequest
-	53,  // 325: openshell.v1.OpenShell.ListSandboxTemplates:input_type -> openshell.v1.ListSandboxTemplatesRequest
-	54,  // 326: openshell.v1.OpenShell.DeleteSandboxTemplate:input_type -> openshell.v1.DeleteSandboxTemplateRequest
-	62,  // 327: openshell.v1.OpenShell.ListSandboxProviders:input_type -> openshell.v1.ListSandboxProvidersRequest
-	63,  // 328: openshell.v1.OpenShell.AttachSandboxProvider:input_type -> openshell.v1.AttachSandboxProviderRequest
-	64,  // 329: openshell.v1.OpenShell.DetachSandboxProvider:input_type -> openshell.v1.DetachSandboxProviderRequest
-	80,  // 330: openshell.v1.OpenShell.GetSandboxProviderStatus:input_type -> openshell.v1.GetSandboxProviderStatusRequest
-	65,  // 331: openshell.v1.OpenShell.DeleteSandbox:input_type -> openshell.v1.DeleteSandboxRequest
-	66,  // 332: openshell.v1.OpenShell.StopSandbox:input_type -> openshell.v1.StopSandboxRequest
-	67,  // 333: openshell.v1.OpenShell.StartSandbox:input_type -> openshell.v1.StartSandboxRequest
-	85,  // 334: openshell.v1.OpenShell.CreateSshSession:input_type -> openshell.v1.CreateSshSessionRequest
-	87,  // 335: openshell.v1.OpenShell.ExposeService:input_type -> openshell.v1.ExposeServiceRequest
-	88,  // 336: openshell.v1.OpenShell.GetService:input_type -> openshell.v1.GetServiceRequest
-	89,  // 337: openshell.v1.OpenShell.ListServices:input_type -> openshell.v1.ListServicesRequest
-	91,  // 338: openshell.v1.OpenShell.DeleteService:input_type -> openshell.v1.DeleteServiceRequest
-	95,  // 339: openshell.v1.OpenShell.RevokeSshSession:input_type -> openshell.v1.RevokeSshSessionRequest
-	97,  // 340: openshell.v1.OpenShell.ExecSandbox:input_type -> openshell.v1.ExecSandboxRequest
-	103, // 341: openshell.v1.OpenShell.ForwardTcp:input_type -> openshell.v1.TcpForwardFrame
-	104, // 342: openshell.v1.OpenShell.ExecSandboxInteractive:input_type -> openshell.v1.ExecSandboxInput
-	111, // 343: openshell.v1.OpenShell.CreateProvider:input_type -> openshell.v1.CreateProviderRequest
-	112, // 344: openshell.v1.OpenShell.GetProvider:input_type -> openshell.v1.GetProviderRequest
-	113, // 345: openshell.v1.OpenShell.ListProviders:input_type -> openshell.v1.ListProvidersRequest
-	118, // 346: openshell.v1.OpenShell.ListProviderProfiles:input_type -> openshell.v1.ListProviderProfilesRequest
-	119, // 347: openshell.v1.OpenShell.GetProviderProfile:input_type -> openshell.v1.GetProviderProfileRequest
-	142, // 348: openshell.v1.OpenShell.ImportProviderProfiles:input_type -> openshell.v1.ImportProviderProfilesRequest
-	144, // 349: openshell.v1.OpenShell.UpdateProviderProfiles:input_type -> openshell.v1.UpdateProviderProfilesRequest
-	146, // 350: openshell.v1.OpenShell.LintProviderProfiles:input_type -> openshell.v1.LintProviderProfilesRequest
-	114, // 351: openshell.v1.OpenShell.UpdateProvider:input_type -> openshell.v1.UpdateProviderRequest
-	131, // 352: openshell.v1.OpenShell.GetProviderRefreshStatus:input_type -> openshell.v1.GetProviderRefreshStatusRequest
-	133, // 353: openshell.v1.OpenShell.ConfigureProviderRefresh:input_type -> openshell.v1.ConfigureProviderRefreshRequest
-	135, // 354: openshell.v1.OpenShell.RotateProviderCredential:input_type -> openshell.v1.RotateProviderCredentialRequest
-	137, // 355: openshell.v1.OpenShell.DeleteProviderRefresh:input_type -> openshell.v1.DeleteProviderRefreshRequest
-	115, // 356: openshell.v1.OpenShell.DeleteProvider:input_type -> openshell.v1.DeleteProviderRequest
-	149, // 357: openshell.v1.OpenShell.DeleteProviderProfile:input_type -> openshell.v1.DeleteProviderProfileRequest
-	286, // 358: openshell.v1.OpenShell.GetSandboxConfig:input_type -> openshell.sandbox.v1.GetSandboxConfigRequest
-	287, // 359: openshell.v1.OpenShell.GetGatewayConfig:input_type -> openshell.sandbox.v1.GetGatewayConfigRequest
-	157, // 360: openshell.v1.OpenShell.UpdateConfig:input_type -> openshell.v1.UpdateConfigRequest
-	167, // 361: openshell.v1.OpenShell.GetSandboxPolicyStatus:input_type -> openshell.v1.GetSandboxPolicyStatusRequest
-	169, // 362: openshell.v1.OpenShell.ListSandboxPolicies:input_type -> openshell.v1.ListSandboxPoliciesRequest
-	171, // 363: openshell.v1.OpenShell.ReportPolicyStatus:input_type -> openshell.v1.ReportPolicyStatusRequest
-	244, // 364: openshell.v1.OpenShell.ReportEndpointStatus:input_type -> openshell.v1.ReportEndpointStatusRequest
-	82,  // 365: openshell.v1.OpenShell.ReportProviderReadiness:input_type -> openshell.v1.ReportProviderReadinessRequest
-	174, // 366: openshell.v1.OpenShell.ReportSandboxConfiguration:input_type -> openshell.v1.ReportSandboxConfigurationRequest
-	151, // 367: openshell.v1.OpenShell.GetSandboxProviderEnvironment:input_type -> openshell.v1.GetSandboxProviderEnvironmentRequest
-	155, // 368: openshell.v1.OpenShell.ExchangeProviderSubjectToken:input_type -> openshell.v1.ExchangeProviderSubjectTokenRequest
-	177, // 369: openshell.v1.OpenShell.GetSandboxLogs:input_type -> openshell.v1.GetSandboxLogsRequest
-	178, // 370: openshell.v1.OpenShell.PushSandboxLogs:input_type -> openshell.v1.PushSandboxLogsRequest
-	181, // 371: openshell.v1.OpenShell.ConnectSupervisor:input_type -> openshell.v1.SupervisorMessage
-	188, // 372: openshell.v1.OpenShell.ReportMainProcessExit:input_type -> openshell.v1.ReportMainProcessExitRequest
-	190, // 373: openshell.v1.OpenShell.FinalizeMainProcessExit:input_type -> openshell.v1.FinalizeMainProcessExitRequest
-	196, // 374: openshell.v1.OpenShell.RelayStream:input_type -> openshell.v1.RelayFrame
-	198, // 375: openshell.v1.OpenShell.PeerRelay:input_type -> openshell.v1.PeerRelayFrame
-	82,  // 376: openshell.v1.OpenShell.PeerReportProviderReadiness:input_type -> openshell.v1.ReportProviderReadinessRequest
-	244, // 377: openshell.v1.OpenShell.PeerReportEndpointStatus:input_type -> openshell.v1.ReportEndpointStatusRequest
-	80,  // 378: openshell.v1.OpenShell.PeerGetSandboxProviderStatus:input_type -> openshell.v1.GetSandboxProviderStatusRequest
-	107, // 379: openshell.v1.OpenShell.WatchSandbox:input_type -> openshell.v1.WatchSandboxRequest
-	207, // 380: openshell.v1.OpenShell.SubmitPolicyAnalysis:input_type -> openshell.v1.SubmitPolicyAnalysisRequest
-	209, // 381: openshell.v1.OpenShell.GetDraftPolicy:input_type -> openshell.v1.GetDraftPolicyRequest
-	211, // 382: openshell.v1.OpenShell.ApproveDraftChunk:input_type -> openshell.v1.ApproveDraftChunkRequest
-	213, // 383: openshell.v1.OpenShell.RejectDraftChunk:input_type -> openshell.v1.RejectDraftChunkRequest
-	216, // 384: openshell.v1.OpenShell.ApproveAllDraftChunks:input_type -> openshell.v1.ApproveAllDraftChunksRequest
-	218, // 385: openshell.v1.OpenShell.EditDraftChunk:input_type -> openshell.v1.EditDraftChunkRequest
-	220, // 386: openshell.v1.OpenShell.UndoDraftChunk:input_type -> openshell.v1.UndoDraftChunkRequest
-	222, // 387: openshell.v1.OpenShell.ClearDraftChunks:input_type -> openshell.v1.ClearDraftChunksRequest
-	224, // 388: openshell.v1.OpenShell.GetDraftHistory:input_type -> openshell.v1.GetDraftHistoryRequest
-	18,  // 389: openshell.v1.OpenShell.IssueSandboxToken:input_type -> openshell.v1.IssueSandboxTokenRequest
-	20,  // 390: openshell.v1.OpenShell.RefreshSandboxToken:input_type -> openshell.v1.RefreshSandboxTokenRequest
-	227, // 391: openshell.v1.OpenShell.CreateWorkspace:input_type -> openshell.v1.CreateWorkspaceRequest
-	229, // 392: openshell.v1.OpenShell.GetWorkspace:input_type -> openshell.v1.GetWorkspaceRequest
-	231, // 393: openshell.v1.OpenShell.ListWorkspaces:input_type -> openshell.v1.ListWorkspacesRequest
-	233, // 394: openshell.v1.OpenShell.DeleteWorkspace:input_type -> openshell.v1.DeleteWorkspaceRequest
-	236, // 395: openshell.v1.OpenShell.AddWorkspaceMember:input_type -> openshell.v1.AddWorkspaceMemberRequest
-	238, // 396: openshell.v1.OpenShell.RemoveWorkspaceMember:input_type -> openshell.v1.RemoveWorkspaceMemberRequest
-	240, // 397: openshell.v1.OpenShell.ListWorkspaceMembers:input_type -> openshell.v1.ListWorkspaceMembersRequest
-	23,  // 398: openshell.v1.OpenShell.Health:output_type -> openshell.v1.HealthResponse
-	25,  // 399: openshell.v1.OpenShell.GetCurrentUser:output_type -> openshell.v1.GetCurrentUserResponse
-	27,  // 400: openshell.v1.OpenShell.GetGatewayInfo:output_type -> openshell.v1.GetGatewayInfoResponse
-	68,  // 401: openshell.v1.OpenShell.CreateSandbox:output_type -> openshell.v1.SandboxResponse
-	59,  // 402: openshell.v1.OpenShell.BeginRootfsTarStaging:output_type -> openshell.v1.BeginRootfsTarStagingResponse
-	68,  // 403: openshell.v1.OpenShell.GetSandbox:output_type -> openshell.v1.SandboxResponse
-	69,  // 404: openshell.v1.OpenShell.ListSandboxes:output_type -> openshell.v1.ListSandboxesResponse
-	55,  // 405: openshell.v1.OpenShell.CreateSandboxTemplate:output_type -> openshell.v1.SandboxTemplateResponse
-	55,  // 406: openshell.v1.OpenShell.GetSandboxTemplate:output_type -> openshell.v1.SandboxTemplateResponse
-	56,  // 407: openshell.v1.OpenShell.ListSandboxTemplates:output_type -> openshell.v1.ListSandboxTemplatesResponse
-	57,  // 408: openshell.v1.OpenShell.DeleteSandboxTemplate:output_type -> openshell.v1.DeleteSandboxTemplateResponse
-	70,  // 409: openshell.v1.OpenShell.ListSandboxProviders:output_type -> openshell.v1.ListSandboxProvidersResponse
-	71,  // 410: openshell.v1.OpenShell.AttachSandboxProvider:output_type -> openshell.v1.AttachSandboxProviderResponse
-	72,  // 411: openshell.v1.OpenShell.DetachSandboxProvider:output_type -> openshell.v1.DetachSandboxProviderResponse
-	81,  // 412: openshell.v1.OpenShell.GetSandboxProviderStatus:output_type -> openshell.v1.GetSandboxProviderStatusResponse
-	84,  // 413: openshell.v1.OpenShell.DeleteSandbox:output_type -> openshell.v1.DeleteSandboxResponse
-	68,  // 414: openshell.v1.OpenShell.StopSandbox:output_type -> openshell.v1.SandboxResponse
-	68,  // 415: openshell.v1.OpenShell.StartSandbox:output_type -> openshell.v1.SandboxResponse
-	86,  // 416: openshell.v1.OpenShell.CreateSshSession:output_type -> openshell.v1.CreateSshSessionResponse
-	94,  // 417: openshell.v1.OpenShell.ExposeService:output_type -> openshell.v1.ServiceEndpointResponse
-	94,  // 418: openshell.v1.OpenShell.GetService:output_type -> openshell.v1.ServiceEndpointResponse
-	90,  // 419: openshell.v1.OpenShell.ListServices:output_type -> openshell.v1.ListServicesResponse
-	92,  // 420: openshell.v1.OpenShell.DeleteService:output_type -> openshell.v1.DeleteServiceResponse
-	96,  // 421: openshell.v1.OpenShell.RevokeSshSession:output_type -> openshell.v1.RevokeSshSessionResponse
-	101, // 422: openshell.v1.OpenShell.ExecSandbox:output_type -> openshell.v1.ExecSandboxEvent
-	103, // 423: openshell.v1.OpenShell.ForwardTcp:output_type -> openshell.v1.TcpForwardFrame
-	101, // 424: openshell.v1.OpenShell.ExecSandboxInteractive:output_type -> openshell.v1.ExecSandboxEvent
-	116, // 425: openshell.v1.OpenShell.CreateProvider:output_type -> openshell.v1.ProviderResponse
-	116, // 426: openshell.v1.OpenShell.GetProvider:output_type -> openshell.v1.ProviderResponse
-	117, // 427: openshell.v1.OpenShell.ListProviders:output_type -> openshell.v1.ListProvidersResponse
-	141, // 428: openshell.v1.OpenShell.ListProviderProfiles:output_type -> openshell.v1.ListProviderProfilesResponse
-	140, // 429: openshell.v1.OpenShell.GetProviderProfile:output_type -> openshell.v1.ProviderProfileResponse
-	143, // 430: openshell.v1.OpenShell.ImportProviderProfiles:output_type -> openshell.v1.ImportProviderProfilesResponse
-	145, // 431: openshell.v1.OpenShell.UpdateProviderProfiles:output_type -> openshell.v1.UpdateProviderProfilesResponse
-	147, // 432: openshell.v1.OpenShell.LintProviderProfiles:output_type -> openshell.v1.LintProviderProfilesResponse
-	116, // 433: openshell.v1.OpenShell.UpdateProvider:output_type -> openshell.v1.ProviderResponse
-	132, // 434: openshell.v1.OpenShell.GetProviderRefreshStatus:output_type -> openshell.v1.GetProviderRefreshStatusResponse
-	134, // 435: openshell.v1.OpenShell.ConfigureProviderRefresh:output_type -> openshell.v1.ConfigureProviderRefreshResponse
-	136, // 436: openshell.v1.OpenShell.RotateProviderCredential:output_type -> openshell.v1.RotateProviderCredentialResponse
-	138, // 437: openshell.v1.OpenShell.DeleteProviderRefresh:output_type -> openshell.v1.DeleteProviderRefreshResponse
-	148, // 438: openshell.v1.OpenShell.DeleteProvider:output_type -> openshell.v1.DeleteProviderResponse
-	150, // 439: openshell.v1.OpenShell.DeleteProviderProfile:output_type -> openshell.v1.DeleteProviderProfileResponse
-	288, // 440: openshell.v1.OpenShell.GetSandboxConfig:output_type -> openshell.sandbox.v1.GetSandboxConfigResponse
-	289, // 441: openshell.v1.OpenShell.GetGatewayConfig:output_type -> openshell.sandbox.v1.GetGatewayConfigResponse
-	166, // 442: openshell.v1.OpenShell.UpdateConfig:output_type -> openshell.v1.UpdateConfigResponse
-	168, // 443: openshell.v1.OpenShell.GetSandboxPolicyStatus:output_type -> openshell.v1.GetSandboxPolicyStatusResponse
-	170, // 444: openshell.v1.OpenShell.ListSandboxPolicies:output_type -> openshell.v1.ListSandboxPoliciesResponse
-	172, // 445: openshell.v1.OpenShell.ReportPolicyStatus:output_type -> openshell.v1.ReportPolicyStatusResponse
-	245, // 446: openshell.v1.OpenShell.ReportEndpointStatus:output_type -> openshell.v1.ReportEndpointStatusResponse
-	83,  // 447: openshell.v1.OpenShell.ReportProviderReadiness:output_type -> openshell.v1.ReportProviderReadinessResponse
-	175, // 448: openshell.v1.OpenShell.ReportSandboxConfiguration:output_type -> openshell.v1.ReportSandboxConfigurationResponse
-	154, // 449: openshell.v1.OpenShell.GetSandboxProviderEnvironment:output_type -> openshell.v1.GetSandboxProviderEnvironmentResponse
-	156, // 450: openshell.v1.OpenShell.ExchangeProviderSubjectToken:output_type -> openshell.v1.ExchangeProviderSubjectTokenResponse
-	180, // 451: openshell.v1.OpenShell.GetSandboxLogs:output_type -> openshell.v1.GetSandboxLogsResponse
-	179, // 452: openshell.v1.OpenShell.PushSandboxLogs:output_type -> openshell.v1.PushSandboxLogsResponse
-	182, // 453: openshell.v1.OpenShell.ConnectSupervisor:output_type -> openshell.v1.GatewayMessage
-	189, // 454: openshell.v1.OpenShell.ReportMainProcessExit:output_type -> openshell.v1.ReportMainProcessExitResponse
-	191, // 455: openshell.v1.OpenShell.FinalizeMainProcessExit:output_type -> openshell.v1.FinalizeMainProcessExitResponse
-	196, // 456: openshell.v1.OpenShell.RelayStream:output_type -> openshell.v1.RelayFrame
-	198, // 457: openshell.v1.OpenShell.PeerRelay:output_type -> openshell.v1.PeerRelayFrame
-	83,  // 458: openshell.v1.OpenShell.PeerReportProviderReadiness:output_type -> openshell.v1.ReportProviderReadinessResponse
-	245, // 459: openshell.v1.OpenShell.PeerReportEndpointStatus:output_type -> openshell.v1.ReportEndpointStatusResponse
-	81,  // 460: openshell.v1.OpenShell.PeerGetSandboxProviderStatus:output_type -> openshell.v1.GetSandboxProviderStatusResponse
-	108, // 461: openshell.v1.OpenShell.WatchSandbox:output_type -> openshell.v1.SandboxStreamEvent
-	208, // 462: openshell.v1.OpenShell.SubmitPolicyAnalysis:output_type -> openshell.v1.SubmitPolicyAnalysisResponse
-	210, // 463: openshell.v1.OpenShell.GetDraftPolicy:output_type -> openshell.v1.GetDraftPolicyResponse
-	212, // 464: openshell.v1.OpenShell.ApproveDraftChunk:output_type -> openshell.v1.ApproveDraftChunkResponse
-	214, // 465: openshell.v1.OpenShell.RejectDraftChunk:output_type -> openshell.v1.RejectDraftChunkResponse
-	217, // 466: openshell.v1.OpenShell.ApproveAllDraftChunks:output_type -> openshell.v1.ApproveAllDraftChunksResponse
-	219, // 467: openshell.v1.OpenShell.EditDraftChunk:output_type -> openshell.v1.EditDraftChunkResponse
-	221, // 468: openshell.v1.OpenShell.UndoDraftChunk:output_type -> openshell.v1.UndoDraftChunkResponse
-	223, // 469: openshell.v1.OpenShell.ClearDraftChunks:output_type -> openshell.v1.ClearDraftChunksResponse
-	226, // 470: openshell.v1.OpenShell.GetDraftHistory:output_type -> openshell.v1.GetDraftHistoryResponse
-	19,  // 471: openshell.v1.OpenShell.IssueSandboxToken:output_type -> openshell.v1.IssueSandboxTokenResponse
-	21,  // 472: openshell.v1.OpenShell.RefreshSandboxToken:output_type -> openshell.v1.RefreshSandboxTokenResponse
-	228, // 473: openshell.v1.OpenShell.CreateWorkspace:output_type -> openshell.v1.CreateWorkspaceResponse
-	230, // 474: openshell.v1.OpenShell.GetWorkspace:output_type -> openshell.v1.GetWorkspaceResponse
-	232, // 475: openshell.v1.OpenShell.ListWorkspaces:output_type -> openshell.v1.ListWorkspacesResponse
-	234, // 476: openshell.v1.OpenShell.DeleteWorkspace:output_type -> openshell.v1.DeleteWorkspaceResponse
-	237, // 477: openshell.v1.OpenShell.AddWorkspaceMember:output_type -> openshell.v1.AddWorkspaceMemberResponse
-	239, // 478: openshell.v1.OpenShell.RemoveWorkspaceMember:output_type -> openshell.v1.RemoveWorkspaceMemberResponse
-	241, // 479: openshell.v1.OpenShell.ListWorkspaceMembers:output_type -> openshell.v1.ListWorkspaceMembersResponse
-	398, // [398:480] is the sub-list for method output_type
-	316, // [316:398] is the sub-list for method input_type
-	316, // [316:316] is the sub-list for extension type_name
-	316, // [316:316] is the sub-list for extension extendee
-	0,   // [0:316] is the sub-list for field type_name
+	290, // 115: openshell.v1.ExecSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	272, // 116: openshell.v1.ExecSandboxRequest.environment:type_name -> openshell.v1.ExecSandboxRequest.EnvironmentEntry
+	289, // 117: openshell.v1.ExecSandboxRequest.execution_timeout:type_name -> google.protobuf.Duration
+	99,  // 118: openshell.v1.ExecSandboxEvent.stdout:type_name -> openshell.v1.ExecSandboxStdout
+	100, // 119: openshell.v1.ExecSandboxEvent.stderr:type_name -> openshell.v1.ExecSandboxStderr
+	101, // 120: openshell.v1.ExecSandboxEvent.exit:type_name -> openshell.v1.ExecSandboxExit
+	194, // 121: openshell.v1.TcpForwardInit.ssh:type_name -> openshell.v1.SshRelayTarget
+	195, // 122: openshell.v1.TcpForwardInit.tcp:type_name -> openshell.v1.TcpRelayTarget
+	103, // 123: openshell.v1.TcpForwardFrame.init:type_name -> openshell.v1.TcpForwardInit
+	98,  // 124: openshell.v1.ExecSandboxInput.start:type_name -> openshell.v1.ExecSandboxRequest
+	106, // 125: openshell.v1.ExecSandboxInput.resize:type_name -> openshell.v1.ExecSandboxWindowResize
+	286, // 126: openshell.v1.SshSession.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	285, // 127: openshell.v1.SshSession.expiration_time:type_name -> google.protobuf.Timestamp
+	290, // 128: openshell.v1.WatchSandboxRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	285, // 129: openshell.v1.WatchSandboxRequest.since_time:type_name -> google.protobuf.Timestamp
+	36,  // 130: openshell.v1.SandboxStreamEvent.sandbox:type_name -> openshell.v1.Sandbox
+	110, // 131: openshell.v1.SandboxStreamEvent.log:type_name -> openshell.v1.SandboxLogLine
+	50,  // 132: openshell.v1.SandboxStreamEvent.event:type_name -> openshell.v1.PlatformEvent
+	111, // 133: openshell.v1.SandboxStreamEvent.warning:type_name -> openshell.v1.SandboxStreamWarning
+	207, // 134: openshell.v1.SandboxStreamEvent.draft_policy_update:type_name -> openshell.v1.DraftPolicyUpdate
+	258, // 135: openshell.v1.SandboxStreamEvent.egress_usage:type_name -> openshell.v1.EgressUsageUpdate
+	285, // 136: openshell.v1.SandboxLogLine.event_time:type_name -> google.protobuf.Timestamp
+	273, // 137: openshell.v1.SandboxLogLine.fields:type_name -> openshell.v1.SandboxLogLine.FieldsEntry
+	290, // 138: openshell.v1.CreateProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	291, // 139: openshell.v1.CreateProviderRequest.provider:type_name -> openshell.datamodel.v1.Provider
+	290, // 140: openshell.v1.GetProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 141: openshell.v1.ListProvidersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 142: openshell.v1.UpdateProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	291, // 143: openshell.v1.UpdateProviderRequest.provider:type_name -> openshell.datamodel.v1.Provider
+	274, // 144: openshell.v1.UpdateProviderRequest.credential_expiration_times:type_name -> openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry
+	290, // 145: openshell.v1.DeleteProviderRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	291, // 146: openshell.v1.ProviderResponse.provider:type_name -> openshell.datamodel.v1.Provider
+	78,  // 147: openshell.v1.ProviderResponse.target_receipts:type_name -> openshell.v1.ProviderMutationReceipt
+	291, // 148: openshell.v1.ListProvidersResponse.providers:type_name -> openshell.datamodel.v1.Provider
+	290, // 149: openshell.v1.ListProviderProfilesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 150: openshell.v1.GetProviderProfileRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	140, // 151: openshell.v1.ProviderProfileImportItem.profile:type_name -> openshell.v1.ProviderProfile
+	289, // 152: openshell.v1.ProviderCredentialTokenGrant.cache_ttl:type_name -> google.protobuf.Duration
+	123, // 153: openshell.v1.ProviderCredentialTokenGrant.audience_overrides:type_name -> openshell.v1.ProviderCredentialTokenGrantAudienceOverride
+	8,   // 154: openshell.v1.ProviderCredentialTokenGrant.grant_type:type_name -> openshell.v1.ProviderCredentialTokenGrantType
+	124, // 155: openshell.v1.ProviderCredentialTokenGrant.subject_token:type_name -> openshell.v1.ProviderCredentialTokenGrantSubjectToken
+	129, // 156: openshell.v1.ProviderProfileCredential.refresh:type_name -> openshell.v1.ProviderCredentialRefresh
+	125, // 157: openshell.v1.ProviderProfileCredential.token_grant:type_name -> openshell.v1.ProviderCredentialTokenGrant
+	9,   // 158: openshell.v1.ProviderCredentialRefresh.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
+	289, // 159: openshell.v1.ProviderCredentialRefresh.refresh_before:type_name -> google.protobuf.Duration
+	289, // 160: openshell.v1.ProviderCredentialRefresh.max_lifetime:type_name -> google.protobuf.Duration
+	127, // 161: openshell.v1.ProviderCredentialRefresh.material:type_name -> openshell.v1.ProviderCredentialRefreshMaterial
+	128, // 162: openshell.v1.ProviderCredentialRefresh.additional_outputs:type_name -> openshell.v1.ProviderCredentialRefreshOutput
+	9,   // 163: openshell.v1.ProviderCredentialRefreshStatus.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
+	285, // 164: openshell.v1.ProviderCredentialRefreshStatus.expiration_time:type_name -> google.protobuf.Timestamp
+	285, // 165: openshell.v1.ProviderCredentialRefreshStatus.next_refresh_time:type_name -> google.protobuf.Timestamp
+	285, // 166: openshell.v1.ProviderCredentialRefreshStatus.last_refresh_time:type_name -> google.protobuf.Timestamp
+	15,  // 167: openshell.v1.ProviderCredentialRefreshStatus.recovery_action:type_name -> openshell.v1.ProviderCredentialRefreshRecoveryAction
+	285, // 168: openshell.v1.ProviderCredentialRefreshStatus.last_error_time:type_name -> google.protobuf.Timestamp
+	290, // 169: openshell.v1.GetProviderRefreshStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	130, // 170: openshell.v1.GetProviderRefreshStatusResponse.credentials:type_name -> openshell.v1.ProviderCredentialRefreshStatus
+	290, // 171: openshell.v1.ConfigureProviderRefreshRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	9,   // 172: openshell.v1.ConfigureProviderRefreshRequest.strategy:type_name -> openshell.v1.ProviderCredentialRefreshStrategy
+	275, // 173: openshell.v1.ConfigureProviderRefreshRequest.material:type_name -> openshell.v1.ConfigureProviderRefreshRequest.MaterialEntry
+	285, // 174: openshell.v1.ConfigureProviderRefreshRequest.expiration_time:type_name -> google.protobuf.Timestamp
+	130, // 175: openshell.v1.ConfigureProviderRefreshResponse.status:type_name -> openshell.v1.ProviderCredentialRefreshStatus
+	290, // 176: openshell.v1.RotateProviderCredentialRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	130, // 177: openshell.v1.RotateProviderCredentialResponse.status:type_name -> openshell.v1.ProviderCredentialRefreshStatus
+	290, // 178: openshell.v1.DeleteProviderRefreshRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	16,  // 179: openshell.v1.DeleteProviderRefreshResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	10,  // 180: openshell.v1.ProviderProfile.category:type_name -> openshell.v1.ProviderProfileCategory
+	126, // 181: openshell.v1.ProviderProfile.credentials:type_name -> openshell.v1.ProviderProfileCredential
+	293, // 182: openshell.v1.ProviderProfile.endpoints:type_name -> openshell.sandbox.v1.NetworkEndpoint
+	294, // 183: openshell.v1.ProviderProfile.binaries:type_name -> openshell.sandbox.v1.NetworkBinary
+	131, // 184: openshell.v1.ProviderProfile.discovery:type_name -> openshell.v1.ProviderProfileDiscovery
+	276, // 185: openshell.v1.ProviderProfile.annotations:type_name -> openshell.v1.ProviderProfile.AnnotationsEntry
+	140, // 186: openshell.v1.ProviderProfileResponse.profile:type_name -> openshell.v1.ProviderProfile
+	140, // 187: openshell.v1.ListProviderProfilesResponse.profiles:type_name -> openshell.v1.ProviderProfile
+	290, // 188: openshell.v1.ImportProviderProfilesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	121, // 189: openshell.v1.ImportProviderProfilesRequest.profiles:type_name -> openshell.v1.ProviderProfileImportItem
+	122, // 190: openshell.v1.ImportProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
+	140, // 191: openshell.v1.ImportProviderProfilesResponse.profiles:type_name -> openshell.v1.ProviderProfile
+	290, // 192: openshell.v1.UpdateProviderProfilesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	121, // 193: openshell.v1.UpdateProviderProfilesRequest.profile:type_name -> openshell.v1.ProviderProfileImportItem
+	122, // 194: openshell.v1.UpdateProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
+	140, // 195: openshell.v1.UpdateProviderProfilesResponse.profile:type_name -> openshell.v1.ProviderProfile
+	290, // 196: openshell.v1.LintProviderProfilesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	121, // 197: openshell.v1.LintProviderProfilesRequest.profiles:type_name -> openshell.v1.ProviderProfileImportItem
+	122, // 198: openshell.v1.LintProviderProfilesResponse.diagnostics:type_name -> openshell.v1.ProviderProfileDiagnostic
+	16,  // 199: openshell.v1.DeleteProviderResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	290, // 200: openshell.v1.DeleteProviderProfileRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	16,  // 201: openshell.v1.DeleteProviderProfileResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	153, // 202: openshell.v1.StaticCredentialBinding.endpoints:type_name -> openshell.v1.StaticCredentialEndpointBinding
+	277, // 203: openshell.v1.GetSandboxProviderEnvironmentResponse.environment:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.EnvironmentEntry
+	278, // 204: openshell.v1.GetSandboxProviderEnvironmentResponse.credential_expiration_times:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry
+	279, // 205: openshell.v1.GetSandboxProviderEnvironmentResponse.dynamic_credentials:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry
+	280, // 206: openshell.v1.GetSandboxProviderEnvironmentResponse.static_credential_bindings:type_name -> openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry
+	4,   // 207: openshell.v1.GetSandboxProviderEnvironmentResponse.readiness_reason:type_name -> openshell.v1.ProviderReadinessReason
+	289, // 208: openshell.v1.ExchangeProviderSubjectTokenResponse.expires_after:type_name -> google.protobuf.Duration
+	290, // 209: openshell.v1.UpdateConfigRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	287, // 210: openshell.v1.UpdateConfigRequest.policy:type_name -> openshell.sandbox.v1.SandboxPolicy
+	295, // 211: openshell.v1.UpdateConfigRequest.setting_value:type_name -> openshell.sandbox.v1.SettingValue
+	159, // 212: openshell.v1.UpdateConfigRequest.merge_operations:type_name -> openshell.v1.PolicyMergeOperation
+	281, // 213: openshell.v1.UpdateConfigRequest.annotations:type_name -> openshell.v1.UpdateConfigRequest.AnnotationsEntry
+	160, // 214: openshell.v1.PolicyMergeOperation.add_rule:type_name -> openshell.v1.AddNetworkRule
+	161, // 215: openshell.v1.PolicyMergeOperation.remove_endpoint:type_name -> openshell.v1.RemoveNetworkEndpoint
+	162, // 216: openshell.v1.PolicyMergeOperation.remove_rule:type_name -> openshell.v1.RemoveNetworkRule
+	164, // 217: openshell.v1.PolicyMergeOperation.add_deny_rules:type_name -> openshell.v1.AddDenyRules
+	165, // 218: openshell.v1.PolicyMergeOperation.add_allow_rules:type_name -> openshell.v1.AddAllowRules
+	166, // 219: openshell.v1.PolicyMergeOperation.remove_binary:type_name -> openshell.v1.RemoveNetworkBinary
+	296, // 220: openshell.v1.AddNetworkRule.rule:type_name -> openshell.sandbox.v1.NetworkPolicyRule
+	294, // 221: openshell.v1.L7RuleTarget.binaries:type_name -> openshell.sandbox.v1.NetworkBinary
+	297, // 222: openshell.v1.AddDenyRules.deny_rules:type_name -> openshell.sandbox.v1.L7DenyRule
+	163, // 223: openshell.v1.AddDenyRules.target:type_name -> openshell.v1.L7RuleTarget
+	298, // 224: openshell.v1.AddAllowRules.rules:type_name -> openshell.sandbox.v1.L7Rule
+	163, // 225: openshell.v1.AddAllowRules.target:type_name -> openshell.v1.L7RuleTarget
+	282, // 226: openshell.v1.UpdateConfigResponse.annotations:type_name -> openshell.v1.UpdateConfigResponse.AnnotationsEntry
+	290, // 227: openshell.v1.GetSandboxPolicyStatusRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	177, // 228: openshell.v1.GetSandboxPolicyStatusResponse.revision:type_name -> openshell.v1.SandboxPolicyRevision
+	290, // 229: openshell.v1.ListSandboxPoliciesRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	177, // 230: openshell.v1.ListSandboxPoliciesResponse.revisions:type_name -> openshell.v1.SandboxPolicyRevision
+	12,  // 231: openshell.v1.ReportPolicyStatusRequest.status:type_name -> openshell.v1.PolicyStatus
+	11,  // 232: openshell.v1.SandboxConfigurationAdmission.state:type_name -> openshell.v1.ConfigurationAdmissionState
+	174, // 233: openshell.v1.ReportSandboxConfigurationRequest.admission:type_name -> openshell.v1.SandboxConfigurationAdmission
+	12,  // 234: openshell.v1.SandboxPolicyRevision.status:type_name -> openshell.v1.PolicyStatus
+	285, // 235: openshell.v1.SandboxPolicyRevision.created_time:type_name -> google.protobuf.Timestamp
+	285, // 236: openshell.v1.SandboxPolicyRevision.loaded_time:type_name -> google.protobuf.Timestamp
+	287, // 237: openshell.v1.SandboxPolicyRevision.policy:type_name -> openshell.sandbox.v1.SandboxPolicy
+	283, // 238: openshell.v1.SandboxPolicyRevision.provenance:type_name -> openshell.v1.SandboxPolicyRevision.ProvenanceEntry
+	290, // 239: openshell.v1.GetSandboxLogsRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	285, // 240: openshell.v1.GetSandboxLogsRequest.since_time:type_name -> google.protobuf.Timestamp
+	110, // 241: openshell.v1.PushSandboxLogsRequest.logs:type_name -> openshell.v1.SandboxLogLine
+	110, // 242: openshell.v1.GetSandboxLogsResponse.logs:type_name -> openshell.v1.SandboxLogLine
+	184, // 243: openshell.v1.SupervisorMessage.hello:type_name -> openshell.v1.SupervisorHello
+	187, // 244: openshell.v1.SupervisorMessage.heartbeat:type_name -> openshell.v1.SupervisorHeartbeat
+	200, // 245: openshell.v1.SupervisorMessage.relay_open_result:type_name -> openshell.v1.RelayOpenResult
+	201, // 246: openshell.v1.SupervisorMessage.relay_close:type_name -> openshell.v1.RelayClose
+	185, // 247: openshell.v1.GatewayMessage.session_accepted:type_name -> openshell.v1.SessionAccepted
+	186, // 248: openshell.v1.GatewayMessage.session_rejected:type_name -> openshell.v1.SessionRejected
+	188, // 249: openshell.v1.GatewayMessage.heartbeat:type_name -> openshell.v1.GatewayHeartbeat
+	193, // 250: openshell.v1.GatewayMessage.relay_open:type_name -> openshell.v1.RelayOpen
+	201, // 251: openshell.v1.GatewayMessage.relay_close:type_name -> openshell.v1.RelayClose
+	289, // 252: openshell.v1.SessionAccepted.heartbeat_interval:type_name -> google.protobuf.Duration
+	194, // 253: openshell.v1.RelayOpen.ssh:type_name -> openshell.v1.SshRelayTarget
+	195, // 254: openshell.v1.RelayOpen.tcp:type_name -> openshell.v1.TcpRelayTarget
+	196, // 255: openshell.v1.RelayFrame.init:type_name -> openshell.v1.RelayInit
+	193, // 256: openshell.v1.PeerRelayInit.relay_open:type_name -> openshell.v1.RelayOpen
+	198, // 257: openshell.v1.PeerRelayFrame.init:type_name -> openshell.v1.PeerRelayInit
+	285, // 258: openshell.v1.DenialSummary.first_seen_time:type_name -> google.protobuf.Timestamp
+	285, // 259: openshell.v1.DenialSummary.last_seen_time:type_name -> google.protobuf.Timestamp
+	202, // 260: openshell.v1.DenialSummary.l7_request_samples:type_name -> openshell.v1.L7RequestSample
+	204, // 261: openshell.v1.NetworkActivitySummary.denials_by_group:type_name -> openshell.v1.DenialGroupCount
+	296, // 262: openshell.v1.PolicyChunk.proposed_rule:type_name -> openshell.sandbox.v1.NetworkPolicyRule
+	285, // 263: openshell.v1.PolicyChunk.created_time:type_name -> google.protobuf.Timestamp
+	285, // 264: openshell.v1.PolicyChunk.decided_time:type_name -> google.protobuf.Timestamp
+	285, // 265: openshell.v1.PolicyChunk.first_seen_time:type_name -> google.protobuf.Timestamp
+	285, // 266: openshell.v1.PolicyChunk.last_seen_time:type_name -> google.protobuf.Timestamp
+	287, // 267: openshell.v1.PolicyChunk.current_effective_policy:type_name -> openshell.sandbox.v1.SandboxPolicy
+	287, // 268: openshell.v1.PolicyChunk.candidate_effective_policy:type_name -> openshell.sandbox.v1.SandboxPolicy
+	290, // 269: openshell.v1.SubmitPolicyAnalysisRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	203, // 270: openshell.v1.SubmitPolicyAnalysisRequest.summaries:type_name -> openshell.v1.DenialSummary
+	206, // 271: openshell.v1.SubmitPolicyAnalysisRequest.proposed_chunks:type_name -> openshell.v1.PolicyChunk
+	205, // 272: openshell.v1.SubmitPolicyAnalysisRequest.network_activity_summaries:type_name -> openshell.v1.NetworkActivitySummary
+	290, // 273: openshell.v1.GetDraftPolicyRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	206, // 274: openshell.v1.GetDraftPolicyResponse.chunks:type_name -> openshell.v1.PolicyChunk
+	285, // 275: openshell.v1.GetDraftPolicyResponse.last_analyzed_time:type_name -> google.protobuf.Timestamp
+	290, // 276: openshell.v1.ApproveDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 277: openshell.v1.RejectDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 278: openshell.v1.ApproveAllDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	216, // 279: openshell.v1.ApproveAllDraftChunksRequest.approvals:type_name -> openshell.v1.DraftChunkApproval
+	290, // 280: openshell.v1.EditDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	296, // 281: openshell.v1.EditDraftChunkRequest.proposed_rule:type_name -> openshell.sandbox.v1.NetworkPolicyRule
+	290, // 282: openshell.v1.UndoDraftChunkRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 283: openshell.v1.ClearDraftChunksRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	290, // 284: openshell.v1.GetDraftHistoryRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	285, // 285: openshell.v1.DraftHistoryEntry.event_time:type_name -> google.protobuf.Timestamp
+	226, // 286: openshell.v1.GetDraftHistoryResponse.entries:type_name -> openshell.v1.DraftHistoryEntry
+	284, // 287: openshell.v1.CreateWorkspaceRequest.labels:type_name -> openshell.v1.CreateWorkspaceRequest.LabelsEntry
+	299, // 288: openshell.v1.CreateWorkspaceResponse.workspace:type_name -> openshell.datamodel.v1.Workspace
+	299, // 289: openshell.v1.GetWorkspaceResponse.workspace:type_name -> openshell.datamodel.v1.Workspace
+	299, // 290: openshell.v1.ListWorkspacesResponse.workspaces:type_name -> openshell.datamodel.v1.Workspace
+	16,  // 291: openshell.v1.DeleteWorkspaceResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	286, // 292: openshell.v1.WorkspaceMember.metadata:type_name -> openshell.datamodel.v1.ObjectMeta
+	14,  // 293: openshell.v1.WorkspaceMember.role:type_name -> openshell.v1.WorkspaceRole
+	290, // 294: openshell.v1.AddWorkspaceMemberRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	14,  // 295: openshell.v1.AddWorkspaceMemberRequest.role:type_name -> openshell.v1.WorkspaceRole
+	236, // 296: openshell.v1.AddWorkspaceMemberResponse.member:type_name -> openshell.v1.WorkspaceMember
+	290, // 297: openshell.v1.RemoveWorkspaceMemberRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	16,  // 298: openshell.v1.RemoveWorkspaceMemberResponse.outcome:type_name -> openshell.v1.DeletionOutcome
+	290, // 299: openshell.v1.ListWorkspaceMembersRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	236, // 300: openshell.v1.ListWorkspaceMembersResponse.members:type_name -> openshell.v1.WorkspaceMember
+	285, // 301: openshell.v1.ExtensionServiceCredential.expiration_time:type_name -> google.protobuf.Timestamp
+	17,  // 302: openshell.v1.EndpointObservation.result:type_name -> openshell.v1.EndpointResult
+	244, // 303: openshell.v1.ReportEndpointStatusRequest.observations:type_name -> openshell.v1.EndpointObservation
+	290, // 304: openshell.v1.ReportEgressUsageRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	285, // 305: openshell.v1.ReportEgressUsageRequest.window_start:type_name -> google.protobuf.Timestamp
+	289, // 306: openshell.v1.ReportEgressUsageRequest.window_duration:type_name -> google.protobuf.Duration
+	248, // 307: openshell.v1.ReportEgressUsageRequest.summaries:type_name -> openshell.v1.EgressUsageSummary
+	251, // 308: openshell.v1.ReportEgressUsageRequest.findings:type_name -> openshell.v1.EgressUsageFinding
+	249, // 309: openshell.v1.EgressUsageSummary.responses:type_name -> openshell.v1.EgressResponseCounts
+	250, // 310: openshell.v1.EgressUsageSummary.rule_hits:type_name -> openshell.v1.EgressRuleHit
+	18,  // 311: openshell.v1.EgressUsageFinding.severity:type_name -> openshell.v1.EgressFindingSeverity
+	285, // 312: openshell.v1.EgressUsageFinding.observed_time:type_name -> google.protobuf.Timestamp
+	290, // 313: openshell.v1.GetEgressUsageRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	257, // 314: openshell.v1.GetEgressUsageResponse.windows:type_name -> openshell.v1.EgressUsageWindow
+	251, // 315: openshell.v1.GetEgressUsageResponse.findings:type_name -> openshell.v1.EgressUsageFinding
+	290, // 316: openshell.v1.GetFleetEgressUsageRequest.workspace_scope:type_name -> openshell.datamodel.v1.WorkspaceSelector
+	256, // 317: openshell.v1.GetFleetEgressUsageResponse.destinations:type_name -> openshell.v1.FleetEgressDestination
+	251, // 318: openshell.v1.GetFleetEgressUsageResponse.findings:type_name -> openshell.v1.EgressUsageFinding
+	285, // 319: openshell.v1.EgressUsageWindow.window_start:type_name -> google.protobuf.Timestamp
+	289, // 320: openshell.v1.EgressUsageWindow.window_duration:type_name -> google.protobuf.Duration
+	248, // 321: openshell.v1.EgressUsageWindow.summaries:type_name -> openshell.v1.EgressUsageSummary
+	257, // 322: openshell.v1.EgressUsageUpdate.window:type_name -> openshell.v1.EgressUsageWindow
+	251, // 323: openshell.v1.EgressUsageUpdate.findings:type_name -> openshell.v1.EgressUsageFinding
+	17,  // 324: openshell.v1.EndpointStatus.last_result:type_name -> openshell.v1.EndpointResult
+	285, // 325: openshell.v1.EndpointStatus.last_reported_time:type_name -> google.protobuf.Timestamp
+	285, // 326: openshell.v1.SandboxProvisioning.configuration_change_time:type_name -> google.protobuf.Timestamp
+	285, // 327: openshell.v1.SandboxProvisioning.first_rejection_time:type_name -> google.protobuf.Timestamp
+	285, // 328: openshell.v1.SandboxProvisioning.deadline:type_name -> google.protobuf.Timestamp
+	285, // 329: openshell.v1.SandboxProvisioning.timeout_time:type_name -> google.protobuf.Timestamp
+	285, // 330: openshell.v1.SandboxProvisioning.cleanup_completed_time:type_name -> google.protobuf.Timestamp
+	285, // 331: openshell.v1.SandboxProvisioning.cleanup_retry_time:type_name -> google.protobuf.Timestamp
+	285, // 332: openshell.v1.SandboxProvisioning.attachment_change_time:type_name -> google.protobuf.Timestamp
+	285, // 333: openshell.v1.UpdateProviderRequest.CredentialExpirationTimesEntry.value:type_name -> google.protobuf.Timestamp
+	285, // 334: openshell.v1.GetSandboxProviderEnvironmentResponse.CredentialExpirationTimesEntry.value:type_name -> google.protobuf.Timestamp
+	126, // 335: openshell.v1.GetSandboxProviderEnvironmentResponse.DynamicCredentialsEntry.value:type_name -> openshell.v1.ProviderProfileCredential
+	154, // 336: openshell.v1.GetSandboxProviderEnvironmentResponse.StaticCredentialBindingsEntry.value:type_name -> openshell.v1.StaticCredentialBinding
+	23,  // 337: openshell.v1.OpenShell.Health:input_type -> openshell.v1.HealthRequest
+	25,  // 338: openshell.v1.OpenShell.GetCurrentUser:input_type -> openshell.v1.GetCurrentUserRequest
+	27,  // 339: openshell.v1.OpenShell.GetGatewayInfo:input_type -> openshell.v1.GetGatewayInfoRequest
+	51,  // 340: openshell.v1.OpenShell.CreateSandbox:input_type -> openshell.v1.CreateSandboxRequest
+	59,  // 341: openshell.v1.OpenShell.BeginRootfsTarStaging:input_type -> openshell.v1.BeginRootfsTarStagingRequest
+	61,  // 342: openshell.v1.OpenShell.GetSandbox:input_type -> openshell.v1.GetSandboxRequest
+	62,  // 343: openshell.v1.OpenShell.ListSandboxes:input_type -> openshell.v1.ListSandboxesRequest
+	52,  // 344: openshell.v1.OpenShell.CreateSandboxTemplate:input_type -> openshell.v1.CreateSandboxTemplateRequest
+	53,  // 345: openshell.v1.OpenShell.GetSandboxTemplate:input_type -> openshell.v1.GetSandboxTemplateRequest
+	54,  // 346: openshell.v1.OpenShell.ListSandboxTemplates:input_type -> openshell.v1.ListSandboxTemplatesRequest
+	55,  // 347: openshell.v1.OpenShell.DeleteSandboxTemplate:input_type -> openshell.v1.DeleteSandboxTemplateRequest
+	63,  // 348: openshell.v1.OpenShell.ListSandboxProviders:input_type -> openshell.v1.ListSandboxProvidersRequest
+	64,  // 349: openshell.v1.OpenShell.AttachSandboxProvider:input_type -> openshell.v1.AttachSandboxProviderRequest
+	65,  // 350: openshell.v1.OpenShell.DetachSandboxProvider:input_type -> openshell.v1.DetachSandboxProviderRequest
+	81,  // 351: openshell.v1.OpenShell.GetSandboxProviderStatus:input_type -> openshell.v1.GetSandboxProviderStatusRequest
+	66,  // 352: openshell.v1.OpenShell.DeleteSandbox:input_type -> openshell.v1.DeleteSandboxRequest
+	67,  // 353: openshell.v1.OpenShell.StopSandbox:input_type -> openshell.v1.StopSandboxRequest
+	68,  // 354: openshell.v1.OpenShell.StartSandbox:input_type -> openshell.v1.StartSandboxRequest
+	86,  // 355: openshell.v1.OpenShell.CreateSshSession:input_type -> openshell.v1.CreateSshSessionRequest
+	88,  // 356: openshell.v1.OpenShell.ExposeService:input_type -> openshell.v1.ExposeServiceRequest
+	89,  // 357: openshell.v1.OpenShell.GetService:input_type -> openshell.v1.GetServiceRequest
+	90,  // 358: openshell.v1.OpenShell.ListServices:input_type -> openshell.v1.ListServicesRequest
+	92,  // 359: openshell.v1.OpenShell.DeleteService:input_type -> openshell.v1.DeleteServiceRequest
+	96,  // 360: openshell.v1.OpenShell.RevokeSshSession:input_type -> openshell.v1.RevokeSshSessionRequest
+	98,  // 361: openshell.v1.OpenShell.ExecSandbox:input_type -> openshell.v1.ExecSandboxRequest
+	104, // 362: openshell.v1.OpenShell.ForwardTcp:input_type -> openshell.v1.TcpForwardFrame
+	105, // 363: openshell.v1.OpenShell.ExecSandboxInteractive:input_type -> openshell.v1.ExecSandboxInput
+	112, // 364: openshell.v1.OpenShell.CreateProvider:input_type -> openshell.v1.CreateProviderRequest
+	113, // 365: openshell.v1.OpenShell.GetProvider:input_type -> openshell.v1.GetProviderRequest
+	114, // 366: openshell.v1.OpenShell.ListProviders:input_type -> openshell.v1.ListProvidersRequest
+	119, // 367: openshell.v1.OpenShell.ListProviderProfiles:input_type -> openshell.v1.ListProviderProfilesRequest
+	120, // 368: openshell.v1.OpenShell.GetProviderProfile:input_type -> openshell.v1.GetProviderProfileRequest
+	143, // 369: openshell.v1.OpenShell.ImportProviderProfiles:input_type -> openshell.v1.ImportProviderProfilesRequest
+	145, // 370: openshell.v1.OpenShell.UpdateProviderProfiles:input_type -> openshell.v1.UpdateProviderProfilesRequest
+	147, // 371: openshell.v1.OpenShell.LintProviderProfiles:input_type -> openshell.v1.LintProviderProfilesRequest
+	115, // 372: openshell.v1.OpenShell.UpdateProvider:input_type -> openshell.v1.UpdateProviderRequest
+	132, // 373: openshell.v1.OpenShell.GetProviderRefreshStatus:input_type -> openshell.v1.GetProviderRefreshStatusRequest
+	134, // 374: openshell.v1.OpenShell.ConfigureProviderRefresh:input_type -> openshell.v1.ConfigureProviderRefreshRequest
+	136, // 375: openshell.v1.OpenShell.RotateProviderCredential:input_type -> openshell.v1.RotateProviderCredentialRequest
+	138, // 376: openshell.v1.OpenShell.DeleteProviderRefresh:input_type -> openshell.v1.DeleteProviderRefreshRequest
+	116, // 377: openshell.v1.OpenShell.DeleteProvider:input_type -> openshell.v1.DeleteProviderRequest
+	150, // 378: openshell.v1.OpenShell.DeleteProviderProfile:input_type -> openshell.v1.DeleteProviderProfileRequest
+	300, // 379: openshell.v1.OpenShell.GetSandboxConfig:input_type -> openshell.sandbox.v1.GetSandboxConfigRequest
+	301, // 380: openshell.v1.OpenShell.GetGatewayConfig:input_type -> openshell.sandbox.v1.GetGatewayConfigRequest
+	158, // 381: openshell.v1.OpenShell.UpdateConfig:input_type -> openshell.v1.UpdateConfigRequest
+	168, // 382: openshell.v1.OpenShell.GetSandboxPolicyStatus:input_type -> openshell.v1.GetSandboxPolicyStatusRequest
+	170, // 383: openshell.v1.OpenShell.ListSandboxPolicies:input_type -> openshell.v1.ListSandboxPoliciesRequest
+	172, // 384: openshell.v1.OpenShell.ReportPolicyStatus:input_type -> openshell.v1.ReportPolicyStatusRequest
+	245, // 385: openshell.v1.OpenShell.ReportEndpointStatus:input_type -> openshell.v1.ReportEndpointStatusRequest
+	246, // 386: openshell.v1.OpenShell.ReportEgressUsage:input_type -> openshell.v1.ReportEgressUsageRequest
+	83,  // 387: openshell.v1.OpenShell.ReportProviderReadiness:input_type -> openshell.v1.ReportProviderReadinessRequest
+	175, // 388: openshell.v1.OpenShell.ReportSandboxConfiguration:input_type -> openshell.v1.ReportSandboxConfigurationRequest
+	152, // 389: openshell.v1.OpenShell.GetSandboxProviderEnvironment:input_type -> openshell.v1.GetSandboxProviderEnvironmentRequest
+	156, // 390: openshell.v1.OpenShell.ExchangeProviderSubjectToken:input_type -> openshell.v1.ExchangeProviderSubjectTokenRequest
+	252, // 391: openshell.v1.OpenShell.GetEgressUsage:input_type -> openshell.v1.GetEgressUsageRequest
+	254, // 392: openshell.v1.OpenShell.GetFleetEgressUsage:input_type -> openshell.v1.GetFleetEgressUsageRequest
+	178, // 393: openshell.v1.OpenShell.GetSandboxLogs:input_type -> openshell.v1.GetSandboxLogsRequest
+	179, // 394: openshell.v1.OpenShell.PushSandboxLogs:input_type -> openshell.v1.PushSandboxLogsRequest
+	182, // 395: openshell.v1.OpenShell.ConnectSupervisor:input_type -> openshell.v1.SupervisorMessage
+	189, // 396: openshell.v1.OpenShell.ReportMainProcessExit:input_type -> openshell.v1.ReportMainProcessExitRequest
+	191, // 397: openshell.v1.OpenShell.FinalizeMainProcessExit:input_type -> openshell.v1.FinalizeMainProcessExitRequest
+	197, // 398: openshell.v1.OpenShell.RelayStream:input_type -> openshell.v1.RelayFrame
+	199, // 399: openshell.v1.OpenShell.PeerRelay:input_type -> openshell.v1.PeerRelayFrame
+	83,  // 400: openshell.v1.OpenShell.PeerReportProviderReadiness:input_type -> openshell.v1.ReportProviderReadinessRequest
+	245, // 401: openshell.v1.OpenShell.PeerReportEndpointStatus:input_type -> openshell.v1.ReportEndpointStatusRequest
+	81,  // 402: openshell.v1.OpenShell.PeerGetSandboxProviderStatus:input_type -> openshell.v1.GetSandboxProviderStatusRequest
+	246, // 403: openshell.v1.OpenShell.PeerReportEgressUsage:input_type -> openshell.v1.ReportEgressUsageRequest
+	252, // 404: openshell.v1.OpenShell.PeerGetEgressUsage:input_type -> openshell.v1.GetEgressUsageRequest
+	108, // 405: openshell.v1.OpenShell.WatchSandbox:input_type -> openshell.v1.WatchSandboxRequest
+	208, // 406: openshell.v1.OpenShell.SubmitPolicyAnalysis:input_type -> openshell.v1.SubmitPolicyAnalysisRequest
+	210, // 407: openshell.v1.OpenShell.GetDraftPolicy:input_type -> openshell.v1.GetDraftPolicyRequest
+	212, // 408: openshell.v1.OpenShell.ApproveDraftChunk:input_type -> openshell.v1.ApproveDraftChunkRequest
+	214, // 409: openshell.v1.OpenShell.RejectDraftChunk:input_type -> openshell.v1.RejectDraftChunkRequest
+	217, // 410: openshell.v1.OpenShell.ApproveAllDraftChunks:input_type -> openshell.v1.ApproveAllDraftChunksRequest
+	219, // 411: openshell.v1.OpenShell.EditDraftChunk:input_type -> openshell.v1.EditDraftChunkRequest
+	221, // 412: openshell.v1.OpenShell.UndoDraftChunk:input_type -> openshell.v1.UndoDraftChunkRequest
+	223, // 413: openshell.v1.OpenShell.ClearDraftChunks:input_type -> openshell.v1.ClearDraftChunksRequest
+	225, // 414: openshell.v1.OpenShell.GetDraftHistory:input_type -> openshell.v1.GetDraftHistoryRequest
+	19,  // 415: openshell.v1.OpenShell.IssueSandboxToken:input_type -> openshell.v1.IssueSandboxTokenRequest
+	21,  // 416: openshell.v1.OpenShell.RefreshSandboxToken:input_type -> openshell.v1.RefreshSandboxTokenRequest
+	228, // 417: openshell.v1.OpenShell.CreateWorkspace:input_type -> openshell.v1.CreateWorkspaceRequest
+	230, // 418: openshell.v1.OpenShell.GetWorkspace:input_type -> openshell.v1.GetWorkspaceRequest
+	232, // 419: openshell.v1.OpenShell.ListWorkspaces:input_type -> openshell.v1.ListWorkspacesRequest
+	234, // 420: openshell.v1.OpenShell.DeleteWorkspace:input_type -> openshell.v1.DeleteWorkspaceRequest
+	237, // 421: openshell.v1.OpenShell.AddWorkspaceMember:input_type -> openshell.v1.AddWorkspaceMemberRequest
+	239, // 422: openshell.v1.OpenShell.RemoveWorkspaceMember:input_type -> openshell.v1.RemoveWorkspaceMemberRequest
+	241, // 423: openshell.v1.OpenShell.ListWorkspaceMembers:input_type -> openshell.v1.ListWorkspaceMembersRequest
+	24,  // 424: openshell.v1.OpenShell.Health:output_type -> openshell.v1.HealthResponse
+	26,  // 425: openshell.v1.OpenShell.GetCurrentUser:output_type -> openshell.v1.GetCurrentUserResponse
+	28,  // 426: openshell.v1.OpenShell.GetGatewayInfo:output_type -> openshell.v1.GetGatewayInfoResponse
+	69,  // 427: openshell.v1.OpenShell.CreateSandbox:output_type -> openshell.v1.SandboxResponse
+	60,  // 428: openshell.v1.OpenShell.BeginRootfsTarStaging:output_type -> openshell.v1.BeginRootfsTarStagingResponse
+	69,  // 429: openshell.v1.OpenShell.GetSandbox:output_type -> openshell.v1.SandboxResponse
+	70,  // 430: openshell.v1.OpenShell.ListSandboxes:output_type -> openshell.v1.ListSandboxesResponse
+	56,  // 431: openshell.v1.OpenShell.CreateSandboxTemplate:output_type -> openshell.v1.SandboxTemplateResponse
+	56,  // 432: openshell.v1.OpenShell.GetSandboxTemplate:output_type -> openshell.v1.SandboxTemplateResponse
+	57,  // 433: openshell.v1.OpenShell.ListSandboxTemplates:output_type -> openshell.v1.ListSandboxTemplatesResponse
+	58,  // 434: openshell.v1.OpenShell.DeleteSandboxTemplate:output_type -> openshell.v1.DeleteSandboxTemplateResponse
+	71,  // 435: openshell.v1.OpenShell.ListSandboxProviders:output_type -> openshell.v1.ListSandboxProvidersResponse
+	72,  // 436: openshell.v1.OpenShell.AttachSandboxProvider:output_type -> openshell.v1.AttachSandboxProviderResponse
+	73,  // 437: openshell.v1.OpenShell.DetachSandboxProvider:output_type -> openshell.v1.DetachSandboxProviderResponse
+	82,  // 438: openshell.v1.OpenShell.GetSandboxProviderStatus:output_type -> openshell.v1.GetSandboxProviderStatusResponse
+	85,  // 439: openshell.v1.OpenShell.DeleteSandbox:output_type -> openshell.v1.DeleteSandboxResponse
+	69,  // 440: openshell.v1.OpenShell.StopSandbox:output_type -> openshell.v1.SandboxResponse
+	69,  // 441: openshell.v1.OpenShell.StartSandbox:output_type -> openshell.v1.SandboxResponse
+	87,  // 442: openshell.v1.OpenShell.CreateSshSession:output_type -> openshell.v1.CreateSshSessionResponse
+	95,  // 443: openshell.v1.OpenShell.ExposeService:output_type -> openshell.v1.ServiceEndpointResponse
+	95,  // 444: openshell.v1.OpenShell.GetService:output_type -> openshell.v1.ServiceEndpointResponse
+	91,  // 445: openshell.v1.OpenShell.ListServices:output_type -> openshell.v1.ListServicesResponse
+	93,  // 446: openshell.v1.OpenShell.DeleteService:output_type -> openshell.v1.DeleteServiceResponse
+	97,  // 447: openshell.v1.OpenShell.RevokeSshSession:output_type -> openshell.v1.RevokeSshSessionResponse
+	102, // 448: openshell.v1.OpenShell.ExecSandbox:output_type -> openshell.v1.ExecSandboxEvent
+	104, // 449: openshell.v1.OpenShell.ForwardTcp:output_type -> openshell.v1.TcpForwardFrame
+	102, // 450: openshell.v1.OpenShell.ExecSandboxInteractive:output_type -> openshell.v1.ExecSandboxEvent
+	117, // 451: openshell.v1.OpenShell.CreateProvider:output_type -> openshell.v1.ProviderResponse
+	117, // 452: openshell.v1.OpenShell.GetProvider:output_type -> openshell.v1.ProviderResponse
+	118, // 453: openshell.v1.OpenShell.ListProviders:output_type -> openshell.v1.ListProvidersResponse
+	142, // 454: openshell.v1.OpenShell.ListProviderProfiles:output_type -> openshell.v1.ListProviderProfilesResponse
+	141, // 455: openshell.v1.OpenShell.GetProviderProfile:output_type -> openshell.v1.ProviderProfileResponse
+	144, // 456: openshell.v1.OpenShell.ImportProviderProfiles:output_type -> openshell.v1.ImportProviderProfilesResponse
+	146, // 457: openshell.v1.OpenShell.UpdateProviderProfiles:output_type -> openshell.v1.UpdateProviderProfilesResponse
+	148, // 458: openshell.v1.OpenShell.LintProviderProfiles:output_type -> openshell.v1.LintProviderProfilesResponse
+	117, // 459: openshell.v1.OpenShell.UpdateProvider:output_type -> openshell.v1.ProviderResponse
+	133, // 460: openshell.v1.OpenShell.GetProviderRefreshStatus:output_type -> openshell.v1.GetProviderRefreshStatusResponse
+	135, // 461: openshell.v1.OpenShell.ConfigureProviderRefresh:output_type -> openshell.v1.ConfigureProviderRefreshResponse
+	137, // 462: openshell.v1.OpenShell.RotateProviderCredential:output_type -> openshell.v1.RotateProviderCredentialResponse
+	139, // 463: openshell.v1.OpenShell.DeleteProviderRefresh:output_type -> openshell.v1.DeleteProviderRefreshResponse
+	149, // 464: openshell.v1.OpenShell.DeleteProvider:output_type -> openshell.v1.DeleteProviderResponse
+	151, // 465: openshell.v1.OpenShell.DeleteProviderProfile:output_type -> openshell.v1.DeleteProviderProfileResponse
+	302, // 466: openshell.v1.OpenShell.GetSandboxConfig:output_type -> openshell.sandbox.v1.GetSandboxConfigResponse
+	303, // 467: openshell.v1.OpenShell.GetGatewayConfig:output_type -> openshell.sandbox.v1.GetGatewayConfigResponse
+	167, // 468: openshell.v1.OpenShell.UpdateConfig:output_type -> openshell.v1.UpdateConfigResponse
+	169, // 469: openshell.v1.OpenShell.GetSandboxPolicyStatus:output_type -> openshell.v1.GetSandboxPolicyStatusResponse
+	171, // 470: openshell.v1.OpenShell.ListSandboxPolicies:output_type -> openshell.v1.ListSandboxPoliciesResponse
+	173, // 471: openshell.v1.OpenShell.ReportPolicyStatus:output_type -> openshell.v1.ReportPolicyStatusResponse
+	259, // 472: openshell.v1.OpenShell.ReportEndpointStatus:output_type -> openshell.v1.ReportEndpointStatusResponse
+	247, // 473: openshell.v1.OpenShell.ReportEgressUsage:output_type -> openshell.v1.ReportEgressUsageResponse
+	84,  // 474: openshell.v1.OpenShell.ReportProviderReadiness:output_type -> openshell.v1.ReportProviderReadinessResponse
+	176, // 475: openshell.v1.OpenShell.ReportSandboxConfiguration:output_type -> openshell.v1.ReportSandboxConfigurationResponse
+	155, // 476: openshell.v1.OpenShell.GetSandboxProviderEnvironment:output_type -> openshell.v1.GetSandboxProviderEnvironmentResponse
+	157, // 477: openshell.v1.OpenShell.ExchangeProviderSubjectToken:output_type -> openshell.v1.ExchangeProviderSubjectTokenResponse
+	253, // 478: openshell.v1.OpenShell.GetEgressUsage:output_type -> openshell.v1.GetEgressUsageResponse
+	255, // 479: openshell.v1.OpenShell.GetFleetEgressUsage:output_type -> openshell.v1.GetFleetEgressUsageResponse
+	181, // 480: openshell.v1.OpenShell.GetSandboxLogs:output_type -> openshell.v1.GetSandboxLogsResponse
+	180, // 481: openshell.v1.OpenShell.PushSandboxLogs:output_type -> openshell.v1.PushSandboxLogsResponse
+	183, // 482: openshell.v1.OpenShell.ConnectSupervisor:output_type -> openshell.v1.GatewayMessage
+	190, // 483: openshell.v1.OpenShell.ReportMainProcessExit:output_type -> openshell.v1.ReportMainProcessExitResponse
+	192, // 484: openshell.v1.OpenShell.FinalizeMainProcessExit:output_type -> openshell.v1.FinalizeMainProcessExitResponse
+	197, // 485: openshell.v1.OpenShell.RelayStream:output_type -> openshell.v1.RelayFrame
+	199, // 486: openshell.v1.OpenShell.PeerRelay:output_type -> openshell.v1.PeerRelayFrame
+	84,  // 487: openshell.v1.OpenShell.PeerReportProviderReadiness:output_type -> openshell.v1.ReportProviderReadinessResponse
+	259, // 488: openshell.v1.OpenShell.PeerReportEndpointStatus:output_type -> openshell.v1.ReportEndpointStatusResponse
+	82,  // 489: openshell.v1.OpenShell.PeerGetSandboxProviderStatus:output_type -> openshell.v1.GetSandboxProviderStatusResponse
+	247, // 490: openshell.v1.OpenShell.PeerReportEgressUsage:output_type -> openshell.v1.ReportEgressUsageResponse
+	253, // 491: openshell.v1.OpenShell.PeerGetEgressUsage:output_type -> openshell.v1.GetEgressUsageResponse
+	109, // 492: openshell.v1.OpenShell.WatchSandbox:output_type -> openshell.v1.SandboxStreamEvent
+	209, // 493: openshell.v1.OpenShell.SubmitPolicyAnalysis:output_type -> openshell.v1.SubmitPolicyAnalysisResponse
+	211, // 494: openshell.v1.OpenShell.GetDraftPolicy:output_type -> openshell.v1.GetDraftPolicyResponse
+	213, // 495: openshell.v1.OpenShell.ApproveDraftChunk:output_type -> openshell.v1.ApproveDraftChunkResponse
+	215, // 496: openshell.v1.OpenShell.RejectDraftChunk:output_type -> openshell.v1.RejectDraftChunkResponse
+	218, // 497: openshell.v1.OpenShell.ApproveAllDraftChunks:output_type -> openshell.v1.ApproveAllDraftChunksResponse
+	220, // 498: openshell.v1.OpenShell.EditDraftChunk:output_type -> openshell.v1.EditDraftChunkResponse
+	222, // 499: openshell.v1.OpenShell.UndoDraftChunk:output_type -> openshell.v1.UndoDraftChunkResponse
+	224, // 500: openshell.v1.OpenShell.ClearDraftChunks:output_type -> openshell.v1.ClearDraftChunksResponse
+	227, // 501: openshell.v1.OpenShell.GetDraftHistory:output_type -> openshell.v1.GetDraftHistoryResponse
+	20,  // 502: openshell.v1.OpenShell.IssueSandboxToken:output_type -> openshell.v1.IssueSandboxTokenResponse
+	22,  // 503: openshell.v1.OpenShell.RefreshSandboxToken:output_type -> openshell.v1.RefreshSandboxTokenResponse
+	229, // 504: openshell.v1.OpenShell.CreateWorkspace:output_type -> openshell.v1.CreateWorkspaceResponse
+	231, // 505: openshell.v1.OpenShell.GetWorkspace:output_type -> openshell.v1.GetWorkspaceResponse
+	233, // 506: openshell.v1.OpenShell.ListWorkspaces:output_type -> openshell.v1.ListWorkspacesResponse
+	235, // 507: openshell.v1.OpenShell.DeleteWorkspace:output_type -> openshell.v1.DeleteWorkspaceResponse
+	238, // 508: openshell.v1.OpenShell.AddWorkspaceMember:output_type -> openshell.v1.AddWorkspaceMemberResponse
+	240, // 509: openshell.v1.OpenShell.RemoveWorkspaceMember:output_type -> openshell.v1.RemoveWorkspaceMemberResponse
+	242, // 510: openshell.v1.OpenShell.ListWorkspaceMembers:output_type -> openshell.v1.ListWorkspaceMembersResponse
+	424, // [424:511] is the sub-list for method output_type
+	337, // [337:424] is the sub-list for method input_type
+	337, // [337:337] is the sub-list for extension type_name
+	337, // [337:337] is the sub-list for extension extendee
+	0,   // [0:337] is the sub-list for field type_name
 }
 
 func init() { file_openshell_proto_init() }
@@ -19993,6 +21302,7 @@ func file_openshell_proto_init() {
 		(*SandboxStreamEvent_Event)(nil),
 		(*SandboxStreamEvent_Warning)(nil),
 		(*SandboxStreamEvent_DraftPolicyUpdate)(nil),
+		(*SandboxStreamEvent_EgressUsage)(nil),
 	}
 	file_openshell_proto_msgTypes[140].OneofWrappers = []any{
 		(*PolicyMergeOperation_AddRule)(nil),
@@ -20033,8 +21343,8 @@ func file_openshell_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshell_proto_rawDesc), len(file_openshell_proto_rawDesc)),
-			NumEnums:      18,
-			NumMessages:   253,
+			NumEnums:      19,
+			NumMessages:   266,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

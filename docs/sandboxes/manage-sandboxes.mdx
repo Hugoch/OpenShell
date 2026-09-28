@@ -690,6 +690,16 @@ The dashboard has three panels stacked vertically: Gateways, Providers (or Globa
 
 The sandbox table’s NOTES column shows `Invalid config` when policy or provider configuration blocks provisioning. Open the sandbox detail view for the full rejection reason, or run `openshell sandbox get <name> -o json`. The note clears after the configuration is repaired; active port forwards remain listed.
 
+### Inspect Egress Usage
+
+Show how much the sandbox uses each allowed destination, with budget denials and usage findings:
+
+```shell
+openshell sandbox usage my-sandbox
+```
+
+In OpenShell Terminal, open the sandbox and press `u` for the same view. Refer to [Egress Usage](/observability/egress-usage) for the counters and findings.
+
 ## Port Forwarding
 
 Forward a local port to a running sandbox to access services inside it, such as a web server or database:

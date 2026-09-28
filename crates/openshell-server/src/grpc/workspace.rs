@@ -400,6 +400,10 @@ pub(super) async fn handle_delete_workspace(
         (POLICY_OBJECT_TYPE, "sandbox policy"),
         (DRAFT_CHUNK_OBJECT_TYPE, "draft policy chunk"),
         (
+            super::egress_usage::EGRESS_USAGE_OBJECT_TYPE,
+            "egress usage state",
+        ),
+        (
             StoredProviderCredentialRefreshState::object_type(),
             "credential refresh state",
         ),
@@ -430,6 +434,18 @@ pub(super) async fn handle_delete_workspace(
         .delete_all_in_workspace(WorkspaceMember::object_type(), &name)
         .await
         .map_err(|e| Status::internal(format!("delete workspace members failed: {e}")))?;
+    state
+        .store
+        .delete_all_in_workspace(super::egress_usage::EGRESS_USAGE_COHORT_OBJECT_TYPE, &name)
+        .await
+        .map_err(|e| Status::internal(format!("delete egress usage cohorts failed: {e}")))?;
+    for object_type in super::egress_fleet::FLEET_OBJECT_TYPES {
+        state
+            .store
+            .delete_all_in_workspace(object_type, &name)
+            .await
+            .map_err(|e| Status::internal(format!("delete fleet egress usage failed: {e}")))?;
+    }
 
     // Keep the terminating workspace durable until platform cleanup has been
     // accepted. A failed cleanup can then be retried through this same path.
@@ -1305,6 +1321,80 @@ mod tests {
             "expected 0 orphaned members, found {}",
             remaining.len()
         );
+    }
+
+    #[tokio::test]
+    async fn delete_workspace_removes_egress_usage_cohorts() {
+        let state = test_server_state().await;
+        handle_create_workspace(
+            &state,
+            Request::new(CreateWorkspaceRequest {
+                request_id: String::new(),
+                name: "cohort-test".to_string(),
+                labels: HashMap::new(),
+            }),
+        )
+        .await
+        .unwrap();
+        state
+            .store
+            .put_if(
+                super::super::egress_usage::EGRESS_USAGE_COHORT_OBJECT_TYPE,
+                "cohort-id",
+                "policy:abc",
+                "cohort-test",
+                b"{}",
+                None,
+                WriteCondition::MustCreate,
+            )
+            .await
+            .unwrap();
+        state
+            .store
+            .put_if(
+                super::super::egress_fleet::FLEET_PARTIAL_OBJECT_TYPE,
+                "partial-id",
+                "000000000000000|replica-a",
+                "cohort-test",
+                b"[]",
+                None,
+                WriteCondition::MustCreate,
+            )
+            .await
+            .unwrap();
+
+        handle_delete_workspace(
+            &state,
+            Request::new(DeleteWorkspaceRequest {
+                request_id: String::new(),
+                allow_missing: false,
+                name: "cohort-test".to_string(),
+            }),
+        )
+        .await
+        .expect("cohorts do not block workspace deletion");
+        let remaining = state
+            .store
+            .list(
+                super::super::egress_usage::EGRESS_USAGE_COHORT_OBJECT_TYPE,
+                "cohort-test",
+                10,
+                0,
+            )
+            .await
+            .unwrap();
+        assert!(remaining.is_empty());
+        let fleet = state
+            .store
+            .list(
+                super::super::egress_fleet::FLEET_PARTIAL_OBJECT_TYPE,
+                "cohort-test",
+                10,
+                0,
+            )
+            .await
+            .unwrap();
+        assert!(fleet.is_empty());
     }
 
     #[test]

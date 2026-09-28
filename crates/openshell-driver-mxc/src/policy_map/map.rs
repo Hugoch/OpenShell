@@ -116,6 +116,8 @@ pub fn split_policy(policy: &SandboxPolicy, opts: &MxcMappingOptions) -> Option<
         version: policy.version,
         network_policies: policy.network_policies.clone(),
         network_middlewares: policy.network_middlewares.clone(),
+        network_budgets: policy.network_budgets.clone(),
+        usage_monitoring: policy.usage_monitoring.clone(),
         ..Default::default()
     };
     Some(SplitPolicyResult {

@@ -147,6 +147,7 @@ fn canonical_policy_bytes(policy: &ProtoSandboxPolicy) -> Vec<u8> {
     let mut map_free = policy.clone();
     map_free.network_policies.clear();
     map_free.network_middlewares.clear();
+    map_free.network_budgets.clear();
     let mut out = Vec::new();
     append_canonical_message(&mut out, &map_free);
 
@@ -167,6 +168,18 @@ fn canonical_policy_bytes(policy: &ProtoSandboxPolicy) -> Vec<u8> {
         append_canonical_bytes(&mut out, key.as_bytes());
         append_canonical_bytes(&mut out, &canonical_middleware_bytes(middleware));
     }
+
+    // Appended only when present so policies without budgets keep their hash.
+    if !policy.network_budgets.is_empty() {
+        let mut budget_entries = policy.network_budgets.iter().collect::<Vec<_>>();
+        budget_entries.sort_by_key(|(key, _)| key.as_str());
+        append_canonical_bytes(&mut out, b"network_budgets");
+        out.extend_from_slice(&canonical_size(budget_entries.len()));
+        for (key, budget) in budget_entries {
+            append_canonical_bytes(&mut out, key.as_bytes());
+            append_canonical_message(&mut out, budget);
+        }
+    }
     out
 }
 
@@ -174,4 +187,51 @@ fn canonical_policy_bytes(policy: &ProtoSandboxPolicy) -> Vec<u8> {
 /// sorting every protobuf map while preserving repeated-field order.
 pub fn deterministic_policy_hash(policy: &ProtoSandboxPolicy) -> String {
     format!("{:x}", Sha256::digest(canonical_policy_bytes(policy)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::NetworkBudget;
+
+    fn budget(requests_per_minute: u64) -> NetworkBudget {
+        NetworkBudget {
+            requests_per_minute: Some(requests_per_minute),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn policy_without_budgets_does_not_encode_budget_section() {
+        let bytes = canonical_policy_bytes(&ProtoSandboxPolicy::default());
+        assert!(
+            !bytes
+                .windows(b"network_budgets".len())
+                .any(|window| window == b"network_budgets")
+        );
+    }
+
+    #[test]
+    fn budget_hash_ignores_map_order_and_tracks_content() {
+        let mut first = ProtoSandboxPolicy::default();
+        first.network_budgets.insert("a".into(), budget(1));
+        first.network_budgets.insert("b".into(), budget(2));
+        let mut second = ProtoSandboxPolicy::default();
+        second.network_budgets.insert("b".into(), budget(2));
+        second.network_budgets.insert("a".into(), budget(1));
+        assert_eq!(
+            deterministic_policy_hash(&first),
+            deterministic_policy_hash(&second)
+        );
+
+        second.network_budgets.insert("b".into(), budget(3));
+        assert_ne!(
+            deterministic_policy_hash(&first),
+            deterministic_policy_hash(&second)
+        );
+        assert_ne!(
+            deterministic_policy_hash(&first),
+            deterministic_policy_hash(&ProtoSandboxPolicy::default())
+        );
+    }
 }

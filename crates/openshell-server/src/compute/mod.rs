@@ -4297,6 +4297,14 @@ impl ComputeRuntime {
             )
             .await
             .map_err(|e| format!("delete sandbox settings: {e}"))?;
+        self.store
+            .delete_by_name(
+                crate::grpc::egress_usage::EGRESS_USAGE_OBJECT_TYPE,
+                sandbox.object_workspace(),
+                sandbox.object_id(),
+            )
+            .await
+            .map_err(|e| format!("delete egress usage state: {e}"))?;
 
         for (object_type, label) in [
             (POLICY_OBJECT_TYPE, "policy revisions"),

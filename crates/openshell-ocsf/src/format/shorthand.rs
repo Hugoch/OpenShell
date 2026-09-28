@@ -254,7 +254,22 @@ impl OcsfEvent {
                 } else {
                     String::new()
                 };
-                format!("NET:{activity} {sev}{detail}{rule_ctx}{reason_ctx}{message_ctx}")
+                let traffic_ctx = e
+                    .cumulative_traffic
+                    .as_ref()
+                    .map(|t| {
+                        let duration = e
+                            .duration
+                            .map_or(String::new(), |d| format!(" duration_ms:{d}"));
+                        format!(
+                            " [bytes_out:{} bytes_in:{}{duration}]",
+                            t.bytes_out, t.bytes_in
+                        )
+                    })
+                    .unwrap_or_default();
+                format!(
+                    "NET:{activity} {sev}{detail}{rule_ctx}{reason_ctx}{traffic_ctx}{message_ctx}"
+                )
             }
 
             Self::HttpActivity(e) => {
@@ -606,6 +621,8 @@ mod tests {
             disposition: Some(DispositionId::Allowed),
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            cumulative_traffic: None,
+            duration: None,
         });
 
         let shorthand = event.format_shorthand();
@@ -635,6 +652,8 @@ mod tests {
             disposition: Some(DispositionId::Blocked),
             observation_point_id: Some(3),
             is_src_dst_assignment_known: Some(true),
+            cumulative_traffic: None,
+            duration: None,
         });
 
         let shorthand = event.format_shorthand();
@@ -782,6 +801,8 @@ mod tests {
             disposition: Some(DispositionId::Blocked),
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            cumulative_traffic: None,
+            duration: None,
         });
 
         let shorthand = event.format_shorthand();
@@ -811,6 +832,8 @@ mod tests {
             disposition: Some(DispositionId::Allowed),
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            cumulative_traffic: None,
+            duration: None,
         });
 
         let shorthand = event.format_shorthand();
@@ -838,6 +861,8 @@ mod tests {
             disposition: None,
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            cumulative_traffic: None,
+            duration: None,
         });
 
         let shorthand = event.format_shorthand();
@@ -901,6 +926,8 @@ mod tests {
             disposition: Some(DispositionId::Blocked),
             observation_point_id: None,
             is_src_dst_assignment_known: None,
+            cumulative_traffic: None,
+            duration: None,
         });
         event.format_shorthand()
     }
@@ -1244,6 +1271,27 @@ mod tests {
         assert_eq!(
             shorthand,
             "EVENT [INFO] Network namespace created [ns:openshell-sandbox-abc123]"
+        );
+    }
+
+    #[test]
+    fn network_close_shorthand_shows_traffic_totals() {
+        use crate::builders::{NetworkActivityBuilder, test_sandbox_context};
+        use crate::enums::{ActionId, ActivityId};
+        use crate::objects::NetworkTraffic;
+
+        let ctx = test_sandbox_context();
+        let event = NetworkActivityBuilder::new(&ctx)
+            .activity(ActivityId::Close)
+            .action(ActionId::Allowed)
+            .dst_endpoint(Endpoint::from_domain("api.example.com", 443))
+            .firewall_rule("model_hub", "opa")
+            .cumulative_traffic(NetworkTraffic::new(10, 20), 30)
+            .build();
+        let line = event.format_shorthand();
+        assert!(
+            line.contains("[bytes_out:10 bytes_in:20 duration_ms:30]"),
+            "{line}"
         );
     }
 }

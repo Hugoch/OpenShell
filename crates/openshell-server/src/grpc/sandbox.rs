@@ -1586,6 +1586,7 @@ async fn handle_delete_sandbox_inner(
         .await?;
     if !result.sandbox_id.is_empty() {
         state.telemetry.end_sandbox_session(&result.sandbox_id);
+        state.egress_usage.remove(&result.sandbox_id);
     }
     info!(sandbox_name = %name, "DeleteSandbox request completed successfully");
     Ok(Response::new(DeleteSandboxResponse {
