@@ -727,6 +727,7 @@ must allow writes.
 ## Implementation plan
 
 Each phase can merge and ship alone. Phase 1 has value without the other phases.
+[poc.md](poc.md) shows how to run a sandbox with an egress budget on the branch.
 
 1. **Accounting and reporting.** The counting wrapper, the usage table with
    write requests, rule IDs from the L7 evaluation, and the OCSF close event.
